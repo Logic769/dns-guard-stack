@@ -45,6 +45,8 @@ jobs:
             bash -n "$f"
           done
           echo "bash syntax OK"
+      - name: systemd unit dependencies
+        run: python3 tests/check_units.py
       - name: no production identifiers
         run: |
           if grep -rIn --exclude-dir=.git --exclude-dir=.github -E '120\.26\.230\.117|logic769|swas' .; then

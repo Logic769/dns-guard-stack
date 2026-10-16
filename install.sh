@@ -251,6 +251,9 @@ else
 fi
 
 step "安装 systemd 单元"
+# 单元里的 ExecStartPost 依赖这个辅助脚本（把服务 cgroup 的 swappiness 收敛为 0）：
+# 它是 dnsguard / dnsguard-verifier 的 ExecStartPost 目标，缺了会让单元进入 failed。
+run "install -m 0755 '$HERE/tools/set-service-memory-swappiness.sh' /usr/local/sbin/set-service-memory-swappiness.sh"
 run "install -m 0644 '$HERE/deploy/systemd/dnsguard.service' /etc/systemd/system/dnsguard.service"
 run "install -m 0644 '$HERE/deploy/systemd/dnsguard-verifier.service' /etc/systemd/system/dnsguard-verifier.service"
 run "install -m 0644 '$HERE/deploy/systemd/chainmon.service' /etc/systemd/system/chainmon.service"

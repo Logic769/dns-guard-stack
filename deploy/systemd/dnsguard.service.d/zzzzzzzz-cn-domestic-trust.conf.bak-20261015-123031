@@ -1,3 +1,0 @@
-[Service]
-Environment=GUARD_CN_DOMESTIC_TRUST_B=1
-Environment=GUARD_CN_VETO_FILE=/opt/dnsguard/cn_veto-20261012-cn-trust.txt
