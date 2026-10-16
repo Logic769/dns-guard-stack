@@ -7863,7 +7863,7 @@ for _pair in (os.environ.get("GUARD_SRC_MAP_EXTRA") or "").split(","):
 def _host_ipv4_set():
     """枚举**本机**全部 IPv4 地址 ✓ —— 用于把主机侧自检归入 `host`（不污染用户侧基线）✗。
 
-    为什么必须动态算：`eth0` 是 DHCP 的（本机实测 `192.0.2.10/18`），硬编码会随租约失效；
+    为什么必须动态算：`eth0` 是 DHCP 的（本机实测 `192.0.2.10/24`），硬编码会随租约失效；
     而主机自检经 `eth0` 打 `docker0` 的 `172.18.0.1:5355` 时，**内核选的源地址是 eth0 的 IP**
     （`ip route get 172.18.0.1` → `local dev lo src 172.18.0.1`，但 UDP 实测源是 eth0）⇒ 必须
     按"是否本机地址"判定，而不是只查 `_SRC_MAP` ✓。

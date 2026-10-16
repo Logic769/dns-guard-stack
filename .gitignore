@@ -39,3 +39,12 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Private backups and generated credentials
+*.bundle
+*.p12
+*.pfx
+*.keystore
+*.htpasswd
+.env.*
+!.env.example

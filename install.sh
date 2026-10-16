@@ -250,6 +250,10 @@ else
   info "使用已有证书：$CERT"
 fi
 
+step "写入本机 AGH TLS 配置"
+run "python3 '$HERE/tools/configure-agh-tls.py' '$CERT' '$KEY' '$RUNTIME_DIR/adgh/conf/AdGuardHome.yaml' '$RUNTIME_DIR/aghdq/AdGuardHome.yaml'"
+run "chmod 0600 '$HERE/.env' '$CODE_DIR/.env' '$KEY'"
+
 step "启动容器"
 # --wait：等所有带 healthcheck 的服务进入 healthy 再往下走。unbound 系首次启动要加载
 # root.key 与 DNSSEC 信任链（实测 5~20s），只等 aghdq「running」是不够的 ——

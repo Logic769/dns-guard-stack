@@ -47,19 +47,5 @@ jobs:
           echo "bash syntax OK"
       - name: systemd unit dependencies
         run: python3 tests/check_units.py
-      - name: no production identifiers
-        run: |
-          # docs/assets/architecture.html 是 archify 生成的架构图，它内嵌的 repository.url
-          # 是仓库自身的 canonical URL，必然含 owner 名，所以不参与 logic769 检查；
-          # 生产 IP 与主机名对它仍然单独把关（下一条命令），并不放行。
-          if grep -rIn --exclude-dir=.git --exclude-dir=.github \
-                 --exclude='architecture.html' \
-                 -E '120\.26\.230\.117|logic769|swas' .; then
-            echo "found production identifier"
-            exit 1
-          fi
-          if grep -aInE '120\.26\.230\.117|swas' docs/assets/architecture.html; then
-            echo "found production identifier in generated diagram"
-            exit 1
-          fi
-          echo "clean"
+      - name: public data guard
+        run: python3 tools/check-public-data.py

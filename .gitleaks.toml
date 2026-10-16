@@ -1,0 +1,17 @@
+title = "dns-guard-stack public source checks"
+[extend]
+useDefault = true
+
+# Published resolver-list verification keys are public, not credentials.
+[[allowlists]]
+condition = "AND"
+paths = ['''^deploy/containers/dnscrypt-proxy[.]toml[.]tpl$''']
+regexTarget = "line"
+regexes = ['''^\s*#?\s*minisign_key\s*=\s*['"][A-Za-z0-9+/=]+['"]\s*$''']
+
+# A chart metric property was mistaken for an API credential.
+[[allowlists]]
+condition = "AND"
+paths = ['''^dashboards/chainmon/index[.]html$''']
+regexTarget = "line"
+regexes = ['''key:\s*"probe_dot360_ms"''']
