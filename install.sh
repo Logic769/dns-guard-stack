@@ -116,6 +116,13 @@ run "cp -f '$HERE'/tools/* '$CODE_DIR/tools/'"
 run "cp -f '$HERE'/probes/* '$CODE_DIR/probes/'"
 run "cp -f '$HERE'/firewall/* /usr/local/sbin/ 2>/dev/null || true"
 run "chmod 0755 '$CODE_DIR'/*.py '$CODE_DIR/tools'/*.py '$CODE_DIR/tools'/*.sh '$CODE_DIR/probes'/*.py /usr/local/sbin/dnsguard-*.sh /usr/local/sbin/dnsguard-*.py 2>/dev/null || true"
+# 让 tools/probes 里的默认路径跟随 .env（默认值与仓库一致时是 no-op）。
+# 必须在这里做：后面的「初始化名单」步骤会直接调用 tools/ 里的刷新器。
+run "sed -i -e 's|/opt/dnscrypt-proxy|$LISTS_DIR|g' \
+      -e 's|/opt/chainmon|${CHAINMON_DIR:-/opt/chainmon}|g' \
+      -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g' \
+      -e 's|/opt/dnsguard/current|$CODE_DIR|g' \
+      -e 's|/opt/dnsguard|$CODE_DIR|g' '$CODE_DIR'/tools/* '$CODE_DIR'/probes/* 2>/dev/null || true"
 run "python3 -m py_compile '$CODE_DIR'/guard.py '$CODE_DIR'/verifier.py '$CODE_DIR'/alt_adapter.py '$CODE_DIR'/answer_policy.py"
 info "代码就位：$CODE_DIR/（guard.py verifier.py alt_adapter.py answer_policy.py …）"
 
@@ -170,24 +177,40 @@ run "cp -f '$RUNTIME_DIR/unbound-a'/unbound_*.key '$RUNTIME_DIR/unbound-a'/unbou
 run "cp -f '$RUNTIME_DIR/unbound-a'/unbound_*.key '$RUNTIME_DIR/unbound-a'/unbound_*.pem '$RUNTIME_DIR/unbound-alt/' 2>/dev/null || true"
 info "root.key 与 unbound-control 证书就绪"
 
-step "初始化名单（LISTS_PROFILE=${LISTS_PROFILE:-minimal}）"
+step "初始化名单（LISTS_PROFILE=${LISTS_PROFILE:-fetch}）"
 run "install -d -m 0755 '$LISTS_DIR'"
-for f in cn-domains-typed.txt forwarding-rules.txt cn_veto.txt cn_ip.txt; do
-  if [ ! -s "$LISTS_DIR/$f" ]; then
-    run "printf '# 初始骨架：运行 %s/tools/refresh-all-cn-lists.sh 拉取真实名单\\n' '$CODE_DIR' > '$LISTS_DIR/$f'"
-  fi
-done
 run "cp -f '$HERE/deploy/lists/cn-trust-allow.txt' '$LISTS_DIR/cn-trust-allow.txt'"
 run "cp -f '$HERE/deploy/lists/cn-trust-exceptions.txt' '$LISTS_DIR/cn-trust-exceptions.txt'"
 run "cp -f '$HERE/deploy/lists/cn-trust-allow.txt' '$CODE_DIR/core/cn-trust-allow.txt' 2>/dev/null || true"
 run "install -m 0755 '$HERE/tools/refresh-all-cn-lists.sh' '$CODE_DIR/tools/' 2>/dev/null || true"
-if [ "$FETCH" = 1 ] || [ "${LISTS_PROFILE:-minimal}" = "fetch" ]; then
-  info "拉取社区名单（需要外网；失败不影响部署，稍后可用 tools/refresh-all-cn-lists.sh 重试）"
-  run "'$CODE_DIR/tools/refresh-cn-rules.py' --force 2>&1 | tail -3 || true"
-  run "python3 '$CODE_DIR/tools/refresh-cn-veto-ip.py' --force 2>&1 | tail -3 || true"
+skeleton_lists() { # 无外网/拉取失败时的兜底：写骨架文件，guard 会按“未知即不信任”运行
+  for f in cn-domains-typed.txt forwarding-rules.txt cn_veto.txt cn_ip.txt; do
+    if [ ! -s "$LISTS_DIR/$f" ]; then
+      run "printf '# 骨架：执行 %s/tools/refresh-all-cn-lists.sh 拉取真实名单\\n' '$CODE_DIR' > '$LISTS_DIR/$f'"
+    fi
+  done
+}
+if [ "$FETCH" = 1 ] || [ "${LISTS_PROFILE:-fetch}" = "fetch" ]; then
+  info "拉取真实名单：v2fly 域名（typed）→ clang.cn/chnroutes2 国内 IP → 否决名单（需要外网）"
+  run "python3 '$CODE_DIR/tools/refresh-cn-rules.py' --force 2>&1 | tail -4 || true"
+  run "python3 '$CODE_DIR/tools/refresh-cn-veto-ip.py' --force 2>&1 | tail -4 || true"
+  if [ "$DRY" != 1 ]; then
+    typed_n=$(wc -l < "$LISTS_DIR/cn-domains-typed.txt" 2>/dev/null || echo 0)
+    ip_n=$(wc -l < "$LISTS_DIR/cn_ip.txt" 2>/dev/null || echo 0)
+    veto_n=$(wc -l < "$LISTS_DIR/cn_veto.txt" 2>/dev/null || echo 0)
+    info "名单条数：typed=${typed_n:-0}  cn_ip=${ip_n:-0}  veto=${veto_n:-0}"
+    if [ "${typed_n:-0}" -lt 1000 ] || [ "${ip_n:-0}" -lt 500 ] || [ "${veto_n:-0}" -lt 100 ]; then
+      warn "名单不完整（多半是没有外网）。安装继续；guard 会按“未知即不信任”运行。"
+      warn "稍后重试：sudo bash $CODE_DIR/tools/refresh-all-cn-lists.sh"
+      skeleton_lists
+    else
+      info "名单拉取完成（真实名单，不是骨架）"
+    fi
+  fi
 else
-  warn "当前是骨架名单：guard 会按“未知即不信任”运行（安全但会多一次见证）。"
-  warn "准备好后执行：$CODE_DIR/refresh-cn-rules.py --force && python3 $CODE_DIR/refresh-cn-veto-ip.py --force"
+  warn "LISTS_PROFILE=$LISTS_PROFILE：使用骨架名单，guard 按“未知即不信任”运行。"
+  warn "稍后拉真名单：sudo bash $CODE_DIR/tools/refresh-all-cn-lists.sh"
+  skeleton_lists
 fi
 
 step "证书"
@@ -236,6 +259,15 @@ run "install -d -m 0755 /etc/systemd/system/dnsguard.service.d /etc/systemd/syst
 run "install -m 0644 '$HERE/deploy/systemd/dnsguard.service.d/zzzzzz-consolidated-20261010.conf' /etc/systemd/system/dnsguard.service.d/"
 run "install -m 0644 '$HERE/deploy/systemd/dnsguard-verifier.service.d/zzzzzz-consolidated-20261010.conf' /etc/systemd/system/dnsguard-verifier.service.d/"
 
+# DoT 明文内腿采集器（dotfront-spool）：给 devfp 提供 EDNS/COOKIE/PADDING/DO/0x20 明文画像。
+# 前置：DoT stream 的内腿必须是明文（deploy/nginx/tcp/dnsguard-dot-853.conf 里 proxy_pass 直连 adgh:53）。
+run "install -d -m 0755 /etc/systemd/system/dotfront-spool.service.d"
+render "$HERE/deploy/systemd/dotfront-spool.service" "$RUNTIME_DIR/dotfront-spool.service"
+run "sed -i -e 's|/opt/dnsguard|$CODE_DIR|g' -e 's|^Environment=DOTF_SPOOL=.*|Environment=DOTF_SPOOL=${DOTF_SPOOL:-/var/log/dotfront.jsonl}|' '$RUNTIME_DIR/dotfront-spool.service'"
+run "install -m 0644 '$RUNTIME_DIR/dotfront-spool.service' /etc/systemd/system/dotfront-spool.service"
+render "$HERE/deploy/systemd/dotfront-spool.service.d/20-ip-reconcile.conf" "$RUNTIME_DIR/dotfront-spool-ip.conf"
+run "install -m 0644 '$RUNTIME_DIR/dotfront-spool-ip.conf' /etc/systemd/system/dotfront-spool.service.d/20-ip-reconcile.conf"
+
 # 栈内路径与档位：单一 drop-in（渲染后写入，避免污染上面的原件）
 PATHS_CONF=/etc/systemd/system/dnsguard.service.d/zzzzzzzzz-stack-paths.conf
 if [ "$DRY" != 1 ]; then
@@ -279,6 +311,7 @@ run "sed -i 's|/opt/dnsguard/current|$CODE_DIR|g' /etc/systemd/system/dnsguard.s
 rewrite_paths "'$CODE_DIR'/tools/* '$CODE_DIR'/probes/* /opt/chainmon/* /opt/devfp/*"
 run "systemctl daemon-reload"
 run "systemctl enable --now dnsguard.service dnsguard-verifier.service"
+run "systemctl enable --now dotfront-spool.service" || warn "dotfront-spool 未启动（需 DoT 明文内腿 + CAP_NET_RAW）；不影响 DNS 解析"
 if [ "$DRY" != 1 ]; then sleep 3; systemctl --no-pager --lines=0 status dnsguard.service dnsguard-verifier.service 2>&1 | sed -n '1,12p' || true; fi
 
 step "看板（可选）"

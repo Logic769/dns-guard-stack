@@ -21,7 +21,7 @@ scp /root/migrate.tgz <new-host>:/root/
 ```bash
 git clone https://github.com/<you>/dns-guard-stack.git && cd dns-guard-stack
 cp .env.example .env && vi .env      # 域名、IP、网段、路径
-sudo ./install.sh                    # 先按骨架名单跑通
+sudo ./install.sh                    # 默认会拉取真实名单（无外网会自动退回骨架）
 sudo ./verify.sh                     # 确认链路 OK
 ```
 
@@ -104,4 +104,4 @@ sudo $CODE_DIR/tools/deploy_release.sh --rollback <上一个 release-id>
 | 缓存 | guard/AGH 缓存为空，前几分钟命中率低、上游 QPS 略高，属正常 |
 | 看板历史 | 不迁移则从零开始（数据在 SQLite 与 jsonl 里） |
 | 证书 | 自签模式每次重建都会生成新证书，客户端需重新信任；用 ACME 则复用 |
-| 名单 | 骨架名单很窄（只保证 `.cn`）；生产请用 `LISTS_PROFILE=refresh` |
+| 名单 | 默认 `LISTS_PROFILE=fetch` 会在安装时生成真实名单；若没外网则退回骨架（只保证 `.cn`），此时 guard 按"未知即不信任"运行，稍后跑 `tools/refresh-all-cn-lists.sh` 补齐 |

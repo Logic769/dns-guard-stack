@@ -90,7 +90,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `LISTS_PROFILE` | `minimal` | `minimal`=只写空骨架（不联网，最安全）；`fetch`=安装时立即拉社区名单（等价 `--fetch-lists`） |
+| `LISTS_PROFILE` | `fetch` | `fetch`=安装时立即拉真实名单（v2fly 域名 / clang.cn 国内 IP / 否决名单；需要外网，失败自动退回骨架）；`minimal`=只写空骨架不联网 |
 | `LISTS_CRON` | `35 4 * * *` | 每日自动刷新 |
 
 ### 安全与资源
@@ -102,6 +102,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 | `GUARD_MEMORY_MAX` / `GUARD_MEMORY_HIGH` | `192` / `160`（MiB） | guard 内存上限 |
 | `VERIFIER_MEMORY_MAX` / `VERIFIER_MEMORY_HIGH` | `128` / `100` | verifier 内存上限 |
 | `CHAINMON_MEMORY_MAX` / `DEVFP_MEMORY_MAX` | `256` / `176` | 看板上限 |
+| `DOTF_SPOOL` | `/var/log/dotfront.jsonl` | DoT 明文内腿 spool：`dotfront-spool` 写、devfp 的 `dotfront_spool` 读，两者必须一致 |
 | `AGH_ADMIN_USER` / `AGH_ADMIN_PASSWORD` | `admin` / 空 | AGH 面板账号；密码留空则安装后首次登录自行设置 |
 | `DASH_USER` / `DASH_PASSWORD` | `admin` / 空 | 看板 Basic Auth；留空则不启用鉴权 |
 | `INSTALL_NGINX` | `0` | 是否让脚本直接写站点配置并 reload（默认只生成片段，由你手动引用） |
@@ -113,11 +114,11 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 1. **依赖检查**：`docker`/`nginx`/`python3` 缺失即报错；无 systemd 则跳过服务安装并打印手动启动方式
 2. **渲染配置**：`deploy/**/*.tpl` 用 `.env` 渲染到 `RUNTIME_DIR`，并把 `/opt/<服务>` 路径统一改写为 `.env` 里的真实路径
 3. **部署代码**：`core/`、`tools/`、`probes/`、`firewall/` → `CODE_DIR`；`dashboards/` → 两块看板目录
-4. **名单**：写骨架名单；`LISTS_PROFILE=fetch` 时再跑一次刷新（失败不影响安装）
+4. **名单**：默认 `LISTS_PROFILE=fetch` —— 立即拉真实名单（域名 → 否决/IP → 完整性校验）；条数不足（多半没外网）会自动退回骨架并告警，不阻断安装
 5. **容器**：`docker compose up -d`；按需等待 AdGuard Home 面板就绪并设置管理员密码、AGH 上游指向 guard
 6. **证书**：自签 / ACME / 复用你给的路径
 7. **nginx**：安装站点与 stream 片段（stream 片段需要你 include，脚本会提示），`nginx -t` 通过才 reload，失败自动回滚
-8. **systemd**：安装单元与 timer，`daemon-reload` + `enable --now`；写入内存限额
+8. **systemd**：安装单元与 timer（含 DoT 明文内腿采集器 `dotfront-spool`），`daemon-reload` + `enable --now`；写入内存限额
 9. **防火墙**：`firewall/dnsguard-fw.sh --apply`（先算目标表 → 自检 → 单次 `iptables-restore`，失败回滚）
 10. **验收**：`tools/release_consistency.py` + 回环探针；失败会打印诊断命令（不阻断安装）
 
@@ -142,8 +143,8 @@ ACME_EMAIL=you@example.com
 
 | 档 | 内容 | 何时用 |
 |---|---|---|
-| `minimal`（默认） | 空骨架 + 国别后缀 | 先跑通链路、或做隔离复现 |
-| `fetch` | 从上游生成（v2fly 全量 tar / clang.cn / chnroutes2） | 生产使用 |
+| `fetch`（默认） | 从上游生成（v2fly 全量 tar / clang.cn / chnroutes2） | 生产使用；需要外网 |
+| `minimal` | 空骨架 + 国别后缀 | 先跑通链路、或做隔离复现；guard 按"未知即不信任"运行（更安全但多一次见证） |
 
 ```bash
 sudo $CODE_DIR/tools/refresh-all-cn-lists.sh    # 域名 → 否决/IP → 完整性校验

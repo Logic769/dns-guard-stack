@@ -119,7 +119,7 @@
 | `dnscrypt-proxy-local.service` | `/usr/bin/dnscrypt-proxy -config /opt/dnscrypt-proxy/dnscrypt-proxy.toml` | 匿名中继 |
 | `chainmon.service` | `/usr/bin/python3 /opt/chainmon/chainmon.py` | 链路看板后端 |
 | `devfp.service` | `/usr/bin/python3 /opt/devfp/devfp.py` | 设备指纹看板后端 |
-| `dotfront-spool.service` | `/usr/bin/python3 /root/ech-build/fp/dotfront-spool.py` | DoT 真实来源 IP 注入（见 3.2） |
+| `dotfront-spool.service` | `/usr/bin/python3 $CODE_DIR/tools/dotfront-spool.py` | DoT 明文内腿采集（给 devfp，见 3.2） |
 | `probe-srcaddr.service` | `/usr/sbin/ip addr replace 172.18.0.99/16 dev docker0` | 给探针准备一个独立源地址 |
 | `unbound-b-53-block.service` | iptables 封 unbound-b 的明文 53 出站 | 配合 6.4 防火墙 |
 | `dnsguard-firewall.service` | `/usr/local/sbin/dnsguard-fw.sh --apply` | 一次性应用防火墙（oneshot，exited） |
@@ -386,15 +386,19 @@ guard 收到的是 AGH 转来的 DNS 查询（UDP/TCP 到 `172.18.0.1:5355`）�
 
 ---
 
-### 3.2 `dotfront-spool` —— 把"真实来源"补回来
+### 3.2 `dotfront-spool` —— 把"真实来源"与明文画像补回来
 
-**是什么**：一个宿主 Python 进程（`/root/ech-build/fp/dotfront-spool.py`），systemd `dotfront-spool.service`。
+**是什么**：宿主上的一个只读采集进程（仓库里是 `tools/dotfront-spool.py`，安装后位于 `CODE_DIR/tools/`），systemd 单元 `dotfront-spool.service`。
 
-**干什么**：DoT 走 nginx stream 代理后，AGH 看到的来源是 docker 网关 `172.18.0.1`，**真实客户端 IP 丢了**。这个进程的作用是给 DoT 流补上真实来源信息（环境变量 `DOTF_IFACE=auto`、`DOTF_GW=172.18.0.1`、`DOTF_DST=172.18.0.2`、`DOTF_DPORT=53`，即"在 docker0 上、目标是 AGH:53 的流量"）。
+**为什么需要**：DoT 经 nginx stream 终结 TLS 后，内腿是**明文 DNS**（`proxy_pass adgh:53`）。AGH 侧只看到 docker 网关 `172.18.0.1`，真实客户端 IP 在内腿里丢失；同时 EDNS/COOKIE/ECS/PADDING/DO 位/0x20 大小写这些明文特征在 AGH 之后也不再可见。这个进程把这段内腿抓下来交给 devfp。
 
-**诚实声明**：我**没有读过它的源码**（只看到 systemd 单元与 4 个环境变量）。因此这里只描述"它的存在与配置含义"，其内部实现机制**未展开核实**。
+**干什么**：AF_PACKET 被动抓包（`DOTF_IFACE=auto` 时按 `DOTF_GW` 的 IP 自动找网桥），只收 `dst=DOTF_DST` 且 `dport=DOTF_DPORT` 的 TCP；按源端口重组流，按 DNS 的 2 字节长度前缀切帧，解析出 `qname/qtype`、EDNS（client cookie、ECS、padding 长度）、DO 位、UDP 大小、0x20 混合大小写，写成 JSONL（`DOTF_SPOOL`，默认 `/var/log/dotfront.jsonl`）。
 
-**坏了会怎样**：DoH 侧带 `X-Forwarded-For`，仍能拿到真实 IP；DoT 侧可能退化为"只看到网关"，影响按客户端的统计与限流颗粒度（devfp 的 DoT 设备区分度会下降）。
+**谁消费**：devfp 的 `dotf_loop()`（读 `config.json` 的 `dotfront_spool`，默认同一路径）。它按时间把"内腿明文包"与"DoT 请求事件"对齐（`_align_plain_event`），给连接补上真实来源与明文画像。**两侧路径必须一致**。
+
+**前置条件**：① DoT 内腿必须是明文（见 `deploy/nginx/tcp/dnsguard-dot-853.conf`；若改成"nginx 再加密到 AGH:8854"，本采集收不到任何数据）；② 需要 `CAP_NET_RAW`（默认以 root 运行）；③ 单元里的 `DOTF_GW/DOTF_DST` 必须与容器实际 IP 一致 —— 由 `dnsguard-ip-reconcile.sh` 维护的 drop-in 自动收敛。
+
+**坏了会怎样**：DoH 侧带 `X-Forwarded-For`，仍能拿到真实 IP；DoT 侧退化为"只看到网关"，devfp 的 DoT 设备区分度下降、明文特征缺失。**DNS 解析本身不受影响**。
 
 **另有一条相关事实**：`probe-srcaddr.service` 给 docker0 加了别用地址 `172.18.0.99/16`，专门给本机探针用（避免探针与真实客户端混在一起）。对账脚本会检查它（见 6.3）。
 
@@ -1128,10 +1132,11 @@ v2fly（社区名单）、clang.cn（IP 段）都**不提供签名**。所以：
 ### 7.5 本文档中"未展开核实"的部分
 
 为不捏造，以下内容我没有读源码，只按配置与作用描述：
-- `dotfront-spool.py` 的内部实现（只看过 systemd 单元与 4 个环境变量）；
 - `chainmon.py` / `devfp.py` 的采集细节（源码顶部的 docstring 说明了四路/多路采集，但**具体解析逻辑未逐行核实**）；
 - `alt-replica-unb` 的用途细节（只知它是 alt 的副本，在独立网络 `altreplica0`）；
 - `dnscrypt-proxy.toml` 仅核对了关键项（服务器名、监听、缓存、require_* 策略）。
+
+> 说明：`dotfront-spool.py` 已随本项目一并发布（`tools/dotfront-spool.py`），其行为已在 3.2 按源码逐项写清。
 
 ### 7.6 明文 53 完全关闭（这是特性，不是缺陷）
 

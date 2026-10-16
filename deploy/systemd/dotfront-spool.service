@@ -1,18 +1,35 @@
+# dotfront-spool —— DoT 明文内腿的被动采集器（供 devfp 看到 EDNS/COOKIE/ECS/PADDING/DO/0x20）
+#
+# 工作原理：nginx 在 :853 终结 TLS 后，把明文 DNS 直接转给 adgh 容器 :53（走 docker 网桥）。
+# 本服务用 AF_PACKET 抓这段明文内腿，把查询字段写成 JSONL，devfp 的 dotf_loop 消费它，
+# 从而把「DoT 请求事件」与「Network 侧连接」按时间对齐，还原真实客户端的明文画像。
+#
+# 前置条件（缺一不可）：
+#   1) DoT 内腿必须是明文 —— 见 deploy/nginx/tcp/dnsguard-dot-853.conf 里的 proxy_pass 直连 adgh:53
+#   2) 需要 CAP_NET_RAW（默认以 root 运行即可）
+#   3) DOTF_SPOOL 与 devfp 配置 json 里的 dotfront_spool 必须指向同一个文件
+#
+# 路径中的 /opt/dnsguard 由 install.sh 按 .env 的 CODE_DIR 改写。
 [Unit]
-Description=DoT plaintext front spool (nginx -> adgh 53)
-After=network.target
+Description=DoT plaintext front spool (nginx :853 -> adgh :53) for devfp
+Documentation=https://github.com/Logic769/dns-guard-stack
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
 [Service]
 Type=simple
 Environment=DOTF_IFACE=auto
 Environment=DOTF_GW=172.18.0.1
 Environment=DOTF_DST=172.18.0.2
 Environment=DOTF_DPORT=53
-ExecStart=/usr/bin/python3 /root/ech-build/fp/dotfront-spool.py
+Environment=DOTF_SPOOL=/var/log/dotfront.jsonl
+ExecStart=/usr/bin/python3 /opt/dnsguard/tools/dotfront-spool.py
 Restart=always
 RestartSec=5
 Nice=5
 StandardOutput=null
 StandardError=journal
 LimitNOFILE=4096
+
 [Install]
 WantedBy=multi-user.target

@@ -48,7 +48,7 @@ dig @<本机IP> -p 853 +tls dnssec-failed.org        # 期望 SERVFAIL（验签�
 
 ```
 core/        guard.py verifier.py alt_adapter.py answer_policy.py unbound-alt-readiness.py   ← 策略与解析核心
-tools/       名单刷新/归档验签/发布门禁/快照/看门狗/缓存撤销                                  ← 运维自动化
+tools/       名单刷新/归档验签/发布门禁/快照/看门狗/缓存撤销/DoT 明文内腿采集            ← 运维自动化
 probes/      入口探针 / 链路探针 / 外部探针 / 分档与 N1-N3 验证探针
 firewall/    iptables 原子收敛脚本与表生成器（含 5 分钟巡检 timer）
 dashboards/  chainmon（链路看板）与 devfp（设备指纹看板）

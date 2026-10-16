@@ -65,7 +65,7 @@
 - `core/verifier.py`：从 guard 导入模块但**独立进程**运行，通过 AF_UNIX 收任务、分池并发、有界等待
 - `core/alt_adapter.py`：报文层工具（解析、应答绑定校验、UDP 交换、RRSIG/EDE 判定、逐 RR 老化、AD 位分档）
 - `core/answer_policy.py`：档位定义（`SECURE`/`ACCEPTED`/`BOGUS`/`TRANSPORT`）与版本号；版本变化即让准入缓存失效
-- `tools/*`：名单刷新与归档验签、发布门禁与回滚、快照、看门狗、缓存撤销
+- `tools/*`：名单刷新与归档验签、发布门禁与回滚、快照、看门狗、缓存撤销、DoT 明文内腿采集（`dotfront-spool.py`）
 - `firewall/*`：把 iptables 收敛变成"单次原子替换"（先算好目标表 → 自检 → 一次 restore，失败自动回滚）
 - `dashboards/*`：只读观测（链路参数 / 设备指纹），不参与解析决策
 
