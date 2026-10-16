@@ -123,6 +123,18 @@ services:
     restart: unless-stopped
     volumes:
       - ${RUNTIME_DIR}/dnscrypt-proxy/dnscrypt-proxy.toml:/config/dnscrypt-proxy.toml:ro
+      # toml 的 forwarding_rules 指向 /opt/dnscrypt-proxy/forwarding-rules.txt，
+      # 而该文件由刷新器写在宿主 LISTS_DIR 里 ⇒ 整个目录挂进去。
+      # · 不能只挂这一个文件：刷新器是「原子替换（临时文件 + rename）」，
+      #   单文件 bind mount 锁的是旧 inode，容器里永远读不到新规则。
+      # · 不能标 :ro：下面的 cache 子挂载要在它内部建挂载点，
+      #   只读父挂载会让容器创建失败（read-only file system）。
+      - ${LISTS_DIR}:/opt/dnscrypt-proxy
+      # 源缓存目录必须存在且可写：toml 的 [sources] cache_file 指向 /opt/dnscrypt-proxy/cache/，
+      # 目录缺失时源内容写不下去 ⇒ 解析器名一个都找不到 ⇒ 启动即
+      # `[FATAL] None of the servers listed in the server_names list were found`。
+      # 更具体的挂载点优先，因此它覆盖上面那条的 cache 子目录（那条是只读的）。
+      - ${RUNTIME_DIR}/dnscrypt-proxy/cache:/opt/dnscrypt-proxy/cache
     ports:
       - "127.0.0.1:5399:5353/tcp"
       - "127.0.0.1:5399:5353/udp"

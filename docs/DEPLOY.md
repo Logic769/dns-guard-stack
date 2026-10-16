@@ -85,6 +85,8 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 | `UPSTREAM_B` | 6 家国内 DoT | 格式 `ip@853#hostname`，逗号分隔 |
 | `UPSTREAM_ALT` | 2 家第三方 DoT | 交叉见证用；请选与 A/B 不同运营方 |
 | `DNSCRYPT_SERVERS` | `cs-nl,cs-fr,...` | dnscrypt-proxy 匿名中继（影子对比通道） |
+| `DNSCRYPT_CACHE_UID` | `65532` | cache 目录属主 uid。镜像以 distroless 的 nonroot(65532) 运行而目录由 root 建立 ⇒ 不改属主会 `Couldn't write cache file ...: permission denied`，源列表缓存永久失效 |
+| `DNSCRYPT_FORCE_TCP` | `false` | 容器默认走 UDP 443。部分网络丢弃出站 UDP 443，表现为日志刷 `[cs-*] TIMEOUT` + `waiting for at least one server to be reachable`（容器 Up 却不解析）⇒ 此时设 `true` 改走 TCP 443 |
 
 ### 名单
 

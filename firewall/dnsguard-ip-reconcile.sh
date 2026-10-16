@@ -59,15 +59,25 @@ if [ "$MODE" != print ] && command -v flock >/dev/null 2>&1; then
 fi
 
 # ---------- 事实源：docker 实际分配 ----------
-resolve() {  # $1=容器名 → bridge 网络 IPv4（解析失败输出空）
-  docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{if eq $k "bridge"}}{{$v.IPAddress}}{{end}}{{end}}' "$1" 2>/dev/null
-}
+# 容器在 docker-compose.yml 的自定义网络里（默认名 dnsnet），**不是** docker 默认 bridge。
+DNS_NET=${DNSGUARD_NET:-dnsnet}
 valid4() { case "${1:-}" in 172.1[6-9].*|172.2[0-9].*|172.3[01].*) return 0 ;; *) return 1 ;; esac; }
+resolve() {  # $1=容器名 → 本栈网络 IPv4（解析失败输出空）
+  local ip
+  ip=$(docker inspect -f "{{range \$k,\$v := .NetworkSettings.Networks}}{{if eq \$k \"$DNS_NET\"}}{{\$v.IPAddress}}{{end}}{{end}}" "$1" 2>/dev/null)
+  if valid4 "${ip:-}"; then printf '%s' "$ip"; return 0; fi
+  docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{println $v.IPAddress}}{{end}}' "$1" 2>/dev/null \
+    | grep -E '^172\.(1[6-9]|2[0-9]|3[01])\.' | head -1
+}
 
 AGH_IP=$(resolve adgh)
 AGHDQ_IP=$(resolve aghdq)
 A_IP=$(resolve unbound)
-GW_IP=$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+# 网关 = guard 监听地址：先取本栈网络网关，再退 docker0
+GW_IP=$(docker network inspect "$DNS_NET" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || true)
+if ! valid4 "${GW_IP:-}"; then
+  GW_IP=$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)
+fi
 
 for pair in "adgh:${AGH_IP:-}" "aghdq:${AGHDQ_IP:-}" "unbound:${A_IP:-}" "docker0:${GW_IP:-}"; do
   name="${pair%%:*}"; val="${pair#*:}"
@@ -76,7 +86,7 @@ for pair in "adgh:${AGH_IP:-}" "aghdq:${AGHDQ_IP:-}" "unbound:${A_IP:-}" "docker
     exit 2
   fi
 done
-log "解析结果：adgh=$AGH_IP aghdq=$AGHDQ_IP unbound(A)=$A_IP docker0-gw=$GW_IP（mode=$MODE）"
+log "解析结果：adgh=$AGH_IP aghdq=$AGHDQ_IP unbound(A)=$A_IP gw=$GW_IP（mode=$MODE）"
 
 # ---------- 比对 ----------
 F_NGX=0; F_UNB=0; F_DOTF=0; F_AGH=0; F_GL=0; F_PS=0

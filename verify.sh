@@ -46,7 +46,7 @@ for u in chainmon devfp; do
   [ "$st" = active ] && ok "$u active" || warn "$u 未运行（可选看板）"
 done
 if compgen -G "$CODE_DIR/*.log" >/dev/null 2>&1; then :; fi
-tb=$(grep -c 'Traceback' /var/log/dnsguard.log 2>/dev/null || echo 0)
+tb=$(grep -c 'Traceback' /var/log/dnsguard.log 2>/dev/null || true); tb=${tb:-0}
 [ "$tb" = 0 ] && ok "dnsguard.log 无 Traceback" || bad "dnsguard.log 有 $tb 处 Traceback"
 
 # ---------------------------------------------------------------------- 3 指标
@@ -72,16 +72,26 @@ fi
 
 # --------------------------------------------------------------------- 4 解析
 sec "4. 解析行为"
-python3 - "$DNS_DOMAIN" "$DOT_PORT" "$DOH_PORT" <<'PY'
-import socket, ssl, struct, sys, binascii, time
+python3 - "$DNS_DOMAIN" "$DOT_PORT" "$DOH_PORT" "${GW_IP:-}" "${DNSGUARD_NET:-dnsnet}" <<'PY'
+import socket, ssl, struct, sys, binascii, time, os, subprocess
 DOMAIN, DOT_PORT, DOH_PORT = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-GW = None
-try:
-    import subprocess
-    out = subprocess.check_output(["ip","-4","-o","addr","show","docker0"]).decode()
-    GW = out.split()[3].split('/')[0]
-except Exception:
+GW_OPT = sys.argv[4] if len(sys.argv) > 4 else ""
+NET     = sys.argv[5] if len(sys.argv) > 5 else "dnsnet"
+# 网关必须取**本栈的自定义网络**（compose 里的 dnsnet），guard 只监听在那里。
+# 早前这里读的是 docker0 —— 那是 docker 默认 bridge（172.17.0.1），guard 并不监听，
+# 于是所有默认安装都会让「解析行为」整段误报失败。
+GW = (GW_OPT or os.environ.get("GW_IP", "")).strip()
+if not GW:
+    try:
+        GW = subprocess.check_output(
+            ["docker", "network", "inspect", NET,
+             "-f", "{{range .IPAM.Config}}{{.Gateway}}{{end}}"],
+            stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        GW = ""
+if not GW or not GW[0].isdigit():
     GW = "172.18.0.1"
+print("  网关：guard 监听 %s（网络 %s）" % (GW, NET))
 
 def build(name, qtype=1, do=True):
     q = b''.join(bytes([len(p)]) + p.encode() for p in name.split('.')) + b'\x00'
@@ -127,17 +137,43 @@ def dot(host, port, name, sni, timeout=5.0):
 
 def show(tag, r):
     if not r: print("  %-34s %s" % (tag, "无响应")); return None
-    if 'error' in r: print("  %-34s %s" % (tag, "错误：" + r['error'])); return None
+    if 'error' in r: print("  %-34s %s" % (tag, "错误：" + r['error'])); return r
     print("  %-34s rcode=%d an=%d ad=%s" % (tag, r['rcode'], r['an'], int(r['ad'])))
     return r
 
-fails = []
-r = show("guard(%s:5355) cloudflare.com" % GW, udp(GW, 5355, "cloudflare.com"))
-if not (r and r.get('rcode') == 0 and r.get('an', 0) >= 1): fails.append("guard 查询 cloudflare.com 失败")
-r = show("guard(%s:5355) dnssec-failed.org" % GW, udp(GW, 5355, "dnssec-failed.org"))
-if not (r and r.get('rcode') == 2): fails.append("dnssec-failed.org 未返回 SERVFAIL（验签未生效？）")
+# 未接通 = 连接被拒/无监听：DoT/DoH 入口由 nginx 提供，属可选外部依赖，
+# 不该让「验收」整体判 FAIL（install.sh 默认 INSTALL_NGINX=0，需人工 include 片段）。
+UNWIRED = ("ConnectionRefusedError", "FileNotFoundError", "ConnectionResetError")
+
+fails = []; warns = []
+
+def udp_retry(host, port, name, tries=6, gap=4.0, need=None):
+    """guard 的干净上游池是**异步预热**的：systemd 报 active 不等于已经能出答案，
+    冷启动后头几次查询可能拿到 SERVFAIL（实测 0~30s 内都会）。验收不该把这种
+    瞬时状态判成失败，所以按条件重试；始终命不中就把最后一次结果交回，由调用方判 FAIL。"""
+    last = None
+    for i in range(tries):
+        last = udp(host, port, name)
+        if last and 'rcode' in last and (need is None or need(last)):
+            return last
+        if i < tries - 1:
+            time.sleep(gap)
+    return last
+
+def is_ok(x):       return x.get('rcode') == 0 and x.get('an', 0) >= 1
+def is_servfail(x): return x.get('rcode') == 2
+
+r = show("guard(%s:5355) cloudflare.com" % GW, udp_retry(GW, 5355, "cloudflare.com", need=is_ok))
+if not (r and is_ok(r)): fails.append("guard 查询 cloudflare.com 失败")
+r = show("guard(%s:5355) dnssec-failed.org" % GW, udp_retry(GW, 5355, "dnssec-failed.org", need=is_servfail))
+if not (r and is_servfail(r)): fails.append("dnssec-failed.org 未返回 SERVFAIL（验签未生效？）")
 r = show("DoT(%s:%d) cloudflare.com" % (DOMAIN, DOT_PORT), dot("127.0.0.1", DOT_PORT, "cloudflare.com", DOMAIN))
-if not (r and r.get('rcode') == 0): fails.append("DoT 入口查询失败")
+if r and r.get('rcode') == 0:
+    pass
+elif r and r.get('error') in UNWIRED:
+    warns.append("DoT 入口未接（%s:%d %s）—— nginx 未安装/未 include dot-853.conf" % (DOMAIN, DOT_PORT, r['error']))
+else:
+    fails.append("DoT 入口查询失败（%s）" % (r.get('error') if r else '无响应'))
 r = show("DoH(%s:%d) cloudflare.com" % (DOMAIN, DOH_PORT), None) if False else None
 try:
     import http.client
@@ -152,8 +188,14 @@ try:
     print("  %-34s http=%d len=%d" % ("DoH(%s:%d) cloudflare.com" % (DOMAIN, DOH_PORT), resp.status, len(body)))
     if resp.status != 200: fails.append("DoH 入口返回 HTTP %d" % resp.status)
 except Exception as e:
-    print("  %-34s 错误：%s" % ("DoH 入口", type(e).__name__)); fails.append("DoH 入口异常：" + type(e).__name__)
+    nm = type(e).__name__
+    print("  %-34s 错误：%s" % ("DoH 入口", nm))
+    if nm in UNWIRED:
+        warns.append("DoH 入口未接（127.0.0.1:%d %s）—— nginx 未安装/未 include doh-444.conf" % (DOH_PORT, nm))
+    else:
+        fails.append("DoH 入口异常：" + nm)
 
+for w in warns: print("  ! %s" % w)
 print("\nRESULT: " + ("ALL OK" if not fails else "FAILED -> " + "; ".join(fails)))
 sys.exit(1 if fails else 0)
 PY

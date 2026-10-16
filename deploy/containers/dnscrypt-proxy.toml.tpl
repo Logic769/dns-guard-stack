@@ -329,6 +329,10 @@ reject_ttl = 10
 ##################################################################################
 
 ## See the `example-forwarding-rules.txt` file for an example
+## 该文件由 tools/refresh-cn-rules.py 生成（内容 = 国内域名 → 国内 DoT 的转发规则），
+## 是「CN 域名走 B 侧」的落地载体。dnscrypt-proxy 启动时它必须**已存在**，否则会
+## `[FATAL] open /opt/dnscrypt-proxy/forwarding-rules.txt: no such file or directory`。
+## install.sh 会在启动容器前先落一个空文件，之后由刷新器原子替换为真实规则。
 forwarding_rules = '/opt/dnscrypt-proxy/forwarding-rules.txt'
 
 

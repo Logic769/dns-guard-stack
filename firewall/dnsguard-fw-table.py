@@ -13,7 +13,7 @@
 
 用法
   iptables-save -c -t filter | dnsguard-fw-table.py --a-ip 172.18.0.4 --ag-ip 172.18.0.6 \
-      --b-ip 172.18.0.5 --alt-ip 172.18.0.8 --adgh-ip 172.18.0.2 --gw 172.18.0.1 \
+      --b-ip 172.18.0.5 --alt-ip 172.18.0.8 --dcp-ip 172.18.0.9 --adgh-ip 172.18.0.2 --gw 172.18.0.1 \
       --probe-src 172.18.0.99 > new-filter.rules
   iptables-restore -c new-filter.rules                     # 原子提交
 
@@ -23,7 +23,7 @@
   · 纯函数：不调用 iptables，不读写任何系统状态；同输入必然同输出（幂等）。
   · 只触碰「我们管理的对象」：
       INPUT       : --comment 以 TAG 开头的规则（默认 14 条）
-      DOCKER-USER : --comment 以 TAG53- 开头、等于 JTAG，或 -j CHAIN / -j CHAIN_A 的规则（13 条）
+      DOCKER-USER : --comment 以 TAG53- 开头、等于 JTAG，或 -j CHAIN / -j CHAIN_A 的规则（15 条）
       CHAIN       : 整链内容（自建链，2 条）
       CHAIN_A     : 整链内容（自建链，5 条）
     其余规则（docker 生成、其它运维脚本生成、DOCKER-USER 末尾的 -j RETURN）原样保留。
@@ -66,13 +66,23 @@ def expected_input(o):
 
 
 def expected_docker_user(o):
-    """DOCKER-USER 链期望规则（13 条，链首段）。"""
+    """DOCKER-USER 链期望规则（15 条，链首段）。
+
+    allow 段必须全部排在 deny 段之前 —— 后面每条 `-d X --dport 53 -j DROP` 都是
+    「按目的地址封死明文 53」的兜底，任何允许关系只要写到它之后就是死规则。
+    """
     t53 = o["tag53"]
     jt = o["jtag"]
-    a, ag, b, alt = o["a_ip"], o["ag_ip"], o["b_ip"], o["alt_ip"]
+    a, ag, b, alt, dcp = o["a_ip"], o["ag_ip"], o["b_ip"], o["alt_ip"], o["dcp_ip"]
     return [
         '-A DOCKER-USER -s %s/32 -d %s/32 -p udp -m udp --dport 53 -m comment --comment "%s-allow-a-to-aghdq@%s>%s" -j ACCEPT' % (a, ag, t53, a, ag),
         '-A DOCKER-USER -s %s/32 -d %s/32 -p tcp -m tcp --dport 53 -m comment --comment "%s-allow-a-to-aghdq-tcp@%s>%s" -j ACCEPT' % (a, ag, t53, a, ag),
+        # dnscrypt-proxy -> unbound-b：CN 域名分流的明文内腿。
+        # refresh-cn-rules.py 生成的 forwarding-rules.txt 把 CN 域名指到 unbound-b，
+        # 所以这里必须放行；否则下面的 `deny-b` 会把它一起丢掉，
+        # 表现为「刷新器自检 CN 命中 0/3 → 回滚名单」，而 dnscrypt 本身看起来一切正常。
+        '-A DOCKER-USER -s %s/32 -d %s/32 -p udp -m udp --dport 53 -m comment --comment "%s-allow-dcp-to-b@%s>%s" -j ACCEPT' % (dcp, b, t53, dcp, b),
+        '-A DOCKER-USER -s %s/32 -d %s/32 -p tcp -m tcp --dport 53 -m comment --comment "%s-allow-dcp-to-b-tcp@%s>%s" -j ACCEPT' % (dcp, b, t53, dcp, b),
         '-A DOCKER-USER -d %s/32 -p udp -m udp --dport 53 -m comment --comment "%s-deny-a@%s" -j DROP' % (a, t53, a),
         '-A DOCKER-USER -d %s/32 -p tcp -m tcp --dport 53 -m comment --comment "%s-deny-a-tcp@%s" -j DROP' % (a, t53, a),
         '-A DOCKER-USER -d %s/32 -p udp -m udp --dport 53 -m comment --comment "%s-deny-b@%s" -j DROP' % (b, t53, b),
@@ -226,7 +236,15 @@ def build(text, o):
         if name == "INPUT":
             out_rules[name] = new_input + keep.get(name, [])
         elif name == "DOCKER-USER":
-            out_rules[name] = new_du + keep.get(name, [])
+            kept = keep.get(name, [])
+            out_rules[name] = new_du + kept
+            # DOCKER-USER 链尾必须是 `-j RETURN`。docker 建这条链时**不会**自动加，
+            # 缺了它虽然靠用户链走到末尾隐式返回也能工作，但语义变成「未匹配即落回
+            # FORWARD 后续规则」，任何后来者往里追加规则都会无意中改变流量判定；
+            # 显式 RETURN 把边界钉死（Docker 官方文档同样要求）。
+            tail_body = COUNTER_RE.sub("", kept[-1]).strip() if kept else ""
+            if not tail_body.endswith("-j RETURN"):
+                out_rules[name].append("-A DOCKER-USER -j RETURN")
         elif name == o["chain"]:
             out_rules[name] = new_chain
         elif name == o["chain_a"]:
@@ -278,6 +296,11 @@ def verify(text, o):
         if idx and idx[0] != 0 and name in ("INPUT", "DOCKER-USER"):
             warnings.append("链 %s 的管理规则不在链首（首条位于位置 %d）—— 可能有其它组件插入规则" % (name, idx[0]))
 
+    # DOCKER-USER 链尾边界：末条必须是 RETURN（理由见 build() 同处注释）
+    du = chains.get("DOCKER-USER", [])
+    if du and not du[-1].strip().endswith("-j RETURN"):
+        errors.append("DOCKER-USER 末条不是 RETURN: %s" % du[-1])
+
     # 旧式残留：DOCKER-USER 里指向自建链但没有我们 comment 的跳转
     for r in chains.get("DOCKER-USER", []):
         if re.search(r"-j\s+%s(\s|$)" % re.escape(o["chain"]), r) or re.search(r"-j\s+%s(\s|$)" % re.escape(o["chain_a"]), r):
@@ -293,6 +316,7 @@ def add_common(p):
     p.add_argument("--ag-ip", default="172.18.0.6")
     p.add_argument("--b-ip", default="172.18.0.5")
     p.add_argument("--alt-ip", default="172.18.0.8")
+    p.add_argument("--dcp-ip", default="172.18.0.9")
     p.add_argument("--adgh-ip", default="172.18.0.2")
     p.add_argument("--gw", default="172.18.0.1")
     p.add_argument("--net", default="172.16.0.0/12")
@@ -305,7 +329,8 @@ def add_common(p):
 
 
 def opts(a):
-    return dict(a_ip=a.a_ip, ag_ip=a.ag_ip, b_ip=a.b_ip, alt_ip=a.alt_ip, adgh_ip=a.adgh_ip,
+    return dict(a_ip=a.a_ip, ag_ip=a.ag_ip, b_ip=a.b_ip, alt_ip=a.alt_ip, dcp_ip=a.dcp_ip,
+                adgh_ip=a.adgh_ip,
                 gw=a.gw, net=a.net, probe_src=a.probe_src, tag=a.tag, tag53=a.tag53,
                 jtag=a.jtag, chain=a.chain, chain_a=a.chain_a)
 

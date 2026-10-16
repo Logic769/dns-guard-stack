@@ -73,16 +73,27 @@ if [ "$MODE" = apply ] || [ "$MODE" = rollback ]; then
   fi
 fi
 
-# ---------- 动态解析（显式限定 bridge 网络 + IPv4 校验）----------
-A_IP=""; AG_IP=""; B_IP=""; ADGH_IP=""; ALT_IP=""
+# ---------- 动态解析（本栈网络 + IPv4 校验）----------
+# ⚠️ 容器连的是 docker-compose.yml 里的**自定义 bridge 网络**（默认名 dnsnet），
+#    不是 docker 默认的 `bridge` 网络。早先这里写死 `eq $k "bridge"`：只有当 docker0
+#    恰好被配成同一网段（生产机历史上如此）时才碰巧可用；任何干净机器上都会解析到
+#    空串，导致整表收敛直接 ABORT。现在按网络名解析，并回退到"任意网络里的私网 IPv4"。
+DNS_NET=${DNSGUARD_NET:-dnsnet}
+A_IP=""; AG_IP=""; B_IP=""; ADGH_IP=""; ALT_IP=""; DCP_IP=""
 resolve_into() { # $1=目标变量 $2=容器名 $3=1 必需/0 可选
   local var="$1" name="$2" req="$3" ip
-  ip=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{if eq $k "bridge"}}{{$v.IPAddress}}{{end}}{{end}}' "$name" 2>/dev/null)
+  ip=$(docker inspect -f "{{range \$k,\$v := .NetworkSettings.Networks}}{{if eq \$k \"$DNS_NET\"}}{{\$v.IPAddress}}{{end}}{{end}}" "$name" 2>/dev/null)
+  case "$ip" in
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) printf -v "$var" '%s' "$ip"; return 0 ;;
+  esac
+  # 网络名不一致（或容器多网卡）时的回退：该容器任意一个私网 IPv4
+  ip=$(docker inspect -f '{{range $k,$v := .NetworkSettings.Networks}}{{println $v.IPAddress}}{{end}}' "$name" 2>/dev/null \
+       | grep -E '^172\.(1[6-9]|2[0-9]|3[01])\.' | head -1)
   case "$ip" in
     172.1[6-9].*|172.2[0-9].*|172.3[01].*) printf -v "$var" '%s' "$ip"; return 0 ;;
   esac
   if [ "$req" = 1 ]; then
-    echo "dnsguard-fw: FATAL 无法解析容器 $name 在 bridge 网络的 IPv4（得到 '${ip:-<空>}'）⇒ 不改动任何规则" >&2
+    echo "dnsguard-fw: FATAL 无法解析容器 $name 在 $DNS_NET 网络的 IPv4（得到 '${ip:-<空>}'）⇒ 不改动任何规则" >&2
     return 2
   fi
   echo "dnsguard-fw: WARN 可选容器 $name 解析失败（得到 '${ip:-<空>}'）⇒ 本次不生成其规则" >&2
@@ -95,15 +106,24 @@ resolve_all() {
   resolve_into B_IP    unbound-b   1 || rc=2
   resolve_into AG_IP   aghdq       1 || rc=2
   resolve_into ADGH_IP adgh        1 || rc=2
+  # dnscrypt-proxy 必需：CN 分流的 forwarding-rules 把它指向 unbound-b，
+  # 缺了这条 allow，deny-b 会把内腿一起丢掉（自检表现为 CN 命中 0/3）。
+  resolve_into DCP_IP  dnscrypt-proxy 1 || rc=2
   resolve_into ALT_IP  unbound-alt 0 || true
-  GW_IP=$(ip -4 -o addr show docker0 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')
+  # 网关 = guard 的监听地址：优先取本栈网络的网关（容器经它访问宿主上的 guard），
+  # 再退 docker0，最后用编译期兜底值。绝不默认信任 docker0（那常是 172.17.0.1）。
+  GW_IP=$(docker network inspect "$DNS_NET" -f '{{range .IPAM.Config}}{{.Gateway}}{{end}}' 2>/dev/null || true)
+  case "$GW_IP" in 172.1[6-9].*|172.2[0-9].*|172.3[01].*) : ;; *) GW_IP="" ;; esac
+  if [ -z "$GW_IP" ]; then
+    GW_IP=$(ip -4 -o addr show docker0 2>/dev/null | awk '{split($4,a,"/"); print a[1]; exit}')
+  fi
   case "$GW_IP" in 172.1[6-9].*|172.2[0-9].*|172.3[01].*) : ;; *) GW_IP="$GW_DEFAULT" ;; esac
   return $rc
 }
 
 table_args() {
-  printf -- '--a-ip %s --ag-ip %s --b-ip %s --alt-ip %s --adgh-ip %s --gw %s --net %s --probe-src %s --tag %s --tag53 %s --jtag %s --chain %s --chain-a %s' \
-    "$A_IP" "$AG_IP" "$B_IP" "${ALT_IP:-$B_IP}" "$ADGH_IP" "$GW_IP" "$NET" "$PROBE_SRC" \
+  printf -- '--a-ip %s --ag-ip %s --b-ip %s --alt-ip %s --dcp-ip %s --adgh-ip %s --gw %s --net %s --probe-src %s --tag %s --tag53 %s --jtag %s --chain %s --chain-a %s' \
+    "$A_IP" "$AG_IP" "$B_IP" "${ALT_IP:-$B_IP}" "${DCP_IP:-172.18.0.9}" "$ADGH_IP" "$GW_IP" "$NET" "$PROBE_SRC" \
     "$TAG" "$TAG53" "$J_TAG" "$CHAIN" "$CHAIN_A"
 }
 
@@ -112,7 +132,7 @@ if [ "$MODE" = check ]; then
   P=0; F=0; W=0
   say(){ printf '  [%s] %s\n' "$1" "$2"; }
   if ! resolve_all; then
-    say FAIL "容器 IP 解析失败（bridge 网络）⇒ 期望规则不可得"
+    say FAIL "容器 IP 解析失败（$DNS_NET 网络）⇒ 期望规则不可得"
     echo "SUMMARY PASS=0 FAIL=1 WARN=0"
     exit 2
   fi
@@ -120,7 +140,7 @@ if [ "$MODE" = check ]; then
   out=$(iptables-save -c -t filter 2>/dev/null | python3 "$TABLE_TOOL" $(table_args) --verify 2>&1); vrc=$?
   nf=$(printf '%s\n' "$out" | grep -c '^FAIL')
   nw=$(printf '%s\n' "$out" | grep -c '^WARN')
-  if [ "$vrc" = 0 ]; then say PASS "整表校验通过（14+13+2+5 条期望规则齐全且顺序正确）"; P=$((P+1))
+  if [ "$vrc" = 0 ]; then say PASS "整表校验通过（14+15+2+5 条期望规则齐全且顺序正确）"; P=$((P+1))
   else say FAIL "整表校验失败（$nf 项）：$(printf '%s' "$out" | grep -a '^FAIL' | head -3 | tr '\n' ';')"; F=$((F+1)); fi
   [ "$nw" -gt 0 ] && { say WARN "整表校验有 $nw 条告警"; W=$((W+nw)); }
   # 语义层断言（与上一版一致的口径，便于既有运维习惯延续）
@@ -130,7 +150,7 @@ if [ "$MODE" = check ]; then
   ld=$(iptables -S DOCKER-USER 2>/dev/null | grep -n -- "$TAG53-deny-" | head -1 | cut -d: -f1)
   if [ -n "$la" ] && [ -n "$ld" ] && [ "$la" -lt "$ld" ]; then say PASS "顺序：cn53 allow($la) 在 deny($ld) 之前"; P=$((P+1)); else say FAIL "顺序：allow=${la:-无} deny=${ld:-无}"; F=$((F+1)); fi
   miss=""
-  for c in "$TAG53-allow-a-to-aghdq@$A_IP>$AG_IP" "$TAG53-deny-a@$A_IP" "$TAG53-deny-b@$B_IP" "$TAG53-deny-aghdq@$AG_IP" "$TAG53-deny-alt@$ALT_IP"; do
+  for c in "$TAG53-allow-a-to-aghdq@$A_IP>$AG_IP" "$TAG53-allow-dcp-to-b@$DCP_IP>$B_IP" "$TAG53-deny-a@$A_IP" "$TAG53-deny-b@$B_IP" "$TAG53-deny-aghdq@$AG_IP" "$TAG53-deny-alt@$ALT_IP"; do
     iptables -S DOCKER-USER 2>/dev/null | grep -qF -- "$c" || miss="$miss [$c]"
   done
   if [ -z "$miss" ]; then say PASS "期望 IP 与规则一致（漂移检测）"; P=$((P+1)); else say FAIL "漂移：缺$miss"; F=$((F+1)); fi

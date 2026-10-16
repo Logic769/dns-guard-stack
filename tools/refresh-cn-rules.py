@@ -43,7 +43,95 @@ RULES = "/opt/dnscrypt-proxy/forwarding-rules.txt"
 LAST_TAR_SHA = {"sha256": None, "bytes": None}   # 本次上游 tar 内容指纹（来源钉扎用）
 TYPED = "/opt/dnscrypt-proxy/cn-domains-typed.txt"
 LOG = "/var/log/cn-rules-refresh.log"
-TARGET = "127.0.0.1:5354"
+# TARGET（forwarding-rules 里每条 CN 域名后面的转发目标）按部署方式自适应，
+# 定义见下方 _rules_target()：目标地址的视角属于**读这个文件的那一方**。
+
+# ------------------------------------------------------------------ dcp 落地方式
+# dnscrypt-proxy 的落地方式随部署而异，本脚本对两种都支持：
+#   systemd  参考实现：单元 dnscrypt-proxy-local，监听 127.0.0.2:5353
+#   docker   本仓库 compose：容器 dnscrypt-proxy，宿主 127.0.0.1:5399（映射 5353/udp）
+# 早期版本把单元名写死：容器化部署下 `is-active` 恒为 inactive、查询又打到
+# 127.0.0.2:5353（无人监听）⇒ 每次刷新都以「服务自检未过」回滚，typed 名单永远为空。
+DCP_UNIT = "dnscrypt-proxy-local"
+DCP_CTR = "dnscrypt-proxy"
+
+
+def _dcp_mode():
+    r = subprocess.run(["systemctl", "list-unit-files", DCP_UNIT + ".service"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if DCP_UNIT in r.stdout.decode(errors="replace"):
+        return "systemd"
+    r = subprocess.run(["docker", "ps", "-a", "--filter", "name=^" + DCP_CTR + "$",
+                        "--format", "{{.Names}}"],
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if r.stdout.decode(errors="replace").strip():
+        return "docker"
+    return "none"
+
+
+def _dcp_addr(mode):
+    """dcp 的查询地址（check_cn 用）"""
+    if mode == "docker":
+        r = subprocess.run(["docker", "port", DCP_CTR, "5353/udp"],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        for line in r.stdout.decode(errors="replace").strip().splitlines():
+            if ":" in line:
+                host, _, port = line.rpartition(":")
+                try:
+                    return (host or "127.0.0.1", int(port))
+                except ValueError:
+                    break
+        return ("127.0.0.1", 5399)
+    return ("127.0.0.2", 5353)
+
+
+def _dcp_restart(mode):
+    if mode == "docker":
+        subprocess.run(["docker", "restart", DCP_CTR],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    elif mode == "systemd":
+        subprocess.run(["systemctl", "restart", DCP_UNIT],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _dcp_active(mode):
+    if mode == "docker":
+        r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", DCP_CTR],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return "active" if r.stdout.decode(errors="replace").strip() == "true" else "inactive"
+    if mode == "systemd":
+        r = subprocess.run(["systemctl", "is-active", DCP_UNIT],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        return r.stdout.decode(errors="replace").strip()
+    return "inactive"
+
+
+def _rules_target(mode):
+    """forwarding-rules.txt 里每条 CN 域名后面的转发目标。
+
+    目标地址的视角属于**读这个文件的那一方**，也就是 dnscrypt-proxy：
+      systemd：dnscrypt-proxy 与 unbound-b 同在宿主 ⇒ 127.0.0.1:5354（compose 把
+               unbound-b 的 53 映射到宿主 5354）正确。
+      docker ：dnscrypt-proxy 在容器内，容器里的 127.0.0.1 是它自己 ⇒ 必须写 unbound-b
+               的**容器 IP**:53。写 127.0.0.1 会让每条 CN 规则把查询转发回 dcp 自身，
+               查询无响应 ⇒ 自检恒为「CN 命中 0/3」⇒ 每轮刷新都回滚，typed 与
+               forwarding-rules 永远停在骨架（本仓库首次容器化部署实测踩到）。
+    容器名可用 REFRESH_UNBOUND_B_CTR 覆盖；探测不到时退回 127.0.0.1:5354。
+    """
+    if mode == "docker":
+        ctr = os.environ.get("REFRESH_UNBOUND_B_CTR", "unbound-b")
+        r = subprocess.run(["docker", "inspect", "-f",
+                            "{{range .NetworkSettings.Networks}}{{.IPAddress}} {{end}}", ctr],
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        ips = r.stdout.decode(errors="replace").split()
+        if ips:
+            return ips[0] + ":53"
+    return "127.0.0.1:5354"
+
+
+DCP_MODE = _dcp_mode()
+DCP_ADDR = _dcp_addr(DCP_MODE)
+TARGET = _rules_target(DCP_MODE)
 # 数据源（F5 修正）：cdn.jsdelivr.net 在批量并发下会出现 HTTP 000（实测 93/315 抖动），
 # 而 fastly/gcore/testingcf 三个 jsdelivr 边缘域可用 ⇒ 逐文件模式按镜像顺序回退。
 BASES = [
@@ -252,7 +340,7 @@ def check_cn(names=("www.baidu.com", "www.qq.com", "www.jd.com")):
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.settimeout(8)
         try:
-            s.sendto(q, ("127.0.0.2", 5353))
+            s.sendto(q, DCP_ADDR)
             rc, ips, _c, _t = G.parse_a(s.recvfrom(4096)[0])
             f = [G.is_cn_ip(x) for x in ips]
             if f and all(x is True for x in f):
@@ -262,6 +350,21 @@ def check_cn(names=("www.baidu.com", "www.qq.com", "www.jd.com")):
         finally:
             s.close()
     return ok
+
+
+def wait_cn(need=2, timeout=90):
+    """等 dcp 就绪并命中 CN 域名，返回最好一次的命中数。
+
+    容器重启后 dnscrypt-proxy 要重新探测上游（实测 10~40s 才可服务），
+    固定 sleep 10 后在容器化部署下几乎必然读到 0/3 ⇒ 误判自检失败并回滚。
+    """
+    deadline = time.time() + timeout
+    best = 0
+    while True:
+        best = max(best, check_cn())
+        if best >= need or time.time() >= deadline:
+            return best
+        time.sleep(5)
 
 
 t0 = time.time()
@@ -329,7 +432,11 @@ if oversize:
     log("WARN 变更幅度超过阈值，但显式 --force ⇒ 继续")
 
 typed_now = typed_lines(typed)
-typed_prev = (io.open(TYPED, encoding="utf-8").read() if os.path.exists(TYPED) else "")
+# 与 typed_now 保持同一类型（行列表）：早前是 read() 的整串，导致 typed_same 恒为 False
+# （"看起来变了"），且归档时 typed_now.splitlines() 直接抛
+# `'list' object has no attribute 'splitlines'`。
+typed_prev = (io.open(TYPED, encoding="utf-8").read().splitlines()
+              if os.path.exists(TYPED) else [])
 rules_same = (new == old)
 typed_same = (typed_now == typed_prev)
 if rules_same and typed_same:
@@ -380,8 +487,7 @@ def rollback(reason):
             os.remove(TYPED)     # 首次生成 ⇒ 回滚即回到"无类型化文件"（guard 回退旧语义）
     except Exception as e:
         log("  回滚写回失败: %s" % e)
-    subprocess.run(["systemctl", "restart", "dnscrypt-proxy-local"], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL)
+    _dcp_restart(DCP_MODE)
     time.sleep(8)
     log("  回滚后 CN 命中=%d/3" % check_cn())
     sys.exit(1)
@@ -421,9 +527,9 @@ if hist is not None:
                     gate="force" if oversize else "ok",
                     extra={"files_scanned": nfiles, "fetch_failed": len(failed),
                            "backup": bak})
-        old_typed_set = set(x for x in typed_prev.splitlines()
+        old_typed_set = set(x for x in typed_prev
                             if x.strip() and not x.startswith("#"))
-        new_typed_set = set(x for x in typed_now.splitlines()
+        new_typed_set = set(x for x in typed_now
                             if x.strip() and not x.startswith("#"))
         hist.record("cn-domains-typed", old_typed_set, new_typed_set, TYPED,
                     upstream=dict(up_info, tar_sha256=LAST_TAR_SHA["sha256"]),
@@ -443,15 +549,12 @@ if rules_same:
         % (len(new), len(typed_now), bak))
     sys.exit(0)
 
-subprocess.run(["systemctl", "restart", "dnscrypt-proxy-local"], stdout=subprocess.DEVNULL,
-               stderr=subprocess.DEVNULL)
-time.sleep(10)
-active = subprocess.run(["systemctl", "is-active", "dnscrypt-proxy-local"],
-                        stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.decode().strip()
-cn_ok = check_cn()
-log("自检：dcp=%s CN 命中=%d/3" % (active, cn_ok))
+_dcp_restart(DCP_MODE)
+active = _dcp_active(DCP_MODE)
+cn_ok = wait_cn()
+log("自检：dcp=%s(%s) CN 命中=%d/3" % (active, DCP_MODE, cn_ok))
 if active != "active" or cn_ok < 2:
-    rollback("服务自检未过（dcp=%s CN=%d/3）" % (active, cn_ok))
+    rollback("服务自检未过（dcp=%s/%s CN=%d/3）" % (active, DCP_MODE, cn_ok))
 
 log("OK 已更新并生效（规则 %d 条 / 类型化 %d 条；备份 %s）"
     % (len(new), len(typed_now), bak))

@@ -45,7 +45,16 @@ if [ ! -f .env ]; then
   warn ".env 不存在，从 .env.example 复制一份（请按需修改后重跑）"
   [ "$DRY" = 1 ] || cp -n .env.example .env
 fi
-set -a; . ./.env; set +a
+# .env 常被 Windows 编辑器存成 CRLF：\r 会混进变量值，让路径/账号多出不可见字符，
+# `install -d`、`chown` 之类直接失败（典型：`chown: invalid user: $'65532\r:65532\r'`）。
+# 检测到 CR 时改用去 CR 的临时副本加载，不改动用户原文件。
+env_file="$PWD/.env"
+if grep -q "$(printf '\r')" "$env_file" 2>/dev/null; then
+  warn ".env 含 CRLF 行尾，已按 LF 加载（建议保存为 LF，避免变量值尾部混入 \\r）"
+  env_file="$(mktemp)"; tr -d '\r' < "$PWD/.env" > "$env_file"
+fi
+set -a; . "$env_file"; set +a
+[ "$env_file" = "$PWD/.env" ] || rm -f "$env_file"
 
 : "${DNS_DOMAIN:=dns.example.com}"
 : "${RUNTIME_DIR:=/opt/dns-guard-stack/runtime}"
@@ -81,9 +90,14 @@ python3 -c 'import sys; sys.exit(0 if sys.version_info>=(3,6) else 1)' || die "�
 need systemctl || die "缺少 systemd"
 info "docker $(docker --version | awk '{print $3}' | tr -d ,) / python3 $PYV / systemd ok"
 
-# docker0 网关（guard 监听地址）
+# 解析层网络网关（guard 的监听地址）
+# 本栈在 docker-compose.yml 里用**自定义 bridge 网络 dnsnet**（默认 172.18.0.0/16），
+# guard 监听的是该网络的网关，容器经这个网关访问 guard。
+# ⚠️ 不要去读 docker0 的地址：docker0 属于 docker 默认网段（通常是 172.17.0.0/16），
+#    与本栈网段无关。取错会让所有容器访问不到 guard（AGH 上游全部超时）。
 if [ -z "${GW_IP:-}" ]; then
-  GW_IP=$(ip -4 -o addr show docker0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1 || true)
+  GW_IP=$(python3 -c 'import ipaddress,sys
+print(next(ipaddress.ip_network(sys.argv[1], strict=False).hosts()))' "$DOCKER_SUBNET" 2>/dev/null || true)
   [ -n "$GW_IP" ] || GW_IP=172.18.0.1
 fi
 info "GW_IP=$GW_IP  DNS_DOMAIN=$DNS_DOMAIN  RUNTIME_DIR=$RUNTIME_DIR"
@@ -91,10 +105,25 @@ info "GW_IP=$GW_IP  DNS_DOMAIN=$DNS_DOMAIN  RUNTIME_DIR=$RUNTIME_DIR"
 step "建立目录"
 for d in "$CODE_DIR" "$LISTS_DIR/backups" "$STATE_DIR" "$VERIFIER_STATE_DIR" "$BACKUP_DIR" \
          "$RUNTIME_DIR"/{unbound-a,unbound-b,unbound-alt,unbound-alt-replica} \
-         "$RUNTIME_DIR"/adgh/{conf,work} "$RUNTIME_DIR"/aghdq "$RUNTIME_DIR"/dnscrypt-proxy \
+         "$RUNTIME_DIR"/adgh/{conf,work} "$RUNTIME_DIR"/aghdq \
+         "$RUNTIME_DIR"/dnscrypt-proxy/cache \
          "$CODE_DIR/cn-list-history" /run/dnsguard /var/log; do
   run "install -d -m 0755 '$d'"
 done
+
+# dnscrypt-proxy 镜像以 distroless 的 nonroot（uid 65532）运行，而 cache 目录是 root 建的。
+# 属主不改 ⇒ 源列表写不进 cache（"Couldn't write cache file ...: permission denied"），
+# 每次启动都要重新下载、缓存永久失效。uid 可用 DNSCRYPT_CACHE_UID 覆盖。
+: "${DNSCRYPT_CACHE_UID:=65532}"
+if [ "$DRY" != 1 ]; then
+  run "chown -R '$DNSCRYPT_CACHE_UID:$DNSCRYPT_CACHE_UID' '$RUNTIME_DIR/dnscrypt-proxy/cache'"
+  # dnscrypt-proxy 启动时 forwarding_rules 指向的文件必须已存在（内容由刷新器填充，
+  # 但容器起来之前没人写它）⇒ 先落一个空文件，否则容器启动即
+  # `[FATAL] open .../forwarding-rules.txt: no such file or directory`。
+  # ⚠️ 只在**不存在**时创建：`install -m 0644 /dev/null` 是无条件截断，幂等重跑会把
+  #    刷新器刚拉到的真实规则整份清空（实测踩过：8837 条 → 0 条，国内域名不再走国内源）。
+  [ -e "$LISTS_DIR/forwarding-rules.txt" ] || run "install -m 0644 /dev/null '$LISTS_DIR/forwarding-rules.txt'"
+fi
 
 # 渲染：把模板里的默认值换成 .env 里的实际值（sed 失败率极低：都是定值替换）
 render() { # render <tpl> <out>
@@ -112,17 +141,35 @@ step "部署代码到 $CODE_DIR"
 run "install -d -m 0755 '$CODE_DIR/core' '$CODE_DIR/tools' '$CODE_DIR/probes' '$CODE_DIR/firewall'"
 run "cp -f '$HERE'/core/*.py '$HERE'/core/*.json '$CODE_DIR'/"
 run "cp -f '$HERE'/core/*.py '$HERE'/core/*.json '$CODE_DIR/core/'"
-run "cp -f '$HERE'/tools/* '$CODE_DIR/tools/'"
-run "cp -f '$HERE'/probes/* '$CODE_DIR/probes/'"
-run "cp -f '$HERE'/firewall/* /usr/local/sbin/ 2>/dev/null || true"
-run "chmod 0755 '$CODE_DIR'/*.py '$CODE_DIR/tools'/*.py '$CODE_DIR/tools'/*.sh '$CODE_DIR/probes'/*.py /usr/local/sbin/dnsguard-*.sh /usr/local/sbin/dnsguard-*.py 2>/dev/null || true"
+# 一律用 find -type f 而不是 `dir/*`：工作区里可能带 __pycache__ 等子目录，cp 通配
+# 碰到目录会报 "omitting directory" 并以非 0 退出，在 set -e 下直接中断整个安装
+# （实测：rsync 过的工作区必踩 —— 安装停在「部署代码」段，后面的 systemd / 看板 /
+#  nginx 全都不执行，看起来像“装完了”但只装了一半）。
+run "find '$HERE'/tools -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/tools/' {} +"
+run "find '$HERE'/probes -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/probes/' {} +"
+# 再平铺一份到 $CODE_DIR 根：仓库把脚本按 core/tools/probes 分目录，但脚本之间仍按
+# 旧生产布局互相引用（`/opt/dnsguard/xxx.py`、`/opt/dnsguard/xxx.sh`），下面的 sed 会把
+# 这类前缀改写成 $CODE_DIR ⇒ 只有根目录下也存在同名文件，改写后的路径才成立。
+# 与 core/*.py 无重名，两份由本步骤保证同步。
+run "find '$HERE'/tools -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/' {} +"
+run "find '$HERE'/probes -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/' {} +"
+run "find '$HERE'/firewall -maxdepth 1 -type f -exec cp -f -t /usr/local/sbin/ {} + 2>/dev/null || true"
+# 验收脚本随代码落位：安装结束会提示「验收：./verify.sh」，verify.sh 不在 $CODE_DIR
+# 的话用户按提示执行只会得到 No such file。同放一份 .env，让 verify.sh / 运维脚本
+# 读到本次安装的实际路径，而不是模板默认值。
+run "cp -f '$HERE'/verify.sh '$CODE_DIR/verify.sh' 2>/dev/null || true"
+run "cp -f '$HERE'/.env '$CODE_DIR/.env' 2>/dev/null || true"
+run "chmod 0755 '$CODE_DIR'/*.py '$CODE_DIR'/*.sh '$CODE_DIR/tools'/*.py '$CODE_DIR/tools'/*.sh '$CODE_DIR/probes'/*.py '$CODE_DIR/verify.sh' /usr/local/sbin/dnsguard-*.sh /usr/local/sbin/dnsguard-*.py 2>/dev/null || true"
 # 让 tools/probes 里的默认路径跟随 .env（默认值与仓库一致时是 no-op）。
 # 必须在这里做：后面的「初始化名单」步骤会直接调用 tools/ 里的刷新器。
+# （forwarding-rules 的转发目标 TARGET 不在这里改写：refresh-cn-rules.py 会按
+#  systemd/docker 自行探测 unbound-b 的落地地址，容器内 127.0.0.1 指向容器自身。）
 run "sed -i -e 's|/opt/dnscrypt-proxy|$LISTS_DIR|g' \
       -e 's|/opt/chainmon|${CHAINMON_DIR:-/opt/chainmon}|g' \
       -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g' \
       -e 's|/opt/dnsguard/current|$CODE_DIR|g' \
-      -e 's|/opt/dnsguard|$CODE_DIR|g' '$CODE_DIR'/tools/* '$CODE_DIR'/probes/* 2>/dev/null || true"
+      -e 's|/opt/dnsguard|$CODE_DIR|g' '$CODE_DIR'/tools/* '$CODE_DIR'/probes/* \
+      '$CODE_DIR'/*.py '$CODE_DIR'/*.sh 2>/dev/null || true"
 run "python3 -m py_compile '$CODE_DIR'/guard.py '$CODE_DIR'/verifier.py '$CODE_DIR'/alt_adapter.py '$CODE_DIR'/answer_policy.py"
 info "代码就位：$CODE_DIR/（guard.py verifier.py alt_adapter.py answer_policy.py …）"
 
@@ -151,9 +198,19 @@ fi
 render "$HERE/deploy/containers/aghdq.AdGuardHome.yaml.tpl" "$RUNTIME_DIR/aghdq/AdGuardHome.yaml"
 render "$HERE/deploy/containers/adgh.AdGuardHome.yaml.tpl"  "$RUNTIME_DIR/adgh/conf/AdGuardHome.yaml"
 # dnscrypt-proxy：容器内监听 5353
-run "sed -e \"s|listen_addresses = .*|listen_addresses = ['0.0.0.0:5353']|\" \
-        -e \"s|server_names = .*|server_names = ['$(echo "${DNSCRYPT_SERVERS:-cs-nl}" | sed "s/,/','/g")']|\" \
+# `server_names` 必须锚定行首：模板第 87 行是 `disabled_server_names = []`，不锚定会被
+# 这条规则一并改写，把刚填进去的服务器名字全部塞进「禁用名单」⇒ 容器启动即
+# `[FATAL] None of the servers listed in the server_names list were found in the configured sources.`
+# DNSCRYPT_FORCE_TCP：部分网络（家用宽带、部分云厂商）丢弃出站 UDP 443，表现为
+# 容器日志刷 `[cs-*] TIMEOUT` + `dnscrypt-proxy is waiting for at least one server to
+# be reachable`，容器 Up 却不解析。此时设 true 改走 TCP 443。
+run "sed -e \"s|^listen_addresses = .*|listen_addresses = ['0.0.0.0:5353']|\" \
+        -e \"s|^server_names = .*|server_names = ['$(echo "${DNSCRYPT_SERVERS:-cs-nl,cs-fr,dct-de2,cs-dus,cs-london,cs-swe}" | sed "s/,/','/g")']|\" \
+        -e \"s|^force_tcp = .*|force_tcp = ${DNSCRYPT_FORCE_TCP:-false}|\" \
         '$HERE/deploy/containers/dnscrypt-proxy.toml.tpl' > '$RUNTIME_DIR/dnscrypt-proxy/dnscrypt-proxy.toml'"
+if [ "$DRY" != 1 ] && ! grep -q '^disabled_server_names = \[\]' "$RUNTIME_DIR/dnscrypt-proxy/dnscrypt-proxy.toml" 2>/dev/null; then
+  warn "dnscrypt-proxy.toml 的 disabled_server_names 非空 —— server_names 里的服务器可能全被禁用"
+fi
 
 # AGH 面板账号（bcrypt 由 httpd 镜像生成；留空则首次访问 UI 时创建）
 if [ -n "${AGH_ADMIN_PASSWORD:-}" ]; then
@@ -177,41 +234,6 @@ run "cp -f '$RUNTIME_DIR/unbound-a'/unbound_*.key '$RUNTIME_DIR/unbound-a'/unbou
 run "cp -f '$RUNTIME_DIR/unbound-a'/unbound_*.key '$RUNTIME_DIR/unbound-a'/unbound_*.pem '$RUNTIME_DIR/unbound-alt/' 2>/dev/null || true"
 info "root.key 与 unbound-control 证书就绪"
 
-step "初始化名单（LISTS_PROFILE=${LISTS_PROFILE:-fetch}）"
-run "install -d -m 0755 '$LISTS_DIR'"
-run "cp -f '$HERE/deploy/lists/cn-trust-allow.txt' '$LISTS_DIR/cn-trust-allow.txt'"
-run "cp -f '$HERE/deploy/lists/cn-trust-exceptions.txt' '$LISTS_DIR/cn-trust-exceptions.txt'"
-run "cp -f '$HERE/deploy/lists/cn-trust-allow.txt' '$CODE_DIR/core/cn-trust-allow.txt' 2>/dev/null || true"
-run "install -m 0755 '$HERE/tools/refresh-all-cn-lists.sh' '$CODE_DIR/tools/' 2>/dev/null || true"
-skeleton_lists() { # 无外网/拉取失败时的兜底：写骨架文件，guard 会按“未知即不信任”运行
-  for f in cn-domains-typed.txt forwarding-rules.txt cn_veto.txt cn_ip.txt; do
-    if [ ! -s "$LISTS_DIR/$f" ]; then
-      run "printf '# 骨架：执行 %s/tools/refresh-all-cn-lists.sh 拉取真实名单\\n' '$CODE_DIR' > '$LISTS_DIR/$f'"
-    fi
-  done
-}
-if [ "$FETCH" = 1 ] || [ "${LISTS_PROFILE:-fetch}" = "fetch" ]; then
-  info "拉取真实名单：v2fly 域名（typed）→ clang.cn/chnroutes2 国内 IP → 否决名单（需要外网）"
-  run "python3 '$CODE_DIR/tools/refresh-cn-rules.py' --force 2>&1 | tail -4 || true"
-  run "python3 '$CODE_DIR/tools/refresh-cn-veto-ip.py' --force 2>&1 | tail -4 || true"
-  if [ "$DRY" != 1 ]; then
-    typed_n=$(wc -l < "$LISTS_DIR/cn-domains-typed.txt" 2>/dev/null || echo 0)
-    ip_n=$(wc -l < "$LISTS_DIR/cn_ip.txt" 2>/dev/null || echo 0)
-    veto_n=$(wc -l < "$LISTS_DIR/cn_veto.txt" 2>/dev/null || echo 0)
-    info "名单条数：typed=${typed_n:-0}  cn_ip=${ip_n:-0}  veto=${veto_n:-0}"
-    if [ "${typed_n:-0}" -lt 1000 ] || [ "${ip_n:-0}" -lt 500 ] || [ "${veto_n:-0}" -lt 100 ]; then
-      warn "名单不完整（多半是没有外网）。安装继续；guard 会按“未知即不信任”运行。"
-      warn "稍后重试：sudo bash $CODE_DIR/tools/refresh-all-cn-lists.sh"
-      skeleton_lists
-    else
-      info "名单拉取完成（真实名单，不是骨架）"
-    fi
-  fi
-else
-  warn "LISTS_PROFILE=$LISTS_PROFILE：使用骨架名单，guard 按“未知即不信任”运行。"
-  warn "稍后拉真名单：sudo bash $CODE_DIR/tools/refresh-all-cn-lists.sh"
-  skeleton_lists
-fi
 
 step "证书"
 CERT="${TLS_CERT:-}"; KEY="${TLS_KEY:-}"
@@ -229,20 +251,76 @@ else
 fi
 
 step "启动容器"
-run "docker compose --project-directory '$HERE' up -d"
+# --wait：等所有带 healthcheck 的服务进入 healthy 再往下走。unbound 系首次启动要加载
+# root.key 与 DNSSEC 信任链（实测 5~20s），只等 aghdq「running」是不够的 ——
+# 容器进程起来了但递归还没就绪，紧接着的名单刷新器 CN 命中自检会拿到 0/3 并回滚，
+# guard 首次解析也会返回 SERVFAIL。
+if ! run "docker compose --project-directory '$HERE' up -d --wait --wait-timeout 120"; then
+  warn "有容器未在 120s 内进入 healthy；继续安装，稍后用 verify.sh 复核"
+fi
 if [ "$DRY" != 1 ]; then
-  for i in $(seq 1 30); do
-    n=$(docker ps --filter name=aghdq --filter status=running -q | wc -l)
-    [ "$n" = 1 ] && break; sleep 1
-  done
   info "容器状态："; docker ps --format '    {{.Names}}\t{{.Status}}' 2>/dev/null | sed 's/^/  /' | head -12
+fi
+
+step "初始化名单（LISTS_PROFILE=${LISTS_PROFILE:-fetch}）"
+# ⚠️ 本步骤必须在「启动容器」之后执行：否决名单（cn_veto）的生成与自检需要
+#    dnscrypt-proxy 已在运行（dcp=active），否则自检必然失败并回滚。
+# 名单落位（与生产一致，也见生产上 guard 的实际环境变量）：
+#    cn-domains-typed.txt / forwarding-rules.txt → $LISTS_DIR
+#    cn_ip.txt / cn_veto.txt                     → $CODE_DIR
+run "install -d -m 0755 '$LISTS_DIR'"
+run "cp -f '$HERE/deploy/lists/cn-trust-allow.txt' '$LISTS_DIR/cn-trust-allow.txt'"
+run "cp -f '$HERE/deploy/lists/cn-trust-exceptions.txt' '$LISTS_DIR/cn-trust-exceptions.txt'"
+run "cp -f '$HERE/deploy/lists/cn-trust-allow.txt' '$CODE_DIR/core/cn-trust-allow.txt' 2>/dev/null || true"
+run "install -m 0755 '$HERE/tools/refresh-all-cn-lists.sh' '$CODE_DIR/tools/' 2>/dev/null || true"
+skeleton_lists() { # 无外网/拉取失败时的兜底：写骨架文件占位（注意：骨架 veto 会让 guard 启动失败）
+  for f in cn-domains-typed.txt forwarding-rules.txt; do
+    [ -s "$LISTS_DIR/$f" ] || run "printf '# 骨架：执行 %s/tools/refresh-all-cn-lists.sh 拉取真实名单\\n' '$CODE_DIR' > '$LISTS_DIR/$f'"
+  done
+  for f in cn_veto.txt cn_ip.txt; do
+    [ -s "$CODE_DIR/$f" ] || run "printf '# 骨架：执行 %s/tools/refresh-all-cn-lists.sh 拉取真实名单\\n' '$CODE_DIR' > '$CODE_DIR/$f'"
+  done
+}
+if [ "$FETCH" = 1 ] || [ "${LISTS_PROFILE:-fetch}" = "fetch" ]; then
+  info "拉取真实名单：v2fly 域名（typed）→ clang.cn/chnroutes2 国内 IP → 否决名单（需要外网）"
+  run "python3 '$CODE_DIR/tools/refresh-cn-rules.py' --force 2>&1 | tail -4 || true"
+  run "python3 '$CODE_DIR/tools/refresh-cn-veto-ip.py' --force 2>&1 | tail -4 || true"
+  if [ "$DRY" != 1 ]; then
+    _lines() { if [ -f "$1" ]; then wc -l < "$1" 2>/dev/null || echo 0; else echo 0; fi; }
+    typed_n=$(_lines "$LISTS_DIR/cn-domains-typed.txt")
+    ip_n=$(_lines "$CODE_DIR/cn_ip.txt")
+    veto_n=$(_lines "$CODE_DIR/cn_veto.txt")
+    info "名单条数：typed=${typed_n:-0}  cn_ip=${ip_n:-0}  veto=${veto_n:-0}"
+    if [ "${typed_n:-0}" -lt 1000 ] || [ "${ip_n:-0}" -lt 500 ] || [ "${veto_n:-0}" -lt 100 ]; then
+      warn "名单不完整（多半是没有外网，或上游限流）。"
+      warn "⚠️ 注意：cn_veto.txt 为空时 dnsguard.service 会直接启动失败并反复重启"
+      warn "   （guard 要求 CN 信任必须有 live/last-good/release 否决策略），DNS 主链路不受影响。"
+      warn "稍后重试：sudo bash $CODE_DIR/tools/refresh-all-cn-lists.sh"
+      skeleton_lists
+    else
+      info "名单拉取完成（真实名单，不是骨架）"
+    fi
+  fi
+else
+  warn "LISTS_PROFILE=$LISTS_PROFILE：使用骨架名单。"
+  warn "⚠️ 骨架 veto 下 dnsguard.service 会启动失败并反复重启（见上方说明），DNS 主链路不受影响。"
+  warn "稍后拉真名单：sudo bash $CODE_DIR/tools/refresh-all-cn-lists.sh"
+  skeleton_lists
 fi
 
 if [ "$SKIP_FW" = 0 ]; then
   step "防火墙规则（unbound-b 明文 53 出站封堵 + 容器间 53 收口）"
   if [ -x /usr/local/sbin/dnsguard-fw.sh ]; then
-    run "/usr/local/sbin/dnsguard-fw.sh --check || true"
-    run "/usr/local/sbin/dnsguard-fw.sh --apply"
+    # 顺序：先 --apply（整表原子收敛）再 --check（校验收敛结果）。
+    # 反过来会让**首次安装**打印一整屏 FAIL —— 那一刻规则一条都没写过，
+    # check 描述的是「收敛前现状」，看起来像装坏了，其实是预期。
+    # 防火墙失败**不中断安装**（后面还有 systemd 单元 / 看板 / nginx 要装），
+    # 但必须显式告警：缺这层规则时 DoT/DoH 仍可用，只是少一层纵深防御。
+    if run "/usr/local/sbin/dnsguard-fw.sh --apply"; then
+      run "/usr/local/sbin/dnsguard-fw.sh --check || true"
+    else
+      warn "防火墙规则未应用（见上方 FATAL/WARN）；容器间 53 收口暂缺，DNS 解析本身不受影响"
+    fi
   else
     warn "未找到 dnsguard-fw.sh，跳过（DoT/DoH 仍可用，但缺一层纵深防御）"
   fi
@@ -280,13 +358,23 @@ if [ "$DRY" != 1 ]; then
 Environment=GUARD_STATE_DIR=$STATE_DIR
 Environment=GUARD_CN_DOMAINS_FILE=$LISTS_DIR/forwarding-rules.txt
 Environment=GUARD_CN_TYPED_FILE=$LISTS_DIR/cn-domains-typed.txt
-Environment=GUARD_CN_VETO_FILE=$LISTS_DIR/cn_veto.txt
+# cn_veto.txt / cn_ip.txt 由 refresh-cn-veto-ip.py 写到 CODE_DIR（不是 LISTS_DIR）
+Environment=GUARD_CN_VETO_FILE=$CODE_DIR/cn_veto.txt
 Environment=GUARD_CN_TRUST_ALLOW_FILE=$LISTS_DIR/cn-trust-allow.txt
 Environment=GUARD_CN_TRUST_EXC_FILE=$LISTS_DIR/cn-trust-exceptions.txt
 Environment=GUARD_CN_TRUST_MODE=$CN_TRUST_MODE
 Environment=GUARD_CN_EXIST_MODE=$CN_EXIST_MODE
 Environment=GUARD_CN_VETO_WITNESS=127.0.0.1:${AGHDQ_DNS_PORT:-5533}
+# DoQ 中继（aghdq→NextDNS）与见证地址是两个独立变量（guard.py 里 _DOQ1 读
+# GUARD_DOQ/GUARD_DOQ_PORT，_witness_addr 读 GUARD_CN_VETO_WITNESS），
+# 两者都指向 aghdq 的宿主映射端口，必须一起跟着 .env 走。
+Environment=GUARD_DOQ=127.0.0.1
+Environment=GUARD_DOQ_PORT=${AGHDQ_DNS_PORT:-5533}
 Environment=GUARD_FAST_UDP=127.0.0.1:5399
+# 影子抽样目标：consolidated drop-in 里写的是 127.0.0.2:5353（systemd 部署时
+# dnscrypt-proxy 是宿主进程、绑在 lo 的别名地址上）；容器化后 dnscrypt-proxy 只监听
+# 宿主 127.0.0.1:5399 ⇒ 不对齐会让影子对比（GUARD_SHADOW_PCT=10）静默全失败。
+Environment=GUARD_SHADOW_DNSCRYPT=127.0.0.1:5399
 Environment=GUARD_CN_DOMESTIC_PRIMARY=1
 Environment=GUARD_CN_DOMESTIC_TRUST_B=1
 Environment=GUARD_CN_DOMESTIC_ZERO_TTL_ONESHOT=1
@@ -311,6 +399,23 @@ rewrite_paths() { # rewrite_paths <file...>
         -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g' $* 2>/dev/null || true"
 }
 run "sed -i 's|/opt/dnsguard/current|$CODE_DIR|g' /etc/systemd/system/dnsguard.service /etc/systemd/system/dnsguard-verifier.service /etc/systemd/system/dnsguard.service.d/*.conf /etc/systemd/system/dnsguard-verifier.service.d/*.conf 2>/dev/null || true"
+# drop-in 里的「端口」也要跟 .env 对齐：仓库原件按生产默认写死 5533（aghdq 的宿主映射），
+# 测试/多实例环境把 AGHDQ_DNS_PORT 改成 15533 后若不改写，guard 会一直去 127.0.0.1:5533
+# 找 DoQ 中继与 CN 见证 ⇒ 日志里 `prewarm fail doq(aghdq:5533): 无应答` + 见证退化成不可用。
+# 这里按变量名精确改写端口数字，不动 IP 与协议部分。
+run "sed -i -e 's|^\(Environment=GUARD_CN_VETO_WITNESS=127\.0\.0\.1:\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
+      -e 's|^\(Environment=GUARD_DOQ_PORT=\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
+      /etc/systemd/system/dnsguard.service.d/*.conf 2>/dev/null || true"
+# drop-in 里的「容器网段 IP」同样要跟 .env 对齐（DOCKER_SUBNET / *_IP 都可配）。
+# 仓库原件按默认 172.18.0.0/16 写死；改网段后 GUARD_LISTEN_HOST / 见证 / 上游池
+# 会指向不存在的地址。先替换 .8/.6/.5/.4/.2 再替换 .1，避免短前缀误伤长地址。
+run "sed -i -e 's|172\.18\.0\.6|$AGHDQ_IP|g' \
+      -e 's|172\.18\.0\.4|$UNBOUND_A_IP|g' \
+      -e 's|172\.18\.0\.5|$UNBOUND_B_IP|g' \
+      -e 's|172\.18\.0\.8|$UNBOUND_ALT_IP|g' \
+      -e 's|172\.18\.0\.2|$AGH_IP|g' \
+      -e 's|172\.18\.0\.1|$GW_IP|g' \
+      /etc/systemd/system/dnsguard.service.d/*.conf /etc/systemd/system/dnsguard-verifier.service.d/*.conf 2>/dev/null || true"
 rewrite_paths "'$CODE_DIR'/tools/* '$CODE_DIR'/probes/* /opt/chainmon/* /opt/devfp/*"
 run "systemctl daemon-reload"
 run "systemctl enable --now dnsguard.service dnsguard-verifier.service"
@@ -320,7 +425,7 @@ if [ "$DRY" != 1 ]; then sleep 3; systemctl --no-pager --lines=0 status dnsguard
 step "看板（可选）"
 if [ -d "$HERE/dashboards/chainmon" ]; then
   run "install -d -m 0755 /opt/chainmon /opt/devfp"
-  run "cp -f '$HERE/dashboards/chainmon/'* /opt/chainmon/ && cp -f '$HERE/dashboards/devfp/'* /opt/devfp/"
+  run "find '$HERE/dashboards/chainmon' -maxdepth 1 -type f -exec cp -f -t /opt/chainmon/ {} + && find '$HERE/dashboards/devfp' -maxdepth 1 -type f -exec cp -f -t /opt/devfp/ {} +"
   info "看板文件已放入 /opt/chainmon 与 /opt/devfp（启动前请在 nginx 里加 Basic Auth）"
   warn "看板未自动启动：需先确认链路上的 nginx 日志路径与容器名与本机一致"
 fi
@@ -348,6 +453,8 @@ cat <<EOF
     运行时目录      $RUNTIME_DIR
     guard 监听      $GW_IP:5355(udp/tcp) / :5356(udp, 探针通道)
 
-    验收：./verify.sh
+    验收：bash $CODE_DIR/verify.sh
+          ↑ 建议等 30 秒再跑：guard 的干净上游池是异步预热的，systemd 报 active
+            之后头几十秒仍可能返回 SERVFAIL（verify.sh 里已带条件重试，早点跑也不会误判）。
     回滚：$CODE_DIR/tools/deploy_release.sh --rollback <release-id>
 EOF
