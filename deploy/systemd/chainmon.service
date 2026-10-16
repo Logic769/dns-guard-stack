@@ -1,0 +1,18 @@
+[Unit]
+Description=Server network chain dashboard (chainmon)
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/chainmon/chainmon.py
+Restart=always
+RestartSec=5
+WorkingDirectory=/opt/chainmon
+StandardOutput=append:/var/log/chainmon.log
+StandardError=append:/var/log/chainmon.log
+# 需要 docker / unbound-control 权限
+User=root
+
+[Install]
+WantedBy=multi-user.target

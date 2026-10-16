@@ -1,0 +1,7 @@
+[Unit]
+Description=周期重启 chainmon（有界内存：其内存账目对不上，见 server-facts 内存压力节）
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl try-restart chainmon

@@ -1,0 +1,2326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#2b3a42">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z' fill='%2367b279'/%3E%3C/svg%3E">
+<title>链路看板 · dns.example.com</title>
+<style>
+  :root{
+    /* 配色沿用 AdGuard Home 语义：查询灰、拦截橙、缓存/正常绿、威胁琥珀、异常红 */
+    --accent:#67b279; --accent-dim:#4d9a61;
+    --queries:#7f8c93; --ads:#f67247; --threats:#d58500; --cache:#67b279;
+    --bg:#eef1f4; --card:#ffffff; --card2:#f7f9fa;
+    --text:#33393e; --muted:#8a949e; --line:#e4e9ec;
+    --sidebar:#2b3a42; --sidebar-text:#c2ced5; --sidebar-active:#ffffff;
+    --ok:#67b279; --warn:#e0a33e; --err:#d9534f; --idle:#9aa5ad;
+    --track:#e9edf0; --rowbar:rgba(103,178,121,.13);
+    --shadow:0 1px 3px rgba(20,40,60,.06);
+    --gap:20px; --pad:22px; --radius:12px;
+  }
+  html[data-theme="dark"]{
+    --bg:#0f1417; --card:#171e22; --card2:#1c252a;
+    --text:#dbe3e8; --muted:#8796a0; --line:#263136;
+    --sidebar:#121a1e; --sidebar-text:#93a4ae; --sidebar-active:#ffffff;
+    --track:#263136; --rowbar:rgba(103,178,121,.16); --shadow:0 1px 3px rgba(0,0,0,.35);
+    --queries:#93a2ab; --ads:#f78a63; --threats:#e0a33e;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+    font-size:14.5px;line-height:1.6;-webkit-font-smoothing:antialiased;
+    overflow-x:clip;overflow-wrap:break-word}
+  a{color:inherit;text-decoration:none}
+  img,svg{max-width:100%}
+
+  /* ================= 侧边栏 ================= */
+  .sidebar{position:fixed;top:0;left:0;bottom:0;width:224px;background:var(--sidebar);
+    color:var(--sidebar-text);display:flex;flex-direction:column;z-index:20}
+  .brand{display:flex;align-items:center;gap:11px;padding:22px 20px 18px;color:#fff;font-weight:600;font-size:15.5px}
+  .brand .logo{width:28px;height:28px;flex:0 0 28px}
+  .brand small{display:block;font-weight:400;font-size:11.5px;color:#8fa2ac;margin-top:1px}
+  .nav{padding:4px 0 20px;overflow-y:auto;flex:1}
+  .nav a{display:flex;align-items:center;gap:11px;padding:11px 20px;font-size:14px;
+    color:var(--sidebar-text);border-left:3px solid transparent;transition:background .12s}
+  .nav a:hover{background:rgba(255,255,255,.05);color:#fff}
+  .nav a.active{color:var(--sidebar-active);border-left-color:var(--accent);background:rgba(255,255,255,.07)}
+  .nav a .dot{width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.35;flex:0 0 6px}
+  .sidebar-foot{padding:14px 20px;font-size:11.5px;color:#7d8e98;border-top:1px solid rgba(255,255,255,.08);line-height:1.7}
+
+  /* ================= 顶栏 ================= */
+  .main{margin-left:224px;min-height:100vh;display:flex;flex-direction:column}
+  .topbar{position:sticky;top:0;z-index:15;background:var(--card);border-bottom:1px solid var(--line);
+    padding:14px var(--pad);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .topbar h1{font-size:17px;margin:0;font-weight:600;white-space:nowrap}
+  .topbar .meta{font-size:12.5px;color:var(--muted)}
+  .topbar .meta b{color:var(--text);font-weight:600}
+  .fresh{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;color:var(--muted)}
+  .fresh i{width:8px;height:8px;border-radius:50%;background:var(--idle);display:inline-block}
+  .fresh.f-ok i{background:var(--ok)} .fresh.f-warn i{background:var(--warn)} .fresh.f-err i{background:var(--err)}
+  .tools{margin-left:auto;display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:9px 15px;border-radius:8px;
+    cursor:pointer;border:1px solid var(--line);background:var(--card2);color:var(--text);
+    font-size:13.5px;font-family:inherit;white-space:nowrap;min-height:40px}
+  .btn:hover{border-color:var(--accent);color:var(--accent-dim)}
+  .btn[disabled]{opacity:.55;cursor:default}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{background:var(--accent-dim);color:#fff}
+  .btn.icon{padding:9px 12px;font-size:15px}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:5px 11px;border-radius:20px;
+    background:rgba(224,163,62,.14);color:#b97c14;border:1px solid rgba(224,163,62,.35);white-space:nowrap}
+  html[data-theme="dark"] .badge{color:#e8b862}
+  .banner{margin:14px var(--pad) 0;padding:12px 16px;border-radius:10px;font-size:13.5px;
+    background:rgba(217,83,79,.12);border:1px solid rgba(217,83,79,.35);color:#b33b38;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+  .banner .ebright{display:flex;align-items:center;gap:10px;margin-left:auto;white-space:nowrap}
+  .banner .btn{min-height:34px;padding:6px 13px;font-size:12.5px;background:transparent;border-color:currentColor;color:inherit}
+  .banner .btn:hover{background:rgba(217,83,79,.10);color:inherit}
+  html[data-theme="dark"] .banner{color:#f08b88}
+  .content{padding:calc(var(--gap) + 4px) var(--pad) 80px;flex:1;max-width:1720px;width:100%}
+  .hidden{display:none!important}
+
+  /* ================= 区块 / 卡片 ================= */
+  section{margin-bottom:38px;scroll-margin-top:86px}
+  h2.sec{font-size:12.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
+    margin:0 0 6px;font-weight:600}
+  .hint{font-size:12.5px;color:var(--muted);margin:0 0 16px;max-width:1000px;line-height:1.65}
+  .hint b{color:var(--text);font-weight:600}
+  .overview-lead{font-size:14px;line-height:1.7}.subhint{font-size:12px;font-weight:400;color:var(--muted);margin-left:8px}.subsec{font-size:13px;font-weight:600;color:var(--muted);letter-spacing:.03em;
+    margin:26px 0 10px;padding-left:2px}
+  h3.subsec:first-of-type{margin-top:18px}
+  /* 统一 12 列栅格：所有卡片都对齐到同一套列线（占 3/4/6/12 列），行内等宽、行间边缘对齐 */
+  .grid{display:grid;gap:var(--gap);grid-template-columns:repeat(12,minmax(0,1fr))}
+  .grid > *{grid-column:span var(--span,12);min-width:0}
+  .g-kpi{--span:3}
+  .g-third{--span:4}
+  .g-half{--span:6}
+  .g-full{--span:12}
+  @media(max-width:700px){ .g-kpi{--span:6} #overview .grid.g-kpi{grid-template-columns:repeat(2,minmax(0,1fr))} }
+  @media(max-width:700px){
+    #overview .grid.g-kpi{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .grid > *{--span:12}          /* 内容卡一律单列 */
+    .grid.g-kpi > *{--span:6}     /* 指标卡手机上仍两列，避免拉得过长 */
+  }
+  /* 卡片内部的子栅格：不参与页面对齐，按自身容器宽度自适应（宽卡片分两栏，窄卡片自动单栏） */
+  .ginner{display:grid;gap:26px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .ginner > *{min-width:0}
+  .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+    padding:var(--pad);border:1px solid var(--line)}
+  .stack > * + *{margin-top:var(--gap)}
+  .label{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+  .big{font-size:31px;font-weight:600;margin-top:8px;letter-spacing:-.015em;line-height:1.15;
+    font-variant-numeric:tabular-nums;word-break:break-word}
+  .big.sm{font-size:24px}
+  .sub{font-size:12.5px;color:var(--muted);margin-top:7px;line-height:1.6}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:16px}
+  .row > *{min-width:0}
+  .val-ok{color:var(--ok)} .val-warn{color:var(--warn)} .val-err{color:var(--err)}
+
+  /* KPI 卡（对齐 AGH StatsCard：大数字 + 百分比徽标 + 卡内折线 + 说明） */
+  .kpi .top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+  .kpi .top > div{min-width:0}
+  .kpi .num{font-size:32px;font-weight:600;letter-spacing:-.02em;line-height:1.1;
+    font-variant-numeric:tabular-nums;margin-top:6px}
+  .kpi .pct{font-size:13px;font-weight:600;padding:4px 10px;border-radius:12px;background:var(--track);
+    color:var(--text);white-space:nowrap;font-variant-numeric:tabular-nums}
+  .kpi .chart{height:46px;margin:14px -4px 0}
+  .kpi .cap{font-size:12px;color:var(--muted);margin-top:10px;line-height:1.6}
+  /* 概览八张趋势卡统一尺寸 */
+  #overview .grid.g-kpi{grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--gap)}
+  #overview .grid.g-kpi .kpi{min-height:132px;display:flex;flex-direction:column;padding:14px 15px}
+  #overview .grid.g-kpi .kpi .top{min-height:42px}
+  #overview .grid.g-kpi .kpi .chart{height:28px;margin-top:9px}
+  #overview #health-card{display:none!important}
+  @media(min-width:701px){#overview .grid.g-kpi{grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}}
+  #overview .grid.g-kpi .kpi .cap{min-height:28px;margin-top:auto;padding-top:6px;font-size:11px}
+  #overview .grid.g-kpi .kpi .num{font-size:25px;line-height:1.1}
+  #overview .grid.g-kpi .kpi .label{min-height:18px}
+
+  /* 解析性能四卡统一使用与总览 KPI 相同的视觉节奏 */
+  #perf-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--gap)}
+  #perf-kpi-grid .perf-card{min-height:184px;display:flex;flex-direction:column}
+  #perf-kpi-grid .perf-card .chart{height:46px;margin-top:14px}
+  #perf-kpi-grid .perf-card .cap{min-height:38px;margin-top:auto;padding-top:10px}
+  #perf-kpi-grid .perf-card .num{font-size:32px;white-space:nowrap}
+  #perf-kpi-grid .perf-card .num.dual{font-size:24px;letter-spacing:-.015em}
+  @media(max-width:1100px){#perf-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:700px){#perf-kpi-grid{grid-template-columns:1fr}}
+
+  .kpi .cap b{color:var(--text)}
+
+  .stats{display:flex;flex-wrap:wrap;gap:26px 40px}
+  .stats .st{min-width:104px}
+  .stats .st b{display:block;font-size:27px;font-weight:600;letter-spacing:-.01em;
+    font-variant-numeric:tabular-nums;line-height:1.2;margin-top:2px}
+  .stats .st small{display:block;font-size:12px;color:var(--muted);margin-top:5px}
+
+  /* ================= 状态判定 ================= */
+  .health{display:flex;gap:22px;align-items:flex-start;flex-wrap:wrap}
+  .verdict{display:flex;align-items:center;gap:12px;flex:1 1 auto;min-width:0}
+  .verdict .txt{min-width:0}
+  .verdict .ring{width:52px;height:52px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:24px;color:#fff;flex:0 0 52px}
+  .verdict .txt b{display:block;font-size:19px;font-weight:600;line-height:1.25}
+  .verdict .txt span{font-size:12.5px;color:var(--muted)}
+  .h-ok .ring{background:var(--ok)} .h-warn .ring{background:var(--warn)} .h-err .ring{background:var(--err)}
+  .issues{flex:1 1 340px;min-width:260px;display:flex;flex-direction:column;gap:9px}
+  .issue{display:flex;align-items:flex-start;gap:10px;font-size:13.5px;line-height:1.5;
+    padding:10px 14px;border-radius:9px;background:var(--card2);border:1px solid var(--line);
+    color:inherit;text-decoration:none;min-height:42px;box-sizing:border-box}
+  a.issue:hover{border-color:var(--accent);background:var(--card)}
+  .issue .lv{flex:0 0 8px;width:8px;height:8px;border-radius:50%;margin-top:8px;background:var(--warn)}
+  .issue.err .lv{background:var(--err)} .issue.ok .lv{background:var(--ok)}
+  .issue .itxt{flex:1 1 auto;min-width:0}
+  .issue .chev{flex:0 0 auto;color:var(--muted);font-size:16px;line-height:1.3}
+
+  /* ================= 环形图 / 进度条 / 图例 ================= */
+  .donut{--p:0;--c:var(--accent);width:118px;height:118px;border-radius:50%;position:relative;flex:0 0 118px;
+    background:conic-gradient(var(--c) calc(var(--p)*1%),var(--track) 0)}
+  .donut::after{content:"";position:absolute;inset:14px;border-radius:50%;background:var(--card)}
+  .donut .in{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:2}
+  .donut .in b{font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+  .donut .in span{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .donut.sm{width:86px;height:86px;flex:0 0 86px}
+  .donut.sm::after{inset:11px}
+  .donut.sm .in b{font-size:15.5px}
+  .bar{height:7px;border-radius:4px;background:var(--track);overflow:hidden}
+  .bar > i{display:block;height:100%;border-radius:4px;background:var(--accent);transition:width .3s}
+  .stackbar{display:flex;height:11px;border-radius:6px;overflow:hidden;background:var(--track)}
+  .stackbar > i{display:block;height:100%}
+  .hbar{display:grid;grid-template-columns:minmax(66px,auto) minmax(44px,1fr) 96px;gap:10px;
+    align-items:center;font-size:13px;padding:8px 0;border-bottom:1px dashed var(--line)}
+  .hbar:last-child{border-bottom:0}
+  .hbar .t{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+  .hbar .b{height:9px;border-radius:5px;background:var(--track);overflow:hidden}
+  .hbar .b > i{display:block;height:100%;border-radius:5px;background:var(--accent)}
+  .hbar .v{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+  .hbar .v .hshare{font-weight:400;color:var(--muted);font-size:11.5px}
+  .legend{display:flex;gap:18px;font-size:12px;color:var(--muted);flex-wrap:wrap;align-items:center}
+  .legend i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px}
+  .swatch{display:inline-flex;align-items:center;gap:2px}
+
+  /* ================= 表格（AGH 风格：行内占比条） ================= */
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 calc(var(--pad) * -.35);padding:0 calc(var(--pad) * .35);max-width:100%}
+  /* 带高度上限的滚动区（最近事件）：桌面截断后可滚动 */
+  .scroll.logscroll{max-height:280px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);
+    font-weight:600;padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:11px 12px;border-bottom:1px solid var(--line);vertical-align:middle}
+  tr:last-child td{border-bottom:0}
+  tbody tr{background-repeat:no-repeat;
+    background-image:linear-gradient(90deg,var(--rowbar) var(--s,0%),transparent var(--s,0%))}
+  tbody tr:hover{background-color:var(--card2)}
+  td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;font-size:12.5px;
+    overflow-wrap:anywhere}   /* 长域名/IPv6 允许断行，避免把卡片撑出横向滚动 */
+  /* 结果/状态类短词（NOERROR、NXDOMAIN、3/3 成功）必须整体换行，否则会被 anywhere 拆成 "NOERR OR" */
+  table.resp td.res{white-space:nowrap;overflow-wrap:normal}
+  /* IP:端口不允许在中间断行（否则会出现 "172.18." / "0.1:535" / "3"） */
+  table.resp td.addr{white-space:nowrap;overflow-wrap:normal}
+  /* 桌面端已有独立的"地址"列，就不要再在目标单元格里重复显示地址；手机端才用它兜底 */
+  @media(min-width:901px){ table.resp td .opt{display:none} }
+  .share{font-size:11.5px;color:var(--muted)}
+
+  /* 键值表：每对键值独立成行（flex），手机上天然单列、桌面宽屏两栏 */
+  .kv{display:block;font-size:13.5px}
+  .kvrow{display:flex;align-items:baseline;justify-content:space-between;gap:18px;
+    padding:8px 0;border-bottom:1px dashed var(--line)}
+  .kvrow:last-child{border-bottom:0}
+  .kvrow .k{color:var(--muted);flex:0 0 auto;min-width:0;white-space:nowrap;text-transform:none;letter-spacing:0}
+  .kvrow .v{text-align:right;font-variant-numeric:tabular-nums;min-width:0;overflow-wrap:break-word}
+  /* 2026-10-09 修：原来用 overflow-wrap:anywhere —— anywhere 会把元素的**最小内容宽度降到 1 个字符**，
+     于是窄屏下长标签把数值列挤成一条线，数字被从中间拆开（"55,537 次" 渲染成 "55,5 / 37 / 次"，看起来像重叠）。
+     break-word 只在整词放不下时才断，min-content 仍等于最长不可断片段 ⇒ 数字保持完整，改由标签换行。 */
+  @media(min-width:761px){
+    .kvsub{margin:14px 0 4px;font-size:11.5px;font-weight:700;letter-spacing:.04em;color:var(--accent)}
+  .kvsub:first-child{margin-top:0}
+  .kvrow .no{flex:0 0 auto;display:inline-block;min-width:1.35em;margin-right:6px;
+    font-weight:700;color:var(--text);font-variant-numeric:tabular-nums;text-align:left}
+  /* .kvrow 是 space-between：加了序号列后会有多余空档把标签推到中间，故让 .k 吸收空余
+     （对没有序号的行视觉完全不变） */
+  .kvrow .k{margin-right:auto}
+  .kv.wide{columns:2;column-gap:46px}
+/* 2026-10-09 修（桌面端 R1–R8 明细的"文字重叠"）：.kvrow .k 是 flex:0 0 auto + white-space:nowrap，
+   既不收缩也不换行。单列时够宽没问题，但两列网格在 1100~1280px 下每列只有 400~500px，
+   像"严格网段命中（弱证据：改道但不入黑名单、不 SERVFAIL）"这种长标签会
+   溢出列宽 30~108px 并压到相邻列的文字上。两列网格内允许标签收缩换行即可根治（单列保持 nowrap）。 */
+.kv.wide .kvrow .k{white-space:normal;flex:1 1 auto;min-width:0}
+.kv.wide .kvrow .v{flex:0 1 auto}
+/* 2026-10-09 修（第二层，真正的排版错误）：两列网格在 ≤1350px 时每列只剩 400~500px，
+   长标签会被撕成碎片（"fail-closed 原因" → "fail-"/"close"/"d 原"/"因"；"CDN/Geo 差异" → "CDN/G"/"eo 差"/"异"）。
+   实测进一步发现：**只要开启两列，1440/1600px 下也仍然碎** —— 因为 "fail-closed 原因"、"CDN/Geo 详情"、
+   "邮件/文本等记录核对"、"安全拒答" 这些行的值本身就要占满整行（长域名/长说明），标签只能被挤成 3~4 行。
+   结论：两列布局与这批"长值行"不兼容，统一改单列（保留 .kv.wide 类名，便于将来按行类型选择性分列）。 */
+.kv.wide{columns:1}
+/* 2026-10-09 收尾：单列下仍有"窄标签 + 超长值"的行把标签挤成两行、留下孤字（"fail-closed 原" / "因"）。
+   只在桌面端给标签一个最小宽度，保证这类短标签一行放得下；值本来就会换行，不受影响。
+   （必须限定 min-width:701px，否则会盖掉移动端那条 .kvrow .k{min-width:0} —— 移动端不能让标签抢宽度。） */
+@media(min-width:701px){.kv.wide .kvrow .k{min-width:8em}}
+    .kv.wide .kvrow{break-inside:avoid;-webkit-column-break-inside:avoid}
+  }
+  .kvbox + .kvbox{margin-top:22px;padding-top:22px;border-top:1px solid var(--line)}
+
+  /* ================= 链路 ================= */
+  .chainwrap{display:block;overflow-x:auto;overflow-y:hidden}   /* 容器只做包裹，真正的网格在每条路径里；节点有最小宽度，超出时整块横向滚动（主链与 CN 分流共用同一模板，滚动后仍对齐） */
+  .chain-row{display:flex;align-items:stretch;gap:12px;flex-wrap:wrap}
+  .chain-row + .chain-row{margin-top:16px;padding-top:16px;border-top:1px dashed var(--line)}
+  .ctag{flex:0 0 auto;align-self:flex-start;font-size:11.5px;font-weight:600;padding:4px 11px;border-radius:10px;
+    min-width:84px;text-align:center;
+    background:var(--track);color:var(--muted);white-space:nowrap;margin-top:2px}
+  .chain-row.fb .ctag{background:rgba(224,163,62,.18);color:#b97c14}
+  html[data-theme="dark"] .chain-row.fb .ctag{color:#e8b862}
+  .cnote{flex:1 1 100%;font-size:12px;color:var(--muted);line-height:1.6}
+  /* 两条路径共用同一套 9 列网格（5 个节点列 + 4 个箭头列）：卡片等宽、两条路径左右对齐 */
+  .chain{display:grid;grid-template-columns:1fr 26px 1fr 26px 1fr 26px 1fr 26px 1fr;gap:0;align-items:stretch;
+    flex:1 1 380px;min-width:0}
+  .chain .node{min-width:0}
+  .cspace{display:block;grid-column:1/5}
+  /* 中等宽度：卡片变窄，隐藏第三行说明文字，保持单行不折行 */
+  @media(max-width:1199px){
+    .chain .node .dt{display:none}
+    .arrow{font-size:15px}
+  }
+  .node{flex:1 1 168px;min-width:158px;background:var(--card2);border:1px solid var(--line);border-radius:10px;
+    padding:14px 15px}
+  .node .nm{font-weight:600;font-size:13.5px;display:flex;align-items:center;gap:8px;line-height:1.35}
+  .node .sb{font-size:11.5px;color:var(--muted);margin-top:4px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+  .node .dt{font-size:12.5px;margin-top:10px;line-height:1.45;opacity:.88;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
+  .arrow{flex:0 0 30px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:16px}
+  .arrow.fb{opacity:.65}
+  .sdot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;background:var(--idle)}
+  .s-ok{background:var(--ok)} .s-warn{background:var(--warn)} .s-error{background:var(--err)} .s-idle{background:var(--idle)}
+  .pill{display:inline-block;font-size:11px;padding:2px 9px;border-radius:10px;background:var(--track);color:var(--muted);white-space:nowrap}
+  .spark{display:block;width:100%;height:52px;margin-top:10px}
+  /* 折线交互层：悬停/点击查看某一时刻的数值 */
+  .sparkwrap{position:relative}
+  .sparkhit{fill:transparent;pointer-events:all}
+  .sparkguide{stroke:var(--muted);stroke-width:1;stroke-dasharray:2 3;opacity:.75}
+  .sparkgap{fill:none;stroke-width:1.2;stroke-dasharray:3 4;opacity:.5}
+  .sparkdot{position:absolute;width:9px;height:9px;margin:-4.5px 0 0 -4.5px;border-radius:50%;
+    background:var(--card);border:2px solid var(--accent);pointer-events:none;z-index:3}
+  .sparktip{position:absolute;z-index:4;pointer-events:none;padding:3px 9px;border-radius:6px;
+    background:rgba(28,38,45,.94);color:#fff;font-size:11.5px;line-height:1.5;white-space:nowrap;
+    box-shadow:0 2px 8px rgba(0,0,0,.25);transform:translate(-50%,-100%)}
+  html[data-theme="dark"] .sparktip{background:rgba(240,246,250,.94);color:#12202a}
+  footer{padding:16px var(--pad) 44px;color:var(--muted);font-size:12px;line-height:1.7}
+  .totop{position:fixed;right:18px;bottom:22px;z-index:40;width:44px;height:44px;border-radius:50%;
+    border:1px solid var(--line);background:var(--card);color:var(--text);box-shadow:0 3px 12px rgba(20,40,60,.18);
+    display:none;align-items:center;justify-content:center;font-size:18px;cursor:pointer}
+  .totop.show{display:flex}
+
+  @media(max-width:1180px){
+    .sidebar{width:196px} .main{margin-left:196px}
+    .nav a{padding:10px 16px;font-size:13.5px} .brand{padding:18px 16px 14px}
+  }
+  @media(max-width:900px){
+    :root{--gap:16px;--pad:18px;--radius:14px}
+    .row{flex-wrap:wrap}
+    .health .issues{min-width:0;flex-basis:100%}
+    .sidebar{position:static;width:auto;height:auto;flex-direction:column;padding-bottom:2px}
+    .brand{padding:14px 16px 10px;font-size:15px}
+    .brand small{display:none}
+    .nav{display:flex;gap:6px;padding:0 12px 12px;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    .nav::-webkit-scrollbar{display:none}
+    .nav a{flex:0 0 auto;padding:9px 15px;border-left:0;border-radius:18px;font-size:13.5px;
+      background:rgba(255,255,255,.07);min-height:38px}
+    .nav a.active{background:var(--accent);color:#fff;border-left:0}
+    .nav a .dot{display:none}
+    .sidebar-foot{display:none}
+    .main{margin-left:0}
+    .topbar{padding:12px 16px;gap:10px 12px}
+    .topbar h1{font-size:16px;width:100%}
+    .tools{margin-left:0;width:100%}
+    .tools .btn.primary{flex:1}
+    .content{padding-top:20px}
+    section{margin-bottom:30px;scroll-margin-top:70px}
+    .big{font-size:28px} .big.sm{font-size:22px}
+    .kpi .num{font-size:28px}
+    .stats{gap:20px 26px} .stats .st{min-width:84px} .stats .st b{font-size:23px}
+    .chain-row{flex-direction:column;align-items:stretch;gap:10px}
+    .chain{display:flex;flex-direction:column}
+    .cspace{display:none}
+    .chain .node .dt{display:block}
+    .node{flex:1 1 auto;min-width:0}
+    .arrow{flex:0 0 26px;width:26px;height:26px;align-self:center;transform:rotate(90deg)}
+    /* 手机：只折叠"可选列"的 th/td；**不要**写成 .opt{display:none}，
+       那会连 td 内联的可选信息（如探针目标里那行地址）一起藏掉，导致手机上完全看不到地址 */
+    th.opt,td.opt{display:none}
+    .scroll{margin:0 calc(var(--pad) * -.22);padding:0 calc(var(--pad) * .22)}
+    th,td{padding:9px 10px}
+    .health{gap:16px}
+  }
+  /* 手机：表格改为"每条一张小卡"的堆叠布局，彻底取消横向滚动 */
+  @media(max-width:700px){
+    /* 不要改成 overflow-x:visible：那会让 overflow-y 也变成 visible，带 max-height 的
+       .scroll 不再是滚动容器，表格内容会直接溢出卡片、压到下面 unbound 区块的文字上。 */
+    .scroll{margin:0;padding:0}
+    /* 手机上最近事件整段展开（后端只给 10 条），避免卡片内嵌套滚动 */
+    .scroll.logscroll{max-height:none}
+    table.resp{font-size:13.5px}
+    table.resp thead{display:none}
+    table.resp tbody tr{display:block;padding:13px 0;border-bottom:1px solid var(--line);
+      background-image:none!important}
+    table.resp tbody tr:last-child{border-bottom:0}
+    table.resp tbody tr:hover{background-color:transparent}
+    table.resp td{display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+      padding:5px 0;border:0;text-align:right;white-space:normal}
+    table.resp td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:600;
+      flex:0 0 auto;text-align:left}
+    table.resp td[data-label=""]{display:block;text-align:left;font-size:14.5px;padding:0 0 7px}
+    table.resp td[data-label=""]::before{display:none}
+    table.resp td[data-label=""] .sub{white-space:normal}
+    table.resp td.opt{display:none!important}   /* 覆盖上面的 display:flex，保证可选列在手机上仍然折叠 */
+    .kvrow{padding:9px 0}
+  }
+  @media(max-width:560px){
+    :root{--gap:14px;--pad:16px}
+    body{font-size:14px}
+    .g-kpi{--span:6}
+    .hbar{grid-template-columns:minmax(0,1fr) auto;gap:6px 12px;padding:9px 0}
+    .hbar .b{grid-column:1 / -1;order:3}
+    .donut{width:96px;height:96px;flex:0 0 96px}
+    .donut::after{inset:12px} .donut .in b{font-size:17px}
+    .donut.sm{width:76px;height:76px;flex:0 0 76px}
+    .row{flex-wrap:wrap}
+    .stats{gap:16px 22px} .stats .st{min-width:72px} .stats .st b{font-size:21px}
+    .kpi .num{font-size:26px}
+    .btn{padding:9px 12px;font-size:13px}
+  }
+/* ===== 2026-10-05 移动端密度优化 =====
+   问题：手机上单列时，长说明（dnsguard/dnscrypt 各 200+ 字）与明细网格（~30 行）
+   会把卡片拉到几十行高、滚动成本很高。策略：手机默认只给"核心行"，其余折叠，
+   顶部两个开关按需展开；桌面端完全不受影响（开关也隐藏）。 */
+@media(max-width:700px){
+  .hint{display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden}
+  body.hints-open .hint{display:block;-webkit-line-clamp:unset;overflow:visible}
+  .kvrow.more{display:none}
+  .kvsub.more{display:none}
+  body.detail-open .kvsub.more{display:block}
+  body.detail-open .kvrow.more{display:flex}
+  .cnote{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+  body.detail-open .cnote{display:block;-webkit-line-clamp:unset;overflow:visible}
+  .node{padding:11px 12px}
+  .node .sb{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .kvrow{padding:8px 0;gap:10px}
+  /* .k 默认 flex:0 0 auto（不收缩），手机遇长标签会把值挤出卡片 → 允许收缩换行 */
+  .kvrow .k{white-space:normal;flex:1 1 auto;min-width:0}
+  /* 2026-10-09：给数值列一个下限，避免"55,537 次"被标签挤成两行；标签仍可自由收缩换行 */
+  .kvrow .v{flex:0 1 auto;min-width:5.5em}
+  /* 2026-10-09：右下角浮动"回顶部"按钮（.totop，position:fixed）滚到底时会盖住最后几行的数值，
+     看起来像文字重叠 —— 给页面留出底部净空，保证文档末尾的内容不会被按钮压住。 */
+  body{padding-bottom:76px}
+  /* 实测：只给 body 净空仍会压住文档末尾的元素（该布局下 padding 不增加可滚动高度），
+     所以移动端把按钮本身抬到净空区内、并降低不透明度，保证任何滚动位置都不遮数值。 */
+  .totop{bottom:96px;opacity:.85}
+}
+.togglebtn{font-size:12px;padding:5px 10px;border-radius:9px;border:1px solid var(--line);
+  background:var(--card2);color:var(--muted);cursor:pointer;white-space:nowrap;font-weight:600}
+.togglebtn.on{background:var(--accent);color:#fff;border-color:transparent}
+.inline-more{display:none}
+  @media(max-width:700px){
+    .inline-more{display:inline-block;margin:-6px 0 14px;padding:2px 11px;font-size:12px;border-radius:8px;
+      border:1px dashed var(--line);background:transparent;color:var(--accent);cursor:pointer;font-weight:600}
+    .hint.expanded,.cnote.expanded{display:block;-webkit-line-clamp:unset;overflow:visible}
+  }
+  @media(min-width:701px){ #t-hints,#t-detail,.inline-more{display:none} }
+
+  /* 2026 compact monitoring redesign */
+  :root{--gap:14px;--pad:18px;--radius:9px}
+  .sidebar{width:208px}.main{margin-left:208px}
+  .brand{padding:18px 16px 14px;font-size:14.5px}
+  .nav a{padding:9px 16px;font-size:13px;gap:9px}
+  .content{padding:18px var(--pad) 60px;max-width:1600px}
+  section{margin-bottom:28px}
+  .topbar{padding:11px var(--pad);gap:10px}
+  .topbar h1{font-size:16px}
+  .grid.g-kpi{gap:14px}
+  #overview .grid.g-kpi{grid-template-columns:repeat(4,minmax(0,1fr))}
+  #overview .grid.g-kpi .kpi{min-height:156px;padding:16px;box-shadow:0 1px 2px rgba(20,40,60,.05)}
+  #overview .grid.g-kpi .kpi .chart{height:38px;margin-top:10px}
+  #overview .grid.g-kpi .kpi .cap{min-height:30px;padding-top:7px;font-size:11.5px}
+  #overview .grid.g-kpi .kpi .num{font-size:27px}
+  #overview .grid.g-kpi .kpi .label{font-size:10.5px;letter-spacing:.06em}
+  .chain-node{padding:12px 14px}
+  .card{padding:18px}
+  #health-card{padding:16px}
+  .sidebar-foot{padding:10px 16px;font-size:10.5px}
+  @media(max-width:1100px){.sidebar{width:184px}.main{margin-left:184px}#overview .grid.g-kpi{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  @media(max-width:900px){.sidebar{width:auto}.main{margin-left:0}.content{padding:16px}.nav{padding:0 10px 10px}.nav a{padding:8px 13px;font-size:12.5px}.brand{padding:12px 14px 8px}}
+  @media(max-width:560px){#overview .grid.g-kpi{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}#overview .grid.g-kpi .kpi{padding:12px;min-height:140px}#overview .grid.g-kpi .kpi .num{font-size:23px}.content{padding:12px}.topbar{padding:10px 12px}}
+
+  /* ===== 2026-10-08：概览 8 张趋势卡统一为「趋势与定位」的折线样式 + 分端排版 =====
+     根因：.g-kpi 的 --span:3 被概览子卡继承，而概览网格只有 4 列 ⇒ span 3 = 3/4 宽
+     （894px），同一行放不下第二张 ⇒ 旧版实际渲染成 8 个超宽卡 + 一条细折线。
+     这里把子卡固定为 span 1。图表盒高度改为 auto，交给 .spark 自己
+     （height:52px + margin-top:10px），与趋势卡完全同构 ——
+     旧版是 46/52px 的 SVG 塞进 28/38px 的盒子，折线底部被裁掉一截。 */
+  #overview .grid.g-kpi > *{--span:1}
+  #overview .grid.g-kpi .kpi .chart{height:auto;margin:12px 0 0}
+  #overview .grid.g-kpi .kpi .chart > .spark{margin-top:10px}
+  /* 分端排版：≥1101 桌面 4 列｜≤1100 平板 2 列｜≤560 手机 1 列（手机上一整行一张，折线才够宽） */
+  @media(max-width:560px){#overview .grid.g-kpi{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="#67b279" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-4z"/><path d="M9 12l2 2 4-4"/>
+    </svg>
+    <div>链路看板<small>dns.example.com · 服务器侧</small></div>
+  </div>
+  <nav class="nav" id="nav">
+    <a href="#overview"><span class="dot"></span>概览</a>
+    <a href="#chain"><span class="dot"></span>链路</a>
+    <a href="#probes"><span class="dot"></span>性能</a>
+    <a href="#agh"><span class="dot"></span>过滤缓存</a>
+    <a href="#dnsguard"><span class="dot"></span>安全核验</a>
+    <a href="#dnscrypt"><span class="dot"></span>加密上游</a>
+    <a href="#unbound"><span class="dot"></span>解析器</a>
+    <a href="#server"><span class="dot"></span>资源</a>
+    <a href="#containers"><span class="dot"></span>运行环境</a>
+    <a href="#history"><span class="dot"></span>趋势定位</a>
+  </nav>
+  <div class="sidebar-foot">
+    每 <b id="foot-interval">60</b> 秒自动刷新<br>采集耗时 <span id="foot-cost">—</span>
+  </div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <h1>服务器 DNS 链路看板</h1>
+    <span class="badge hidden" id="timeout-badge">⚠ 上游超时查询 <b id="timeout-n">0</b> 个</span>
+    <span class="meta">数据时间 <b id="ts-abs">—</b></span>
+    <span class="fresh" id="fresh-ind"><i></i><span id="ts-rel">等待首次采集…</span></span>
+    <div class="tools">
+      <span class="meta" id="countdown">—</span>
+      <button class="togglebtn" id="t-hints" title="展开/收起各卡片的说明文字">说明</button>
+      <button class="togglebtn" id="t-detail" title="展开/收起明细行">明细</button>
+      <button class="btn primary" id="btn-refresh">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/></svg>
+        立即刷新</button>
+      <button class="btn icon" id="btn-theme" title="切换主题" aria-label="切换主题">🌙</button>
+    </div>
+  </div>
+
+  <div class="banner hidden" id="err-banner"></div>
+  <div class="compact-status" id="compact-status" style="display:flex;gap:10px;flex-wrap:wrap;padding:10px var(--pad);background:var(--card2);border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)"><span>链路 <b id="cs-health">—</b></span><span>QPS <b id="cs-qps">—</b></span><span>P50/P99 <b id="cs-lat">—</b></span><span>缓存 <b id="cs-cache">—</b></span><span>刷新 <b id="cs-refresh">—</b></span></div>
+
+
+
+  <div class="content">
+    <div class="card" style="margin-bottom:var(--gap);padding:12px 16px;font-size:13px"><b>观测范围：服务器 DNS 服务链路与资源指标。</b> 看板状态仅反映本页已接入的服务状态、服务器资源和探针结果；处理耗时不包含客户端至服务器的网络往返时间。</div>
+
+    <!-- ==================== 概览 ==================== -->
+    <section id="overview">
+      <h2 class="sec">运行概览</h2>
+      <p class="hint">统计口径：QPS 与窗口计数差分含探针；日志样本按已知来源与域名排除已识别探针，未登记压测可能混入。统计 <b><span id="ov-window">最近 1 小时</span></b> 的 AGH 日志样本。延迟为服务器处理耗时，不包含客户端至服务器的网络往返时间。上游分位表示 AGH 未命中缓存，不代表下游各层均未命中。</p>
+
+      <div class="card health" id="health-card" style="margin-bottom:var(--gap)"></div>
+
+      <div class="grid g-kpi">
+        <div class="card kpi">
+          <div class="top">
+            <div>
+              <div class="label" title="单位恒定 QPS。口径：AGH /control/stats 的 num_dns_queries 累计值差分 ÷ Δt（权威、不受 querylog 按条数截断影响）。折线同为该序列。">当前 QPS</div>
+              <div class="num" id="ov-qps">—</div>
+            </div>
+          </div>
+          <div class="chart"><svg class="spark" id="sp-ov-qps" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div>
+          <div class="cap" id="ov-qps-sub">—</div>
+        </div>
+
+        <div class="card kpi">
+          <div class="top">
+            <div>
+              <div class="label" title="被过滤规则拦截的查询数占全部查询的比例">拦截率</div>
+              <div class="num" id="ov-block">—</div>
+            </div>
+            <div class="pct" id="ov-block-pct-badge" title="拦截 / 全部查询">—</div>
+          </div>
+          <div class="chart"><svg class="spark" id="sp-ov-block" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div>
+          <div class="cap" id="ov-block-sub">—</div>
+        </div>
+
+        <div class="card kpi">
+          <div class="top">
+            <div>
+              <div class="label" title="AGH 缓存命中率按相邻采样的窗口计数差分计算：1 − 上游应答增量 / 放行查询增量（放行=总查询−拦截）。未命中请求先进入 dnsguard；可能由 guard 缓存或策略应答，不一定查询 Unbound">AGH 缓存命中率</div>
+              <div class="num" id="ov-cache">—</div>
+            </div>
+            <div class="pct" id="ov-cache-pct-badge" title="命中 / (命中+未命中)">—</div>
+          </div>
+          <div class="chart"><svg class="spark" id="sp-ov-cache" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div>
+          <div class="cap" id="ov-cache-sub">—</div>
+        </div>
+
+        <div class="card kpi">
+          <div class="top">
+            <div>
+              <div class="label" title="AGH 日志样本的服务器处理耗时第 99 百分位，含缓存与过滤应答；不包含客户端至服务器的网络往返时间">服务器处理耗时 P99（含缓存）</div>
+              <div class="num" id="ov-user-p99">—</div>
+            </div>
+            <div class="pct" id="ov-user-p99-badge" title="窗口样本少于 500 条时仅供参考，不作稳定长尾结论">—</div>
+          </div>
+          <div class="chart"><svg class="spark" id="sp-ov-user-p99" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div>
+          <div class="cap" id="ov-user-p99-sub">—</div>
+        </div>
+
+        <div class="card kpi">
+          <div class="top">
+            <div>
+              <div class="label" title="AGH 未命中缓存请求的服务器处理耗时中位数（下游仍可能命中缓存），不受个别慢查询影响；p90/p99 见下方分位卡">AGH 未命中缓存耗时 P50</div>
+              <div class="num" id="ov-lat">—</div>
+            </div>
+            <div class="pct" id="ov-lat-badge" title="判定依据：真实上游样本量 + p50 分级；正式告警还要求连续窗口">—</div>
+          </div>
+          <div class="chart"><svg class="spark" id="sp-ov-lat" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div>
+          <div class="cap" id="ov-lat-sub">—</div>
+        </div>
+
+        <div class="card kpi"><div class="top"><div><div class="label">上游 p90 延迟</div><div class="num sm" id="ov-tr-p90-num">—</div></div></div><div class="chart"><svg class="spark" id="ov-tr-p90" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div><div class="cap" id="ov-tr-p90-sub">—</div></div>
+        <div class="card kpi"><div class="top"><div><div class="label">上游 p99 延迟</div><div class="num sm" id="ov-tr-p99-num">—</div></div></div><div class="chart"><svg class="spark" id="ov-tr-p99" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div><div class="cap" id="ov-tr-p99-sub">—</div></div>
+        <div class="card kpi"><div class="top"><div><div class="label">上游超时尝试</div><div class="num sm" id="ov-tr-timeout-num">—</div></div></div><div class="chart"><svg class="spark" id="ov-tr-timeout" viewBox="0 0 300 52" preserveAspectRatio="none"></svg></div><div class="cap" id="ov-tr-timeout-sub">—</div></div>
+      </div>
+
+      <div class="card" style="margin-top:var(--gap)">
+        <div class="label" style="margin-bottom:6px">AGH 未命中缓存的请求</div>
+        <div class="sub" style="margin:0 0 16px">仅统计未命中缓存的请求（本次 <b id="ov-samples">—</b> 条）</div>
+        <div class="stats">
+          <div class="st"><div class="label">p50 中位</div><b id="ov-p50w">—</b><small>≤250ms 正常；至少30个真实上游样本后，>250ms 连续3点偏高，>500ms 连续3点异常</small></div>
+          <div class="st"><div class="label">p90</div><b id="ov-p90w">—</b><small>≤600ms 正常；>600ms 连续2点偏高，>1.2s 连续2点异常</small></div>
+          <div class="st"><div class="label">p99</div><b id="ov-p99">—</b><small>显示统计窗口 P99；当前不单独触发 P99 告警</small></div>
+          <div class="st"><div class="label">最大</div><b id="ov-max">—</b><small>单次最慢请求</small></div>
+          <div class="st"><div class="label">上游超时</div><b id="ov-timeouts">—</b><small id="ov-timeouts-sub">超时的查询数</small></div>
+          <div class="st"><div class="label">来源 IP（非设备数）</div><b id="ov-clients">—</b><small>全部查询 p90 <span id="ov-allp90">—</span></small></div>
+          <div class="st"><div class="label">AGH 缓存未命中</div><b id="ov-upstream">—</b><small>缓存未命中数</small></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:var(--gap)">
+        <div class="label" style="margin-bottom:6px">服务器处理耗时（含 AGH 缓存）</div>
+        <div class="sub" style="margin:0 0 16px">基于 AGH 查询日志的服务器端耗时样本，含缓存命中、过滤应答及需访问上游的查询；不含客户端至服务器的网络往返时间。看板探针与已知压测按<b>专用源地址（127.0.0.5 / 172.18.0.99）及 QNAME 滚动表</b>排除。经 Nginx stream 转发的 DoT 请求在 AGH 侧显示源地址 172.18.0.1，无法按 IP 区分来源；已知探针和压测通过 QNAME 排除。</div>
+        <div class="stats">
+          <div class="st"><div class="label">P50</div><b id="normal-p50">—</b><small id="normal-p50-sub">正常 ≤50ms</small></div>
+          <div class="st"><div class="label">P90</div><b id="normal-p90">—</b><small id="normal-p90-sub">正常 ≤150ms</small></div>
+          <div class="st"><div class="label">P99</div><b id="normal-p99">—</b><small id="normal-p99-sub">正常 ≤500ms</small></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:var(--gap)">
+        <div class="label" style="margin-bottom:6px">链路诊断（独立探针）</div>
+        <div class="sub" style="margin:0 0 10px">DoQ、dnsguard、DNSCrypt 分开显示；随机冷查询仅作链路观测，不计入真实用户延迟。</div>
+        <div class="stats" id="layer-latency"><div class="sub">加载中…</div></div>
+      </div>
+    </section>
+
+    <!-- ==================== 链路 ==================== -->
+    <section id="chain">
+      <h2 class="sec">链路总览</h2><p class="hint overview-lead"><b>当前采集链路：</b>正在读取实时链路数据；未加载时不作链路状态判断。<span id="dnsdist-note"></span></p>
+      <p class="hint">服务器侧各层的探针延迟。<b>颜色按该项采集状态或探针阈值显示；仅反映相应服务器侧检查结果，灰表示未采集或无样本</b>；随机冷查询只用于定位链路，不计入查询样本分位。</p>
+      <div class="card"><div class="chainwrap" id="chain-box"><div class="sub">加载中…</div></div></div>
+      <div class="card" style="margin-top:12px"><div class="label" style="margin-bottom:10px">入口状态与旁路观测（Nginx stream 故障会影响 DoT）</div><div id="observe-box" class="small"><span class="sub">加载中…</span></div></div>
+    </section>
+
+    <!-- ==================== 探测 ==================== -->
+    <section id="probes">
+      <h2 class="sec">上游健康</h2>
+      <p class="hint">按固定周期探测各层。<b>热缓存</b>用于观察缓存路径；<b>冷随机</b>多为不存在域名，仅用于观测负应答与上游路径。两类探针都不计入用户请求分位。</p>
+      <div class="grid g-half">
+        <div class="card">
+          <div class="scroll"><table class="resp">
+            <thead><tr><th>目标 / 场景</th><th class="opt">地址</th><th class="num">p50</th><th class="num">最大</th><th>结果</th><th></th></tr></thead>
+            <tbody id="probe-rows"><tr><td colspan="6" class="sub">加载中…</td></tr></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:14px">p50 对比（毫秒，条越长越慢）</div>
+          <div id="probe-bars"><div class="sub">加载中…</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== AGH ==================== -->
+    <section id="agh">
+      <h2 class="sec">缓存与入口（AdGuard Home）</h2>
+      <p class="hint">过滤和缓存都在这一层，基于最近 <b><span id="agh-window">1 小时</span></b>日志；表格中的比例条表示该项在本窗口中的占比。</p>
+      <div class="stack">
+        <div class="card">
+          <div class="label" style="margin-bottom:14px">运行参数</div>
+          <div class="kv wide" id="agh-cfg-grid"></div>
+        </div>
+
+        <div class="grid g-half">
+          <div class="card">
+            <div class="kvbox">
+              <div class="label" style="margin-bottom:12px">上游使用分布（按请求数）</div>
+              <div class="scroll"><table class="resp">
+                <thead><tr><th>上游</th><th class="num">请求</th><th class="num">命中</th><th class="num">未命中</th></tr></thead>
+                <tbody id="agh-up-rows"></tbody>
+              </table></div>
+            </div>
+            <div class="kvbox">
+              <div class="label" style="margin-bottom:12px">来源客户端（QPS=AGH 窗口计数差分；累计=保留期内总数）</div>
+              <div class="scroll"><table class="resp">
+                <thead><tr><th>客户端 IP</th><th class="num">QPS</th><th class="num">累计</th><th class="num opt">占比</th></tr></thead>
+                <tbody id="agh-client-rows"></tbody>
+              </table></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="kvbox">
+              <div class="label" style="margin-bottom:12px">慢查询 Top（未命中缓存 &gt;500ms）</div>
+              <div class="scroll"><table class="resp">
+                <thead><tr><th>域名</th><th class="opt">类型</th><th class="num">耗时</th><th class="opt">上游</th></tr></thead>
+                <tbody id="agh-slow-rows"></tbody>
+              </table></div>
+            </div>
+            <div class="kvbox">
+              <div class="label" style="margin-bottom:12px">按查询类型</div>
+              <div class="scroll"><table class="resp">
+                <thead><tr><th>类型</th><th class="num">数量</th><th class="num">p90</th></tr></thead>
+                <tbody id="agh-type-rows"></tbody>
+              </table></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="label" style="margin-bottom:6px">dnsproxy 日志（<span id="dgp-window">最近 1 小时</span>）</div>
+          <div class="sub" style="margin:0 0 14px">AGH 仅配置 dnsguard 这一主上游（<span class="mono">fallback_dns=[]</span>，无 AGH 层兜底）。<span class="mono">upstream_timeout=5s</span> 是上游等待参数，不等于客户端端到端时限；主上游超时失败交换数见下表。</div>
+          <div class="kv wide" id="agh-log-grid"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== unbound ==================== -->
+    <!-- ==================== dnsguard ==================== -->
+    <section id="dnsguard">
+      <h2 class="sec">安全判断（dnsguard）</h2>
+      <p class="hint">guard 位于 AGH 与解析器之间，负责策略准入、证据缓存、核验与备用源选择。verifier 通过 Unix Socket 按需调用。DNSSEC bogus 不应被备用源覆盖；普通上游无应答与验签拒绝需区分。CDN/Geo 差异、判据命中和改道次数都不能直接等同于投毒次数。下方计数可能跨重启保留，历史累计值不代表本采集周期新增。</p>
+      <div class="stack">
+        <div class="grid g-kpi">
+          <div class="card"><div class="label">服务状态</div><div class="big sm" id="dg-state">—</div><div class="sub" id="dg-sub">—</div></div>
+          <div class="card"><div class="label">学习集域名（含强 / 弱证据）</div><div class="big sm" id="dg-learned">—</div><div class="sub" id="dg-updated">—</div></div>
+          <div class="card"><div class="label">累计纠偏（累计值，含重启前恢复部分）</div><div class="big sm" id="dg-redirect">—</div><div class="sub" id="dg-q">—</div></div>
+          <div class="card"><div class="label">功能自检</div><div class="big sm" id="dg-test">—</div><div class="sub" id="dg-test-sub">—</div></div>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:12px">判定与核对明细（累计）</div>
+          <div class="kv wide" id="dg-grid">—</div>
+          <!-- 2026-10-09 阶段2：探针/压测独立区块。默认折叠，且其数据**不计入上面的用户指标**。 -->
+          <details id="probe-box" style="margin-top:14px">
+            <summary style="cursor:pointer;padding:6px 0">探针 / 压测流量（默认折叠 · 不计入用户指标）</summary>
+            <div class="kv wide" id="probe-grid" style="margin-top:8px">—</div>
+            <div class="sub" id="probe-note" style="margin-top:8px">—</div>
+          </details>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:12px">异常域名学习集（含强、弱证据）</div>
+          <div class="scroll"><table class="resp"><thead><tr><th>域名</th><th class="opt">命中判据</th><th class="opt">原（可疑）答案</th><th class="opt">改用答案</th><th class="num">次数</th><th class="num">处理</th></tr></thead><tbody id="dg-rows"></tbody></table></div>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:12px">待确认事件（无法仅凭现有证据归类）</div>
+          <div class="scroll"><table class="resp"><thead><tr><th>域名</th><th class="opt">unbound 答案</th><th class="opt">干净上游答案</th><th class="num">次数</th><th class="num">处理</th></tr></thead><tbody id="dg-pend"></tbody></table></div>
+          <div class="sub" id="dg-pend-sub" style="margin-top:10px">—</div>
+        </div>
+        <div class="card">
+          <div class="label" style="margin-bottom:12px">近期安全与诊断事件（DNSSEC、答案差异、待确认及明确投毒分别记录）</div>
+          <div class="scroll logscroll"><table class="resp"><tbody id="dg-log"></tbody></table></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="unbound">
+      <h2 class="sec">解析器状态（Unbound A / B）</h2>
+      <p class="hint"><b>A</b>=主解析器：当前采用转发模式，经 aghdq → NextDNS DoQ；DNSSEC 仍由 A 本地验签，实际目标见运行参数。<b>B</b>=仅处理 guard 名单内 CN 域名的分流解析器，转国内加密 DoT；非名单查询拒绝，不是通用兜底或交叉源。<br>
+        “验签失败 rrset”是<b>累计值</b>（Unbound 判定应答签名不可信的 rrset 数，对应 num.rrset.bogus）；
+  DNSSEC 告警里的“应答被拒”是<b>窗口增量</b>（num.answer.bogus）。两者量纲不同，都要结合最近窗口判断是否持续增加。</p>
+      <div class="grid g-half" id="ub-box"></div>
+    </section>
+
+    <!-- ==================== dnscrypt-proxy ==================== -->
+    <section id="dnscrypt">
+      <h2 class="sec">加密辅助源与分流</h2>
+      <p class="hint"><b>DoQ 是 Unbound A 当前的转发出口，也可由 guard 用作候选通道。</b>认证 DoT 与 DNSCrypt 供 guard 辅助核验；DNSCrypt 不在默认主解析路径上。CN 名单内域名由 guard 分流至 unbound B，再走国内加密 DoT。DNSSEC 由 Unbound A 本地验签；加密传输本身不等于 DNSSEC 验证。<br>
+        匿名路由和在用解析器只说明 DNSCrypt 辅助通道的状态，不代表全部 DNS 流量匿名。配置：<span class="mono">/opt/dnscrypt-proxy/dnscrypt-proxy.toml</span>；服务器 root crontab 每日 04:35 运行 <span class="mono">refresh-cn-rules.py</span>，失败时保留旧名单。</p>
+      <div class="card">
+        <div class="row"><div><div style="font-weight:600;font-size:15.5px">dnscrypt-proxy
+          <span class="pill" id="dc-state">—</span></div>
+          <div class="sub" id="dc-sub" style="margin-top:6px">加载中…</div></div>
+          <div class="donut" style="--c:var(--accent);--p:100"><div class="in"><b id="dc-probe">—</b><span>冷查询</span></div></div>
+        </div>
+        <div class="ginner" style="margin-top:22px">
+          <div><div class="label" style="margin-bottom:12px">运行信息</div><div class="kv" id="dc-grid"></div></div>
+          <div><div class="label" style="margin-bottom:12px">CN 名单刷新与校验（每日 04:35 · 同一入口三项）</div><div class="small sub" id="dc-refresh">—</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 服务器 ==================== -->
+    <section id="server">
+      <h2 class="sec">主机资源</h2>
+      <p class="hint">进度条颜色按资源阈值分级，不等同于顶部总告警：CPU 黄≥50% / 红≥80%；内存黄≥75% / 红≥90%；Swap 黄≥60% / 红≥85%；磁盘黄≥75% / 红≥90%。</p>
+      <div class="stack">
+        <div class="grid g-kpi">
+          <div class="card">
+            <div class="label">CPU 使用率</div>
+            <div class="big sm" id="sv-cpu">—</div>
+            <div class="bar" style="margin-top:12px"><i id="sv-cpu-bar" style="width:0%"></i></div>
+            <div class="sub" id="sv-load">—</div>
+          </div>
+          <div class="card">
+            <div class="label">内存</div>
+            <div class="big sm" id="sv-mem">—</div>
+            <div class="bar" style="margin-top:12px"><i id="sv-mem-bar" style="width:0%"></i></div>
+            <div class="sub" id="sv-mem-sub">—</div>
+          </div>
+          <div class="card">
+            <div class="label">Swap</div>
+            <div class="big sm" id="sv-swap">—</div>
+            <div class="bar" style="margin-top:12px"><i id="sv-swap-bar" style="width:0%"></i></div>
+            <div class="sub" id="sv-swap-sub">—</div>
+          </div>
+          <div class="card">
+            <div class="label">磁盘 /</div>
+            <div class="big sm" id="sv-disk">—</div>
+            <div class="bar" style="margin-top:12px"><i id="sv-disk-bar" style="width:0%"></i></div>
+            <div class="sub" id="sv-disk-sub">—</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="grid g-third" style="gap:26px">
+            <div class="kvbox" style="margin:0"><div class="label" style="margin-bottom:12px">网卡速率</div><div id="sv-net" class="kv"></div></div>
+            <div class="kvbox" style="margin:0"><div class="label" style="margin-bottom:12px">主机</div><div id="sv-host" class="kv"></div></div>
+            <div class="kvbox" style="margin:0"><div class="label" style="margin-bottom:12px">入口 / 证书</div><div id="sv-entry" class="kv"></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 容器 ==================== -->
+    <section id="containers">
+      <h2 class="sec">进程与容器</h2>
+      <p class="hint">表内仅列当前采集的 4 个 DNS 主链路容器：<b>adgh</b>（过滤+缓存）、<b>aghdq</b>（DoQ 中继，供 A 转发及 guard 候选）、<b>unbound</b>（主解析器，转发至 aghdq → NextDNS DoQ，并本地 DNSSEC 验签）、<b>unbound-b</b>（CN 分流 → 国内加密 DoT）。<b>astrbot</b>、<b>openlist</b> 是业务容器；<b>unbound-alt</b> 与 <b>alt-replica</b> 等备用/实验容器不在此表。重启计数为当前 Docker 计数，不代表长期稳定；请结合运行时长、OOM、窗口失败率和延迟判断。</p>
+      <div class="card"><div class="scroll"><table class="resp">
+        <thead><tr><th>名称</th><th class="opt">镜像</th><th>状态</th><th>健康</th><th class="num">CPU</th><th class="num">内存</th><th class="num opt">重启</th></tr></thead>
+        <tbody id="ct-rows"></tbody>
+      </table></div></div>
+    </section>
+
+    <!-- ==================== 走势 ==================== -->
+    <section id="history">
+      <h2 class="sec">趋势与定位</h2>
+      <p class="hint">只保留适合观察变化的指标：延迟、缓存、流量和资源。累计安全计数在安全判断页显示为数字，不重复画折线。每次采集一个点（通常约 60 秒），计数类折线使用 3 点滑动平均，<b>比率类（拦截率/命中率/上游占比）不平滑</b>（否则一个坏点会被摊到相邻点上、显示出从未存在过的数值：2026-10-14 实测 568.33% 被平均成 249.1%，而该时刻真实值是 90.23%）；<b>图内最多展示 60 个采集点（通常约 1 小时；停采或重启时会有缺口）</b>，与统计窗口同窗。
+        <b>实线</b>=有采样，<b>虚线</b>=这段时间没有数据（不补假）；悬停或点按折线看数值。</p>
+      <h3 class="subsec">延迟趋势 <span class="subhint">告警口径：真实上游样本≥30；P50 >250ms 连续3点偏高、>500ms 连续3点异常；P90 >600ms 连续2点偏高、>1.2s 连续2点异常；P99 不单独告警</span></h3>
+      <div class="grid g-kpi" id="hist-latency"></div>
+      <h3 class="subsec">链路探针 <span class="subhint">仅用于定位模块延迟，不计入正常请求分位</span></h3>
+      <div class="grid g-kpi" id="hist-probe"></div>
+      <h3 class="subsec">流量与缓存趋势 <span class="subhint">缓存未命中和慢查询用于定位洪峰</span></h3>
+      <div class="grid g-kpi" id="hist-flow"></div>
+      <h3 class="subsec">解析器与安全趋势 <span class="subhint">累计安全计数在 dnsguard 明细中以数字显示</span></h3>
+      <div class="grid g-kpi" id="hist-resolver"></div>
+      <h3 class="subsec">服务器资源趋势 <span class="subhint">CPU 正常 ≤50%；内存 ≤75%；Swap ≤60%；磁盘 ≤75%</span></h3>
+      <div class="grid g-kpi" id="hist-server"></div>
+    </section>
+
+    <footer>
+      观测数据来自 docker stats/inspect、unbound-control stats_noreset、AGH querylog 与日志、dnscrypt-proxy 日志、systemd/ss/ps、/proc、nginx、openssl、iptables 计数及看板探针。
+      采集本身不改配置；安全事件表中的确认、忽略、撤销操作会写入 dnsguard 状态。配色参考 AdGuard Home。
+    </footer>
+  </div>
+</div>
+
+<button class="totop" id="totop" title="回到顶部" aria-label="回到顶部">↑</button>
+
+<script>
+(function(){
+  "use strict";
+  var API = "api/metrics";
+  var AUTO = 60;
+  var state = { data:null, lastOk:0, secondsLeft:AUTO, loading:false };
+  var RETRY_DELAYS = [3, 6, 12, 20, 30];   // 失败后自动重试的退避秒数
+  var retry = { n:0, at:0 };
+  var authReloaded = false;
+
+  function $(id){ return document.getElementById(id); }
+  function txt(id,v){ var e=$(id); if(e) e.textContent=(v===undefined||v===null||v==="")?"—":String(v); }
+  function html(id,v){ var e=$(id); if(e) e.innerHTML=v; }
+  function num(v,d){ if(v===undefined||v===null||v===""||isNaN(v)) return "—";
+    return Number(v).toLocaleString("zh-CN",{minimumFractionDigits:d||0,maximumFractionDigits:d||0}); }
+  function fmtMs(v){
+    if(v===undefined||v===null||v===""||isNaN(v)) return "—";
+    v=Number(v);
+    if(v>=1000) return (v/1000).toFixed(2)+" s";
+    if(v>=100) return v.toFixed(0)+" ms";
+    return v.toFixed(v<10?1:0)+" ms";
+  }
+  function fmtBytes(b){
+    if(!b && b!==0) return "—";
+    b=Number(b); if(isNaN(b)) return "—";
+    var u=["B","KB","MB","GB"],i=0;
+    while(b>=1024&&i<u.length-1){b/=1024;i++;}
+    return b.toFixed(i?1:0)+" "+u[i];
+  }
+  function fmtDur(s){
+    if(s===undefined||s===null||isNaN(s)) return "—";
+    s=Math.floor(Number(s));
+    var d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);
+    if(d) return d+"天 "+h+"小时";
+    if(h) return h+"小时 "+m+"分";
+    return m+"分";
+  }
+  function esc(s){
+    return String(s===undefined||s===null?"":s)
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+  }
+  function latClass(ms){
+    if(ms===undefined||ms===null||isNaN(ms)) return "";
+    if(ms<50) return "val-ok"; if(ms<300) return "val-warn"; return "val-err";
+  }
+  function latClass2(ms,warn,err){
+    if(ms===undefined||ms===null||isNaN(ms)) return "";
+    ms=Number(ms);
+    if(ms<warn) return "val-ok"; if(ms<err) return "val-warn"; return "val-err";
+  }
+  function stClass(s){ return "s-"+(s||"idle"); }
+  function ago(sec){
+    if(sec<60) return sec+" 秒前";
+    if(sec<3600) return Math.floor(sec/60)+" 分钟前";
+    return Math.floor(sec/3600)+" 小时前";
+  }
+  function kvRow(k,v,cls,no){
+    /* no：可选序号（①…⑧）。独立成列 + 固定宽度，避免圆圈数字宽度随字体变化导致左边缘参差；
+       序号与标签之间用 &nbsp; 连接，防止手机上换行时序号孤零零占一行。 */
+    return '<div class="kvrow">'+(no?'<span class="no">'+esc(no)+'</span>':'')+
+      '<span class="k">'+esc(k)+'</span><span class="v '+(cls||"")+'">'+
+      (v===undefined||v===null||v===""?"—":esc(v))+"</span></div>";
+  }
+  /* 移动端密度开关：说明 / 明细。桌面端按钮被 CSS 隐藏，点到也无副作用。 */
+  document.addEventListener('click', function(e){
+    var t=e.target||{};
+    if(t.classList && t.classList.contains("inline-more")){
+      var pv=t.previousElementSibling;
+      if(pv){ var op=pv.classList.toggle("expanded"); t.textContent=op?"收起":"展开"; }
+      return;
+    }
+    if(t.id==="t-hints"||t.id==="t-detail"){
+      var on = t.id==="t-hints" ? "hints-open" : "detail-open";
+      var yes = document.body.classList.toggle(on);
+      t.classList.toggle("on", yes);
+      t.textContent = t.id==="t-hints" ? (yes?"收起说明":"说明") : (yes?"收起明细":"明细（"+document.querySelectorAll(".kvrow.more,.kvsub.more,.cnote").length+" 行）");
+      try{ localStorage.setItem("chain_"+on, yes?"1":"0"); }catch(_){}
+    }
+  });
+  try{
+    if(localStorage.getItem("chain_hints-open")==="1"){ document.body.classList.add("hints-open");
+      var _h=document.getElementById("t-hints"); if(_h){_h.classList.add("on"); _h.textContent="收起说明";} }
+    if(localStorage.getItem("chain_detail-open")==="1"){ document.body.classList.add("detail-open");
+      var _d=document.getElementById("t-detail"); if(_d){_d.classList.add("on"); _d.textContent="收起明细";} }
+  }catch(_){}
+  /* 手机端：被 3 行截断的 .hint 末尾自动补一个"展开"按钮（
+     纯 CSS 的 -webkit-line-clamp 只会显示一个省略号，用户不知道发生了什么） */
+  function setupClampButtons(){
+    if(window.innerWidth>700) return;
+    var hs=document.querySelectorAll(".hint");
+    for(var i=0;i<hs.length;i++){
+      var el=hs[i], nx=el.nextElementSibling;
+      if(nx && String(nx.className||"").indexOf("inline-more")>=0) continue;
+      if(el.scrollHeight - el.clientHeight <= 4) continue;
+      var b=document.createElement("button");
+      b.type="button"; b.className="inline-more"; b.textContent="展开";
+      el.parentNode.insertBefore(b, el.nextSibling);
+    }
+  }
+  setTimeout(setupClampButtons, 1800);
+  window.addEventListener("resize", function(){ setTimeout(setupClampButtons, 300); });
+  function share(p){ return Math.max(0,Math.min(100,Number(p)||0)); }
+
+  /* ---------- 主题 ---------- */
+  function applyTheme(t){
+    document.documentElement.setAttribute("data-theme",t);
+    $("btn-theme").textContent = (t==="dark" ? "☀️" : "🌙");
+    try{ localStorage.setItem("chainmon-theme",t); }catch(e){}
+  }
+  (function(){ var s=null; try{ s=localStorage.getItem("chainmon-theme"); }catch(e){}
+    applyTheme(s||"light"); })();
+  $("btn-theme").onclick=function(){
+    applyTheme(document.documentElement.getAttribute("data-theme")==="dark"?"light":"dark");
+  };
+
+  /* ---------- 导航 / 回到顶部 ---------- */
+  document.addEventListener("click", function(ev){
+    var el=ev.target;
+    while(el && el!==document && !(el.getAttribute && el.getAttribute("data-dg"))) el=el.parentNode;
+    if(!el || el===document || !el.getAttribute) return;
+    var act=el.getAttribute("data-dg"), dom=el.getAttribute("data-dom");
+    if(!act||!dom) return;
+    ev.preventDefault();
+    var old=el.textContent; el.disabled=true; el.textContent="处理中…";
+    fetch("api/dnsguard",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({domain:dom,action:act})})
+      .then(function(r){return r.json()}).then(function(j){
+        el.textContent=(j&&j.ok)?"✓ 完成":"✗ 失败";
+        setTimeout(function(){ if(typeof load==="function") load(true); el.textContent=old; el.disabled=false; }, 2000);
+      }).catch(function(){ el.textContent="✗ 失败"; el.disabled=false; });
+  });
+  var links=[].slice.call(document.querySelectorAll("#nav a"));
+  var totop=$("totop");
+  function onScroll(){
+    var y=window.pageYOffset||document.documentElement.scrollTop||0;
+    if(totop) totop.classList.toggle("show", y>600);
+    var best=null,bestTop=-1e9;
+    links.forEach(function(a){
+      var el=document.querySelector(a.getAttribute("href"));
+      if(!el) return;
+      var top=el.getBoundingClientRect().top;
+      if(top<150 && top>bestTop){bestTop=top;best=a;}
+    });
+    if(best){ links.forEach(function(a){a.classList.toggle("active",a===best);}); }
+  }
+  window.addEventListener("scroll",onScroll,{passive:true});
+  if(totop) totop.onclick=function(){ window.scrollTo({top:0,behavior:"smooth"}); };
+  links.forEach(function(a){
+    a.addEventListener("click",function(){ links.forEach(function(x){x.classList.remove("active");}); a.classList.add("active"); });
+  });
+  onScroll();
+
+  /* ---------- 迷你折线（含悬停/点击取值） ---------- */
+  var SVGNS="http://www.w3.org/2000/svg";
+  function clockOf(sec){
+    var d=new Date(sec*1000);
+    return ("0"+d.getHours()).slice(-2)+":"+("0"+d.getMinutes()).slice(-2);
+  }
+  function bindSpark(svg){
+    if(svg.__interactive) return;
+    svg.__interactive=true;
+    var parent=svg.parentNode, wrap=parent;
+    if(!wrap.classList || !wrap.classList.contains("sparkwrap")){
+      wrap=document.createElement("div"); wrap.className="sparkwrap";
+      parent.insertBefore(wrap, svg); wrap.appendChild(svg);
+    }
+    var guide=document.createElementNS(SVGNS,"line");
+    guide.setAttribute("class","sparkguide");
+    guide.setAttribute("y1","0");
+    guide.setAttribute("vector-effect","non-scaling-stroke");
+    guide.style.display="none";
+    var dot=document.createElement("span"); dot.className="sparkdot"; dot.style.display="none";
+    var tip=document.createElement("div"); tip.className="sparktip"; tip.style.display="none";
+    wrap.appendChild(dot); wrap.appendChild(tip);
+    svg.__guide=guide; svg.__dot=dot; svg.__tip=tip;
+    var pinned=false;
+    function hide(){ guide.style.display="none"; dot.style.display="none"; tip.style.display="none"; }
+    function show(clientX){
+      var s=svg.__series; if(!s||!s.pts||s.pts.length<2) return;
+      var r=svg.getBoundingClientRect(); if(r.width<1) return;
+      var vb=(svg.getAttribute("viewBox")||"0 0 300 52").split(" ").map(Number);
+      var ratio=Math.min(1,Math.max(0,(clientX-r.left)/r.width));
+      var target=ratio*vb[2], i=0, best=1e9;
+      for(var j=0;j<s.pts.length;j++){ var dd=Math.abs(s.pts[j][0]-target); if(dd<best){best=dd;i=j;} }
+      var px=s.pts[i][0], py=s.pts[i][1];
+      var leftPx=px/vb[2]*r.width, topPx=py/vb[3]*r.height;
+      guide.setAttribute("x1",px); guide.setAttribute("x2",px); guide.setAttribute("y2",vb[3]);
+      guide.style.display="";
+      dot.style.display=""; dot.style.left=leftPx+"px"; dot.style.top=topPx+"px";
+      if(s.color) dot.style.borderColor=s.color;
+      var val=s.fmt?s.fmt(s.vals[i]):String(s.vals[i]);
+      var t=(s.ts&&s.ts[i])?clockOf(s.ts[i]):"";
+      tip.textContent=(t?t+" · ":"")+val;
+      tip.style.display="";
+      tip.style.left=Math.min(Math.max(leftPx,40),Math.max(40,r.width-40))+"px";
+      // 点位于上半部时把气泡放到下方，避免顶出卡片
+      if(topPx<22){ tip.style.transform="translate(-50%,0)"; tip.style.top=(topPx+12)+"px"; }
+      else { tip.style.transform="translate(-50%,-100%)"; tip.style.top=Math.max(0,topPx-8)+"px"; }
+    }
+    svg.addEventListener("pointermove",function(e){ show(e.clientX); });
+    svg.addEventListener("pointerdown",function(e){ pinned=true; show(e.clientX); if(e.cancelable) e.preventDefault(); });
+    // 老一些的移动浏览器可能只发 touch 事件，补一个兜底（不 preventDefault，避免影响页面滚动）
+    svg.addEventListener("touchstart",function(e){
+      if(e.touches && e.touches.length){ pinned=true; show(e.touches[0].clientX); }
+    },{passive:true});
+    svg.addEventListener("pointerleave",function(){ if(!pinned) hide(); });
+    document.addEventListener("pointerdown",function(e){
+      if(pinned && !wrap.contains(e.target)){ pinned=false; hide(); }
+    });
+  }
+  function spark(svgId,values,opts){
+    var svg=$(svgId); if(!svg) return;
+    opts=opts||{};
+    // null/undefined = 该时刻没有样本，断线不画（否则会被当成 0 造成锯齿）
+    var raw=(values||[]).map(function(v){ return (v===null||v===undefined||v===""||isNaN(Number(v)))?null:Number(v); });
+    // 3 点居中滑动平均：只平滑显示折线，不改变后端原始数据或告警值。
+    // 2026-10-14：**比率类必须关掉平滑**（opts.noSmooth）。平滑会把一个坏点摊到左右邻居，
+    // 而提示气泡读的正是平滑后的值 ⇒ 会显示出从未存在过的数值：后端 15:00:55 的
+    // 568.33% 被平均成 15:01 的 249.1%，而 15:01 的真实值是 90.23%。
+    var smooth=raw.map(function(v,i){
+      if(v===null) return null;
+      if(opts.noSmooth) return v;
+      // 2026-10-09：只平滑**内部**点。端点若也做居中平均，折线末端会偏向倒数第二个值，
+      // 而旁边的"当前 X"读的是原始末值 —— 图与数字对不上，最容易被误读成"正在回落"。
+      if(i===0||i===raw.length-1) return v;
+      var a=[]; for(var j=i-1;j<=i+1;j++) if(raw[j]!==null) a.push(raw[j]);
+      return a.length? a.reduce(function(x,y){return x+y;},0)/a.length : v;
+    });
+    var ok=smooth.filter(function(v){ return v!==null; });
+    if(ok.length<2){
+      // 样本不足：隐藏折线（副标题会说明原因），避免留下一块空白画布
+      svg.style.display="none";
+      svg.innerHTML=""; svg.__series=null;
+      if(svg.__tip) svg.__tip.style.display="none";
+      return;
+    }
+    svg.style.display="";
+    var vb=(svg.getAttribute("viewBox")||"0 0 300 52").split(" ");
+    var w=Number(vb[2])||300, h=Number(vb[3])||52, pad=4;
+    var min=opts.min!==undefined?opts.min:Math.min.apply(null,ok);
+    var max=opts.max!==undefined?opts.max:Math.max.apply(null,ok);
+    // 2026-10-14：min/max 只用于"正常范围"的可读性；若数据越界（例如某天又有指标算错、
+    // 比率 >100%），固定上界会把真实的点画到画布外，肉眼看到的是"折线突然断掉/跳水"，
+    // 而提示气泡仍显示真实值 —— 图与数字互相矛盾。这里让范围在越界时自动放宽，
+    // 保证任何真实采样点都画得出来、且不被裁掉。
+    var _dLo=Math.min.apply(null,ok), _dHi=Math.max.apply(null,ok);
+    if(max<_dHi) max=_dHi;
+    if(min>_dLo) min=_dLo;
+    if(max-min<1e-9){ max=min+1; }
+    var step=(w-pad*2)/Math.max(1,raw.length-1);
+    var color=opts.color||"var(--accent)";
+    // 逐段生成：遇到 null 就断开（记为一段）
+    var segs=[], cur=[], curIdx=[], pts=[], vals=[], ts=[];
+    var fullTs=opts.ts||[];
+    smooth.forEach(function(v,i){
+      var x=pad+i*step;
+      if(v===null){ if(cur.length){ segs.push({p:cur,idx:curIdx}); cur=[]; curIdx=[]; } return; }
+      var y=h-pad-((v-min)/(max-min))*(h-pad*2);
+      cur.push(x.toFixed(1)+","+y.toFixed(1));
+      curIdx.push(i);
+      pts.push([Number(x.toFixed(1)),Number(y.toFixed(1))]);
+      vals.push(v);
+      ts.push(fullTs[i]!==undefined?fullTs[i]:null);
+    });
+    if(cur.length) segs.push({p:cur,idx:curIdx});
+    var body='<rect class="sparkhit" x="0" y="0" width="'+w+'" height="'+h+'"></rect>';
+    segs.forEach(function(sg){
+      if(sg.p.length>=2){
+        var area=sg.p.join(" ")+" "+sg.p[sg.p.length-1].split(",")[0]+","+(h-pad)+" "+sg.p[0].split(",")[0]+","+(h-pad);
+        body+='<polygon points="'+area+'" fill="'+color+'" opacity="0.10"></polygon>';
+        // 单调 cubic Bézier：连续弧线且不产生尖角或明显过冲。
+        var xy=sg.p.map(function(q){var z=q.split(",");return [Number(z[0]),Number(z[1])];});
+        var d="M "+xy[0][0]+" "+xy[0][1];
+        for(var bi=0;bi<xy.length-1;bi++){
+          var a=xy[bi], b=xy[bi+1], dx=(b[0]-a[0])/3;
+          d+=" C "+(a[0]+dx)+" "+a[1]+" "+(b[0]-dx)+" "+b[1]+" "+b[0]+" "+b[1];
+        }
+        body+='<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="1.8" '+
+              'stroke-linejoin="round" stroke-linecap="round"></path>';
+      }else{
+        body+='<circle cx="'+sg.p[0].split(",")[0]+'" cy="'+sg.p[0].split(",")[1]+'" r="1.6" fill="'+color+'"></circle>';
+      }
+    });
+    // 缺口用虚线连接：只表示"这段没有样本"，不伪造数值（实线=真实采样，虚线=空档）
+    for(var si=1;si<segs.length;si++){
+      var prev=segs[si-1], next=segs[si];
+      var gap=next.idx[0]-prev.idx[prev.idx.length-1]-1;
+      if(gap>0 && gap<=(opts.maxGap||240)){
+        body+='<polyline class="sparkgap" stroke="'+color+'" points="'+
+              prev.p[prev.p.length-1]+" "+next.p[0]+'"></polyline>';
+      }
+    }
+    svg.innerHTML=body;
+    svg.__series={vals:vals, ts:ts, pts:pts, fmt:opts.fmt||null, color:color};
+    bindSpark(svg);
+    if(svg.__guide) svg.appendChild(svg.__guide);   // innerHTML 重建后把指示线放回最上层
+  }
+
+  /* 比率类指标：单点窗口在小流量下抖动大（分母只有几十条），
+     这里按"近 N 个采样点"的计数求和后重算比率 —— 是真实的滚动统计，不是化妆式平滑 */
+  function rollRate(numArr, denArr, span){
+    var out=[], q=[], sn=0, sd=0;
+    for(var i=0;i<(denArr||[]).length;i++){
+      var n=(numArr&&numArr[i]!==null&&numArr[i]!==undefined)?Number(numArr[i]):null;
+      var d=(denArr[i]!==null&&denArr[i]!==undefined)?Number(denArr[i]):null;
+      q.push([n,d]);
+      if(q.length>span){ var old=q.shift(); if(old[0]!==null&&old[1]!==null){ sn-=old[0]; sd-=old[1]; } }
+      if(n!==null&&d!==null){ sn+=n; sd+=d; }
+      out.push(sd>0?Math.round(1000*sn/sd)/10:null);
+    }
+    return out;
+  }
+  function rollSum(arr, span){
+    var out=[], q=[], s=0;
+    for(var i=0;i<(arr||[]).length;i++){
+      var v=(arr[i]===null||arr[i]===undefined)?null:Number(arr[i]);
+      q.push(v);
+      if(q.length>span){ var old=q.shift(); if(old!==null) s-=old; }
+      if(v!==null) s+=v;
+      out.push(s);
+    }
+    return out;
+  }
+  /* 图表展示窗口：与后端统计窗口（WINDOW_MIN）对齐。
+     2026-10-09 由 15 点（15 分钟）拓展为 60 点：统计窗口、比率滚动窗口（rollRate span=60）
+     与图表展示窗口三者同窗，避免"图里只有 15 分钟、数字却是 1 小时"的错配。 */
+  function tail(a){ return (a||[]).slice(-60); }
+  /* 窗口文案：60 → "1 小时"。("最近 60 分钟"读起来比"最近 1 小时"差) */
+  function winLabel(m){ m=Number(m||0); return (m>=60 && m%60===0) ? (m/60)+" 小时" : num(m)+" 分钟"; }
+  function add2(a,b){
+    var n=Math.max((a||[]).length,(b||[]).length), o=[];
+    for(var i=0;i<n;i++){
+      var x=a?a[i]:null, y=b?b[i]:null;
+      o.push((x===null||x===undefined||y===null||y===undefined)?null:Number(x)+Number(y));
+    }
+    return o;
+  }
+  function asList(v){ return Array.isArray(v)?v:(v?[v]:[]); }
+  function fmtUp(u){ if(typeof u==="string") u=u.replace(/^['"]|['"]$/g,""); var m=(typeof u==="string")?u.match(/^\[\/(.+?)\/\]\s*(.+)$/):null;
+    if(m){ var n=m[1].split("/").filter(Boolean).length; return n+" 个域名 → "+m[2]; } return String(u); }
+  function fCount(v){ return num(v)+" 条"; }
+  function fPct(v){ return num(v,1)+"%"; }
+
+  /* ---------- 状态判定 ---------- */
+  function buildHealth(d){
+    var o=d.overview||{}, s=d.server||{}, tls=s.tls||{}, items=[];
+    (d.container_list||[]).forEach(function(c){
+      if(c.status!=="running") items.push({lv:"err",sec:"containers",text:c.name+" 容器状态异常："+c.status});
+      else if(c.health && c.health!=="healthy" && c.health!=="-") items.push({lv:"warn",sec:"containers",text:c.name+" 健康检查："+c.health});
+      else if(c.restarts>0) items.push({lv:"warn",sec:"containers",text:c.name+" 已重启 "+c.restarts+" 次"});
+    });
+    (d.probes||[]).forEach(function(p){
+      if(p.status==="error") items.push({lv:"err",sec:"probes",text:p.target+" 探测失败（"+p.label+"）"});
+      else if(p.status==="warn") items.push({lv:"warn",sec:"probes",text:p.target+" 探测偏慢："+fmtMs(p.p50_ms)});
+    });
+    var _lg=(d.agh||{}).log||{};
+    var _mTo=_lg.io_timeout_main||0, _fTo=_lg.io_timeout_fallback||0;
+    // 常规上游超时不再报警：机场客户端轮询、测速等突发流量都会稳定产生几十次，
+    // 属可预期噪音（数值在概览分位卡与走势区可见）。只有"大面积超时"才说明上游真出故障：
+    // 超时尝试数 ≈ 上游请求数 意味着几乎每个查询的主+兜底都没应答。
+    var _upReq=(o.samples&&o.samples.upstream!==undefined)?o.samples.upstream:(o.upstream_reqs||0);
+    if(_upReq>=20 && (_mTo+_fTo)>=0.8*_upReq){
+      items.push({lv:"err",sec:"agh",
+        text:"上游大面积超时："+_upReq+" 个上游请求产生了 "+(_mTo+_fTo)+" 次超时尝试，主上游可能故障",
+        title:"判据：超时尝试数 ≥ 上游请求数的 80%。正常时只有个别域名会超时（例如机场客户端的更新域名、测速突发），"
+             +"那些情况不再报警。若此条出现，说明绝大多数查询在 unbound A（以及 CN 分流的 unbound B）上都没拿到应答，请检查 unbound 容器与网络出口。"});
+    }
+    // 延迟判定：最少 30 个真实上游样本，并要求连续窗口满足条件，避免单次抖动告警。
+    var _upS=((o.samples||{}).upstream!==undefined?(o.samples||{}).upstream:Number(o.upstream_reqs))||0;
+    var _hist=d.history||{};
+    function _sustain(key, threshold, windows){
+      var a=_hist[key]||[], n=0;
+      for(var i=a.length-1;i>=0&&n<windows;i--){ if(a[i]!==null&&a[i]!==undefined&&Number(a[i])>threshold) n++; else return false; }
+      return n>=windows;
+    }
+    function _recovered(key, threshold, windows){
+      var a=_hist[key]||[], n=0;
+      for(var i=a.length-1;i>=0&&n<windows;i--){ if(a[i]!==null&&a[i]!==undefined&&Number(a[i])<threshold) n++; else return false; }
+      return n>=windows;
+    }
+    function _slowModule(){
+      var ll=d.layer_latency||{}, best=null;
+      Object.keys(ll).forEach(function(k){ var z=ll[k]||{}, v=Number(z.p50_ms); if(isFinite(v)&&(!best||v>best.v)) best={k:k,v:v,p90:Number(z.p90_ms)||0}; });
+      return best;
+    }
+    var _slow=_slowModule(), _culprit=_slow?('；分层探针最慢：'+_slow.k+' p50 '+fmtMs(_slow.v)+'（p90 '+fmtMs(_slow.p90)+'）'):'；暂无分层模块数据';
+    if(_upS>=30){
+      if(_sustain("latency_p50_ms",500,3) && !_recovered("latency_p50_ms",400,3)) items.push({lv:"err",sec:"overview",text:"上游延迟异常：p50 连续 3 个采集点 >500ms（当前 "+fmtMs(o.latency_p50_ms)+")"+_culprit});
+      else if(_sustain("latency_p50_ms",250,3) && !_recovered("latency_p50_ms",200,3)) items.push({lv:"warn",sec:"overview",text:"上游 p50 偏高：连续 3 个采集点 >250ms（当前 "+fmtMs(o.latency_p50_ms)+"）"+_culprit});
+      else if(_sustain("latency_p90_ms",1200,2)) items.push({lv:"err",sec:"overview",text:"上游 p90 尾部异常：连续 2 个采集点 >1.2s（当前 "+fmtMs(o.latency_p90_ms)+")"+_culprit});
+      else if(_sustain("latency_p90_ms",600,2)) items.push({lv:"warn",sec:"overview",text:"上游 p90 尾部偏慢：连续 2 个采集点 >600ms（当前 "+fmtMs(o.latency_p90_ms)+"）"+_culprit});
+    }
+    // 2026-10-09：健康告警同样切到**权威口径**（窗口计数差分），避免用 querylog 样本误报
+    var _chv=(o.cache_hit_ratio_auth!=null?o.cache_hit_ratio_auth:o.cache_hit_pct);
+    // 2026-10-09：阈值由 80% 下调到 50%——修正分母后（剔除被拦截），~80% 才是正常值，
+    // 旧的 80% 阈值会让"健康状态"天天报warn。
+    if(_chv!==undefined && _chv!==null && (o.queries>200||o.qps_total!=null) && _chv<50)
+      items.push({lv:"warn",sec:"agh",text:"AGH 缓存命中率偏低："+num(_chv,1)+"%",
+                  title:"口径："+(o.cache_hit_ratio_auth!=null?"AGH 窗口计数差分（1 − Δ上游应答/Δ放行查询）":"querylog 样本（累计计数暂不可用）")});
+    /* AGH 查询日志落后（2026-10-05 新增，实测踩过）
+       querylog.json 只在内存缓冲攒满 size_memory(=1000) 或优雅退出时刷盘，
+       低流量下可能滞后几十分钟；chainmon 读的是这个文件，数据会静默失真。 */
+    var lag=d.log_lag_s;
+    if(d.log_source==="file" && lag!==undefined && lag!==null && lag>300){
+      var mins=Math.round(lag/60);
+      var lv=(lag>1800)?"err":"warn";
+      items.push({lv:lv,sec:"agh",
+        title:"AGH querylog.json 只在内存缓冲攒满 size_memory(=1000) 或进程优雅退出时才刷盘，低流量时会滞后很久（上游 issue #8485 的结论是设计使然，不是丢数据）。要看实时数据请用 AGH 界面或 /control/querylog；要缩短滞后把 querylog.size_memory 调小（实测 200 ≈ 1~3 分钟刷一次）。",
+        text:"AGH 查询日志落后 "+mins+" 分钟未落盘，本页查询/缓存/延迟数据不可信（非链路故障）"});
+    }
+    if(tls.days_left!==undefined){
+      if(tls.days_left<7) items.push({lv:"err",sec:"server",text:"TLS 证书 "+tls.days_left+" 天后到期"});
+      else if(tls.days_left<30) items.push({lv:"warn",sec:"server",text:"TLS 证书 "+tls.days_left+" 天后到期"});
+    }
+    if(d.dnsguard){
+      if(d.dnsguard.active!==true) items.push({lv:"err",sec:"dnsguard",text:"dnsguard 未运行：AGH 主上游会失败（当前未配置兜底）"});
+      else if(d.dnsguard.correct_ok===false) items.push({lv:"warn",sec:"dnsguard",text:"dnsguard 功能自检未通过（投毒纠偏可能失效）"});
+      else if(d.dnsguard.listen!==true) items.push({lv:"warn",sec:"dnsguard",text:"dnsguard 端口 5355 未监听"});
+    // 2026-10-09 B1：拥塞类**拒绝**单独告警——它与"上游故障"是两回事；拥塞应答现为 REFUSED(5)+EDE22，实测**不进** AGH 缓存（旧文案写的"会被缓存"已作废）
+    if(d.dnsguard&&d.dnsguard.guard_metrics){
+      var _gm=((d.dnsguard&&d.dnsguard.guard_metrics)||{});
+      // 2026-10-09 实测：过载路径现直接回 REFUSED(5)+EDE22，**不计入** fail_closed_by_reason，
+      // 所以原来读 fc_admission_rate 的告警恒为 0（而 admission_reject 已 13.8 万次）。改用闸门拒绝速率。
+      var _gmr=Number(_gm.admission_reject_rate!=null?_gm.admission_reject_rate:(_gm.fc_admission_rate||0));
+      if(_gmr>60) items.push({lv:"err",sec:"dnsguard",text:"通道堵塞：本地闸门每分钟拒绝 "+num(_gmr,0)+" 次（客户端请求失败；REFUSED(5)+EDE22；应与上游失败分开统计）"});
+      else if(_gmr>10) items.push({lv:"warn",sec:"dnsguard",text:"通道堵塞：本地闸门每分钟拒绝 "+num(_gmr,0)+" 次（客户端 DNS 请求被拒绝；缓存清理是否执行见计数）"});
+    }
+    }
+    var dk=s.disk||{}, mm=s.mem||{}, sw=s.swap||{};
+    if(dk.pct>=90) items.push({lv:"err",sec:"server",text:"根分区使用率 "+dk.pct+"%"});
+    else if(dk.pct>=80) items.push({lv:"warn",sec:"server",text:"根分区使用率 "+dk.pct+"%"});
+    if(mm.pct>=92) items.push({lv:"warn",sec:"server",text:"内存使用率 "+mm.pct+"%"});
+    if(sw.pct>=60) items.push({lv:"warn",sec:"server",text:"Swap 使用率 "+sw.pct+"%（内存压力）"});
+    /* DNSSEC 告警口径（2026-10-05 修正）
+       num.answer.bogus 混了两件事：①真验签失败（伪造/签名损坏）→ 必然同时推高
+       num.rrset.bogus；②上游没给出可验签的应答（前向链路失败/非应答）→ rrset.bogus 不动。
+       而 bogus/(secure+bogus) 的分母只覆盖"带 DNSSEC 状态的应答"，比例天然虚高。
+       所以判据改成窗口增量：先看有没有新增的验签失败 rrset，再决定是不是安全问题。 */
+    (d.unbound||[]).forEach(function(u){
+      var st=u.stats||{}, dl=u.delta||{};
+      var rb=dl.rrset_bogus, bg=dl.bogus;
+      var win=dl.span_s?Math.round(dl.span_s/60):null;
+      var has=function(v){ return v!==null && v!==undefined; };
+      if(has(rb) && rb>=1 && (!has(bg) || bg>=1)){
+        // text 控制在 78 字内（renderHealth 会截断），细节放 title
+        items.push({lv:"warn",sec:"unbound",
+          title:u.name+" 近 "+(win||"?")+" 分钟新增 "+rb+" 个验签失败 rrset，另有 "+(has(bg)?bg:0)+" 个应答被拒；用 dnssec-check.sh 查具体域名",
+          text:u.name+"：新增 "+rb+" 个验签失败 rrset（近 "+(win||"?")+" 分钟）——需要检查签名、时钟、信任链及具体域名，不能据此认定投毒"});
+      }else if(has(bg) && bg>=3 && rb===0){
+        var q=dl.queries, sf=dl.servfail;
+        var sr=has(sf) && q>0 ? ("，近窗口 "+(100.0*sf/q).toFixed(1)+"% 的应答是 SERVFAIL") : "";
+        items.push({lv:"warn",sec:"unbound",
+          title:u.name+" 近 "+(win||"?")+" 分钟有 "+bg+" 个应答无法完成验签，但新增验签失败 rrset = 0"+sr+"；可能包含 dnssec-failed.org 等预期 DNSSEC 负向测试，请核对域名和上游日志，不能仅凭计数判为用户故障",
+          text:u.name+"：近 "+(win||"?")+" 分钟 "+bg+" 个应答未完成验证，rrset 新增 0；可能含预期 DNSSEC 负向测试，需核对域名"});
+      }
+    });
+    var lv="ok";
+    items.forEach(function(i){ if(i.lv==="err") lv="err"; else if(i.lv==="warn" && lv!=="err") lv="warn"; });
+    return {lv:lv, items:items};
+  }
+
+  function renderHealth(d){
+    var h=buildHealth(d);
+    var icon = h.lv==="ok"?"✓":(h.lv==="warn"?"!":"×");
+    var title = h.lv==="ok"?"采集范围内无告警":(h.lv==="warn"?"有需要留意的项":"存在异常");
+    var desc = h.lv==="ok"
+      ? "本次可用指标未触发告警；不代表所有设备和应用已验证正常"
+      : (h.items.length+" 项需关注（点击条目跳到对应区块）");
+    var list;
+    if(!h.items.length){
+      list='<div class="issue ok"><span class="lv"></span><span class="itxt">本次采集未触发阈值告警。本状态仅覆盖本页已接入的服务器侧指标与探针。</span></div>';
+    }else{
+      list=h.items.slice(0,8).map(function(i){
+        if(i.text.length>78) i.text=i.text.slice(0,77)+"…";
+        return '<a class="issue '+(i.lv==="err"?"err":"")+'" href="#'+i.sec+'"'+
+          (i.title?(' title="'+esc(i.title)+'"'):"")+'>'+
+          '<span class="lv"></span><span class="itxt">'+esc(i.text)+'</span><span class="chev">›</span></a>';
+      }).join("");
+      if(h.items.length>8) list+='<div class="issue"><span class="lv"></span><span class="itxt">还有 '+(h.items.length-8)+' 项…</span></div>';
+    }
+    html("health-card",'<div class="verdict h-'+h.lv+'"><div class="ring">'+icon+
+      '</div><div class="txt"><b>'+esc(title)+'</b><span>'+esc(desc)+"</span></div></div>"+
+      '<div class="issues">'+list+"</div>");
+  }
+
+  /* ---------- 概览 ---------- */
+  function renderOverview(d){
+    var o=d.overview||{}, H=d.history||{}, sm=o.samples||{}, ht=tail(H.t);
+    // 2026-10-09 单位与口径统一（本次改造的核心之一）：
+    //   ① 权威 QPS = o.qps_total（AGH 窗口计数差分，单位已是 QPS）——大数字与折线**都用它**，
+    //      不再用 "近 60 秒到达条数 ÷ 60"（那是 querylog 样本，会被取数上限截断）。
+    //   ② 两个量必须**分别命名、分别标基准**：qps_total 是速率（QPS），queries_1m 是条数（条/分钟）。
+    //      旧版把同一个 H.queries_1m 在一处 ÷60 当 QPS、另一处当条数画，同屏对读必然"数值对不上"。
+    var _authQ=(o.qps_total!=null&&o.qps_total!==undefined);
+    var perfQ=_authQ?o.qps_total:((o.queries_1m||0)/60);
+    var perfP50=o.latency_all_p50_ms, perfP99=o.latency_all_p99_ms;
+    txt("cs-qps",perfQ!=null?num(perfQ,1):"—"); txt("cs-lat",(perfP50!=null?fmtMs(perfP50):"—")+" / "+(perfP99!=null?fmtMs(perfP99):"—")); txt("cs-cache",o.cache_hit_pct!=null?num(o.cache_hit_pct,1)+"%":"—"); txt("cs-refresh",new Date((d.ts||Date.now()/1000)*1000).toLocaleTimeString());
+    // 2026-10-09 口径澄清：perfQ 是**最近 60 秒到达量 ÷ 60**（不是统计窗口均值），所以大数字写
+    // "当前 QPS" 是对的；但原来这句脚注是残句（"… · 最近一分钟" 后面没数字），既没给出条数、
+    // 也没说明它与"窗口请求"是两个不同窗口。同时 0 是合法值（这一分钟真没流量），不该显示成 "—"。
+    // 注意：`win` 的正式定义在下面（L~1282），而本行比它更早执行 —— 所以这里必须用局部副本，
+    // 否则 winLabel(win) 会拿到 undefined 并渲染出"0 分钟窗口"（2026-10-09 实测踩到）。
+    var _winNow=d.window_min||60;
+    txt("ov-qps", num(perfQ,1));
+    txt("ov-qps-sub", (_authQ
+      ? ("窗口计数差分：AGH num_dns_queries "+num(o.agh_q_total||0)+" 条 ÷ Δt "+(o.qps_dt_s!=null?num(o.qps_dt_s,1):"–")+"s"+
+         (o.qps_valid===false?" · ⚠ 本区间差分无效（AGH 可能重启）":""))
+      : "近 60 秒 "+num(o.queries_1m||0)+" 条 ÷ 60（回退口径：累计计数暂不可用）")
+      +" · 另计：近 60 秒到达 "+num(o.queries_1m||0)+" 条 · "+winLabel(_winNow)+"窗口 "+num(o.queries||0)+" 条"
+      +"（窗口值受 querylog 取数上限影响，见下方截断披露）");
+    spark("sp-ov-qps",tail((H.qps_total&&H.qps_total.length)?H.qps_total:(H.queries_1m||[]).map(function(x){return x==null?null:x/60;})),
+          {color:"var(--queries)",ts:ht,fmt:function(x){return num(x,1)+" QPS"}});
+    txt("perf-qps", num(perfQ,1)); txt("perf-qps-sub", (_authQ?"窗口计数差分（AGH num_dns_queries ÷ Δt "+(o.qps_dt_s!=null?num(o.qps_dt_s,1):"–")+"s）":"近 60 秒 "+num(o.queries_1m||0)+" 条 ÷ 60")+" · "+winLabel(_winNow)+"窗口 "+num(o.queries||0)+" 条 · 窗口内覆盖 "+num(o.window_covered_min||0,1)+" 分钟");    txt("perf-lat", (perfP50!=null?fmtMs(perfP50):"—")+" / "+(perfP99!=null?fmtMs(perfP99):"—")); txt("perf-lat-sub", "P50 / P99 · 含缓存命中");
+    txt("perf-cache", o.cache_hit_pct!=null?num(o.cache_hit_pct,1)+"%":"—"); txt("perf-cache-sub", "命中 "+num(o.cache_hits||0)+" · 未命中 "+num(o.cache_misses||0));
+    // 2026-10-09 修复（字段审计发现）：原式读 `o.unbound_servfail`，而该字段当初只写进了 HISTORY、
+    // 没有进 overview ⇒ SERVFAIL 分量**恒为 0**（看起来像"没有 SERVFAIL"，实际是取错了地方）。
+    // 同时如实披露分子/分母的口径：分子来自 AGH 日志尾部（--tail 6000，可能被截断），
+    // 分母是 querylog 样本（可能只覆盖部分窗口）。
+    var _to=(o.upstream_timeouts||0), _sf=o.unbound_servfail, _den=Math.max(1,o.queries||0);
+    // AGH 日志是窗口/尾部样本，而 unbound SERVFAIL 是实例累计值；
+    // 二者不能相加后除以 querylog 窗口，禁止显示伪造的“错误率”。
+    txt("perf-error", "不可合并");
+    txt("perf-error-sub", "AGH 主上游超时 "+num(_to)+" 次（窗口/日志口径） · Unbound SERVFAIL "+
+        (_sf==null?"—":num(_sf))+" 次（累计，非本窗口）");
+
+    var win=d.window_min||60;
+    var nQ=(sm.queries!==undefined?sm.queries:o.queries)||0;
+    var nUp=(sm.upstream!==undefined?sm.upstream:o.upstream_reqs)||0;
+    var nCache=(sm.cache!==undefined?sm.cache:(o.cache_hits||0)+(o.cache_misses||0))||0;
+    var cQ=sm.conf_queries!==undefined?sm.conf_queries:2;
+    var cUp=sm.conf_upstream!==undefined?sm.conf_upstream:2;
+    var cCache=sm.conf_cache!==undefined?sm.conf_cache:2;
+    var LOW="数据不足";
+    // 窗口文案 + **截断披露**：AGH 的 querylog 是按条数截取的（?limit=N），1 小时窗口在突发流量下
+    // 可能拿不满；不写出来就会把"实际只覆盖 40 分钟"当成"1 小时统计"读。
+    txt("ov-window","最近 "+winLabel(win)+(o.window_truncated
+        ?("（⚠ 取数被截断，实际覆盖 "+num(o.window_covered_min||0,1)+" 分钟）")
+        :((o.window_covered_min&&o.window_covered_min<win-2)?("（窗口内仅覆盖 "+num(o.window_covered_min,1)+" 分钟）"):""))
+        +((d.log_source==="file" && d.log_lag_s&&d.log_lag_s>30)?("，日志落盘延迟 "+d.log_lag_s+" 秒"):""));
+    txt("agh-window",winLabel(win));
+    if($("dgp-window")) txt("dgp-window","最近 "+winLabel(win));
+    if($("foot-interval")) $("foot-interval").textContent=d.auto_refresh_s||AUTO;
+
+    // 查询量折线画"每分钟到达量"：**统计窗口累计值**遇到突发流量会变成"急升缓降"的锯齿，口径也更绕
+    // 2026-10-09：原来此处 `var q=tail(H.queries_1m)` 是**死变量**（页面上并没有对应的折线图），
+    // 而"查询量"卡片却写着"折线=每分钟到达量（不是窗口累计）"——文案引用了一张不存在的图，
+    // 且卡片显示的是**被 querylog 取数上限截断的窗口累计值**。已删除该变量并改写卡片文案。
+    var ht=tail(H.t);
+    // 比率类折线用"当前 60 分钟滚动值"（rollRate span=60，与 1 小时统计窗口同窗）：
+    // 单点窗口在小流量下分母只有几十条，直接画会剧烈锯齿
+    var bp=tail(rollRate(H.blocked, H.queries, 60));
+    var chAll=rollRate(H.cache_hits, add2(H.cache_hits, H.cache_misses), 60);
+    var ch=tail(chAll);
+
+    // 查询量：0 就是 0，不算异常
+    txt("ov-queries",num(o.queries));
+    txt("ov-queries-sub",(cQ===0?"窗口内没有任何查询"
+        :("近 "+win+" 分钟共 "+num(o.queries)+" 条：拦截 "+num(o.blocked)+" · 放行 "+num(o.allowed)))
+        +(o.window_truncated
+          ?(" ⚠ 该值已达 querylog 取数上限（窗口内仅覆盖 "+num(o.window_covered_min||0,1)+" 分钟）→已截断，判断负载请以 QPS 卡片的窗口计数差分为准")
+          :(" · 窗口完整（覆盖 "+num(o.window_covered_min||0,1)+" 分钟）")));
+
+    // 拦截率：**优先权威口径** = Δ拦截 ÷ Δ总查询（AGH /control/stats 计数差分），
+    // 它精确、且完全不受 querylog 按条数截断与样本构成影响；样本版仅作对照/降级。
+    // 旧版直接用样本比值，压测一旦占据样本就会出现"KPI 掉到 5%、折线仍是 40%+"的不同源错配。
+    // 2026-10-14：AGH 的 num_* 是**滚动 24 小时窗口**的桶之和，整点最旧桶过期会让总量下降、
+    // 使"Δ拦截 > Δ总查询"成立（实测 568.33%）；后端已改为同一小时桶差分并加了
+    // 0 ≤ Δ拦截 ≤ Δ总查询 的不变量，算不出就返回 null（这里自动退回样本口径）。
+    var bAuth=(o.block_ratio_auth!=null&&o.block_ratio_auth!==undefined);
+    var bVal=bAuth?o.block_ratio_auth:o.block_pct;
+    var bEl=$("ov-block"), bBadge=$("ov-block-pct-badge");
+    if(cQ===0&&!bAuth){
+      txt("ov-block",LOW); txt("ov-block-pct-badge",LOW);
+      if(bEl) bEl.className="num"; if(bBadge) bBadge.className="pct";
+      txt("ov-block-sub","窗口内没有查询可统计");
+    }else{
+      txt("ov-block",num(bVal,1)+"%");
+      txt("ov-block-pct-badge",num(bVal,0)+"%");
+      if(bEl) bEl.className="num"; if(bBadge) bBadge.className="pct";
+      txt("ov-block-sub",(bAuth
+        ? ("窗口计数差分"+(o.qps_delta_src==="agh_hour_bucket_rollover"?"（本区间跨整点，已按两侧小时桶拼接）":"")+
+           "：拦截 "+num(o.agh_b_total||0)+" / 总查询 "+num(o.agh_q_total||0)+"（精确，Δ("+(o.qps_dt_s!=null?num(o.qps_dt_s,1):"–")+"s)）")
+        : ("样本估计：拦截 "+num(o.blocked)+" 条 / 窗口 "+num(o.queries)+" 条"+(cQ===1?"（样本少，仅供参考）":"")))
+        +"；折线="+(bAuth?"拦截率（窗口计数差分，同源，不平滑）":"拦截率（60 点滚动样本，不平滑）"));
+    }
+    spark("sp-ov-block",(H.block_ratio_auth&&H.block_ratio_auth.length)?tail(H.block_ratio_auth):bp,
+          {min:0,max:100,color:"var(--ads)",ts:ht,fmt:fPct,noSmooth:true});
+
+    // 缓存命中率：**优先权威口径** = 1 − Δ(AGH 上游应答数)/Δ(总查询)（AGH 命中缓存时不联系上游）。
+    // 同样精确、不受条数截断影响；样本版（querylog 的 Cached 标志）仅作对照。
+    var cAuth=(o.cache_hit_ratio_auth!=null&&o.cache_hit_ratio_auth!==undefined);
+    var cVal=cAuth?o.cache_hit_ratio_auth:o.cache_hit_pct;
+    var cEl=$("ov-cache"), cBadge=$("ov-cache-pct-badge");
+    if(cCache===0&&!cAuth){
+      txt("ov-cache",LOW); txt("ov-cache-pct-badge",LOW);
+      if(cEl) cEl.className="num"; if(cBadge) cBadge.className="pct";
+      txt("ov-cache-sub","窗口内没有带缓存状态的查询（命中+未命中都为 0），无法计算命中率");
+    }else{
+      txt("ov-cache",num(cVal,1)+"%");
+      txt("ov-cache-pct-badge",num(cVal,0)+"%");
+      if(cEl) cEl.className="num"; if(cBadge) cBadge.className="pct";
+      txt("ov-cache-sub",(cAuth
+        ? "按相邻采样计数差分：命中率 = 1 − Δ上游应答 / Δ放行查询（Δ放行=Δ总查询−Δ拦截）"
+        : ("样本估计：命中 "+num(o.cache_hits)+" · 未命中 "+num(o.cache_misses)+"（共 "+num(nCache)+" 条"+(cCache<2?"，样本少":"")+"）")));
+    }
+    spark("sp-ov-cache",(H.cache_hit_ratio_auth&&H.cache_hit_ratio_auth.length)?tail(H.cache_hit_ratio_auth):ch,
+          {min:0,max:100,color:"var(--cache)",ts:ht,fmt:fPct,noSmooth:true});
+    var userP99=o.latency_all_p99_ms, userP99Valid=nQ>0 && userP99!=null;
+    txt("ov-user-p99",userP99Valid?fmtMs(userP99):"数据不足");
+    txt("ov-user-p99-badge",!userP99Valid?"无样本":(nQ<500?"仅供参考":"窗口 P99"));
+    txt("ov-user-p99-sub","近 "+winLabel(win)+"日志样本 "+num(nQ)+" 条 · 含缓存与过滤应答；每点为当次滚动窗口 P99"+
+      (o.window_truncated?" · 取数截断，仅代表已取样本":"")+
+      (userP99Valid && nQ<500?" · 样本不足 500 条，尾部估计不稳定":""));
+    spark("sp-ov-user-p99",tail(H.latency_all_p99_ms),{min:0,color:"var(--err)",ts:ht,fmt:fmtMs});
+
+    // 2026-10-09 统计口径修正 —— 原来这 3 张卡的大数字取"最近一分钟"的序列值，但统计窗口里
+    // 上游样本每分钟只有 5 条上下（1 小时窗口总量约 4 倍于 15 分钟），而**5 个样本上的 p90 与 p99
+    // 就是该分钟的最大值**：把"5 条里最慢的那条"标成 p99 是伪精度，且与下方"AGH 未命中缓存的请求"
+    // 同名不同窗口。现在：大数字一律取**统计窗口**的分位/计数，折线仍画逐分钟走势，脚注写明窗口与样本量。
+    // 门槛按"尾部至少 5 个观测"的惯例定：p90 需 n≥50、p99 需 n≥500。
+    // 实测教训：上游样本 n=227 时 p99=3208.8ms 而 max=3217.7ms —— 数学上没错，但那是"20 万分之一的尾巴
+    // 只用 2 个点估计"，必须打上"仅供参考"，否则会被当成稳定的尾部指标。
+    var _upN=((o.samples||{}).upstream)||0, _nQ=((o.samples||{}).queries)||0;
+    [["ov-tr-p90","latency_p90_ms","latency_p90_ms",fmtMs,"var(--threats)",50],
+     ["ov-tr-p99","latency_p99_ms","latency_p99_ms",fmtMs,"var(--err)",500]].forEach(function(c){
+      var a=tail(H[c[1]]||[]); spark(c[0],a,{color:c[4],ts:ht,fmt:c[3]});
+      var v=a.filter(function(x){return x!==null&&x!==undefined;});
+      txt(c[0]+"-num",(o[c[2]]==null)?"—":c[3](o[c[2]]));
+      txt(c[0]+"-sub","近 "+winLabel(win)+"分位 · 上游样本 "+num(_upN)+" 条"+
+        (v.length?(" · 逐分钟 "+c[3](Math.min.apply(null,v))+"–"+c[3](Math.max.apply(null,v))):"")+
+        ((_upN&&_upN<c[5])?" · ⚠ 样本不足，仅供参考":""));
+     });
+    (function(){ var a=tail(H.io_timeout||[]); spark("ov-tr-timeout",a,{color:"var(--err)",ts:ht,fmt:fCount});
+      var v=a.filter(function(x){return x!==null&&x!==undefined;});
+      txt("ov-tr-timeout-num",fCount(o.upstream_timeouts||0));
+      txt("ov-tr-timeout-sub","近 "+winLabel(win)+"新增 "+num(o.upstream_timeouts||0)+" 次（窗口查询 "+num(_nQ)+" 条）"+
+        (v.length?(" · 逐分钟 "+fCount(Math.min.apply(null,v))+"–"+fCount(Math.max.apply(null,v))):""));
+    })();
+
+    // 延迟：样本为 0 时不能把 0 ms 当成"很快"
+    var vd = cUp===0 ? {t:"数据不足",c:""}
+           : (cUp===1 ? {t:"样本少",c:""}
+           : (o.latency_p50_ms<=250 ? {t:"正常",c:"val-ok"}
+           : (o.latency_p50_ms<=500 ? {t:"偏高",c:"val-warn"} : {t:"异常",c:"val-err"})));
+    var badge=$("ov-lat-badge"), e90=$("ov-lat");
+    if(cUp===0){
+      txt("ov-lat",LOW);
+      if(e90) e90.className="num";
+      txt("ov-lat-sub","窗口内没有需要打上游的请求；折线=p50 走势"+(o.probe_queries?("（已按来源 IP∪QNAME 剔除看板自身探针 "+num(o.probe_queries)+" 条）"):""));
+    }else{
+      txt("ov-lat",fmtMs(o.latency_p50_ms));
+      if(e90) e90.className="num "+vd.c;
+      txt("ov-lat-sub","样本 "+num(nUp)+" 条 · p90 "+fmtMs(o.latency_p90_ms)+(cUp===1?"（样本少，仅供参考）":"")+
+        (o.probe_queries?(" · 已按来源 IP ∪ QNAME 剔除看板自身探针 "+num(o.probe_queries)+" 条"):"")
+        +(o.probe_hot_not_excluded?(" · 其中 www.qq.com 热名查询 "+num(o.probe_hot_not_excluded)+" 条（同名查询无法区分，按设计计入样本）"):"")
+        +(o.probe_queries_by_ip_legacy?(" · 来源 127.0.0.1 共 "+num(o.probe_queries_by_ip_legacy)+" 条已计入（不再按 IP 剔除，避免误杀经 nginx 的真实流量）"):"")+"；折线=p50 走势");
+    }
+    if(badge){
+      badge.textContent=vd.t; badge.className="pct "+vd.c;
+      badge.title="展示分级：p50 ≤250ms 正常，≤500ms 偏高，>500ms 异常；正式告警还要求连续窗口和最少 30 个真实上游样本；恢复需 p50 连续 3 个采集点低于 200ms。";
+    }
+    spark("sp-ov-lat",tail(H.latency_p50_ms),{color:"var(--threats)",ts:ht,fmt:fmtMs});
+    txt("ov-samples",cUp===0?"0":num(nUp));
+    var ll=d.layer_latency||{}, lh=$("layer-latency");
+    // 2026-10-09：分位不足时不能只写"样本不足"就完事——同时给出 max（极值不需要样本量门槛），
+    // 并且**必须**在渲染前做空值判断：fmtMs(undefined) 会直接抛 TypeError 打断整页渲染。
+    var _LBL={DoQ:"DoQ1（aghdq→NextDNS）",dnsguard:"dnsguard :5356 探针通道",DNSCrypt:"dnscrypt-proxy 本机 :5353"};
+    if(lh){ var parts=[]; ["DoQ","dnsguard","DNSCrypt"].forEach(function(k){ var z=ll[k]||{};
+      var qv=(z.p90_ms==null)
+        ? ('p90/p99 样本不足（n<10 难估分位）· 最大 '+(z.max_ms==null?"—":fmtMs(z.max_ms)))
+        : ('p90 '+fmtMs(z.p90_ms)+' · p99 '+(z.p99_ms==null?'样本不足（n<100）':fmtMs(z.p99_ms)));
+      parts.push('<div class="st"><div class="label">'+(_LBL[k]||k)+'</div><b>'+fmtMs(z.p50_ms)+'</b><small>'+qv+' · n '+num(z.n||0)+'</small></div>'); }); lh.innerHTML=parts.join(""); }
+
+    // 正常请求分位：包含缓存命中，排除随机冷查询探针。
+    var normalQ = [
+      ["normal-p50", o.latency_all_p50_ms, 50, 150, "normal-p50-sub"],
+      ["normal-p90", o.latency_all_p90_ms, 150, 500, "normal-p90-sub"],
+      ["normal-p99", o.latency_all_p99_ms, 500, 1500, "normal-p99-sub"]
+    ];
+    normalQ.forEach(function(x){
+      var e=$(x[0]), sub=$(x[4]);
+      if(!e) return;
+      if(cQ===0 || x[1]===null || x[1]===undefined){ e.textContent=LOW; e.className=""; if(sub) sub.textContent="等待真实请求样本"; return; }
+      e.textContent=fmtMs(x[1]); e.className="num "+latClass2(x[1],x[2],x[3]);
+      if(sub) sub.textContent=(x[1]<=x[2]?"正常范围内":(x[1]<=x[3]?"偏高，需持续观察":"异常，需定位慢模块"));
+    });
+
+    // 超时：0 次是真实的好消息，但要说明这是"最近 1 小时"
+    var _nQ=(sm.queries!==undefined?sm.queries:o.queries)||0;
+    txt("ov-clients",(_nQ>0?num(o.clients):"0"));
+
+    // 分位：样本不足时不把 0 当成"很快"
+    [["ov-p50w",o.latency_p50_ms,250,500],["ov-p90w",o.latency_p90_ms,600,1200],
+     ["ov-p99",o.latency_p99_ms,1500,3000],["ov-max",o.latency_max_ms,null,null]].forEach(function(p){
+      var e=$(p[0]); if(!e) return;
+      if(cUp===0){ e.textContent=LOW; e.className=""; return; }
+      e.textContent=fmtMs(p[1]);
+      e.className=(p[2]===null)?"":latClass2(p[1],p[2],p[3]);
+    });
+    var lg2=(d.agh||{}).log||{};
+    var mainTo=lg2.io_timeout_main||0, fbTo=lg2.io_timeout_fallback||0;
+    txt("ov-timeouts",num(mainTo));
+    var toSub=$("ov-timeouts-sub");
+    if(toSub){
+      toSub.textContent = mainTo
+        ? ("查询超时数（主上游，无兜底）· "+num(mainTo)+" 次失败交换")
+        : (_nQ===0 ? "近 "+win+" 分钟无查询" : "近 "+win+" 分钟无超时");
+      toSub.title = "一次上游超时 = AGH 等不到主上游应答后放弃（实测交换约 10s，比 upstream_timeout=5s 长，说明 AGH 内部有重试）。本机未配置兜底上游（fallback_dns=[]），超时直接 SERVFAIL。此值按失败交换计数——一次超时在 AGH 日志里会出现 2 行（response received / exchange failed），按行计数会虚高约一倍。";
+    }
+    txt("ov-allp90",cQ===0?LOW:fmtMs(o.latency_all_p90_ms));
+    txt("ov-clients",num(o.clients));
+    txt("ov-upstream",num(o.upstream_reqs));
+
+    var tb=$("timeout-badge");
+    if(tb){
+      // 与健康检查同一判据：只有"超时尝试数 ≈ 上游请求数"（几乎每个查询都没应答）才提示。
+      // 常规超时——机场客户端轮询、测速突发——不打扰，数值在概览分位卡与走势区随时可查。
+      if(nUp>=20 && (mainTo+fbTo)>=0.8*nUp){
+        tb.classList.remove("hidden");
+        txt("timeout-n",mainTo);
+        tb.title="上游大面积超时："+nUp+" 个上游请求产生了 "+(mainTo+fbTo)+" 次超时尝试，主上游可能故障。";
+      }else tb.classList.add("hidden");
+    }
+  }
+
+  /* ---------- 链路 ---------- */
+  function chainRow(list,arrow){
+    var parts=[];
+    list.forEach(function(n,i){
+      if(i) parts.push('<div class="arrow'+(arrow==="⇢"?" fb":"")+'">'+arrow+'</div>');
+      parts.push('<div class="node"><div class="nm"><span class="sdot '+stClass(n.status)+'"></span>'+esc(n.name)+'</div>'+
+        '<div class="sb" title="'+esc(n.sub)+'">'+esc(n.sub)+'</div><div class="dt" title="'+esc(n.detail)+'">'+esc(n.detail)+'</div></div>');
+    });
+    return parts.join("");
+  }
+  function renderChain(d){
+    var c=d.chain||{};
+    var lead=document.querySelector(".overview-lead");
+    if(lead && c.architecture) lead.innerHTML="<b>当前采集链路：</b>"+esc(c.architecture)+
+      "。CN 名单分支 → B → 国内加密 DoT。verifier 按需核验；DNSCrypt 是辅助通道。"+
+      "配置采集与探针不能证明每个请求都经过同一路径。<span id=\"dnsdist-note\"></span>";
+    // 2026-10-09：导语里的 dnsdist 状态改为由后端数据驱动（它已 10-07 停用并 masked；
+    // 将来重新启用时会自动改口，不会像之前那样留下一句写死的陈旧文案）。
+    var _dn=document.getElementById("dnsdist-note");
+    if(_dn) _dn.textContent = (c.dnsdist_active===true)
+      ? "检测到 dnsdist active；接入关系需另核对，:5356 当前是 guard 探针通道"
+      : "dnsdist 未运行；:5356 是 guard 探针通道";
+    var main=c.main||c.nodes||[];
+    var fb=c.fallback||[];
+    if(!main.length){ html("chain-box",'<div class="sub">无数据</div>'); return; }
+    /* 列数按节点数动态生成（2n-1：n 个节点 + n-1 个箭头），避免节点数变化时被挤成细条 */
+    var cols=[];
+    for(var i=0;i<main.length;i++){ if(i) cols.push("20px"); cols.push("minmax(170px,1fr)"); }
+    var tpl=' style="grid-template-columns:'+cols.join(" ")+'"';
+    /* 兜底行起点对齐到主线里 agh 节点所在列 */
+    var aghIdx=-1;
+    for(var j=0;j<main.length;j++){ if(main[j].id==="agh"){ aghIdx=j; break; } }
+    var span=(aghIdx>0)?(aghIdx*2+1):1;
+    var out='<div class="chain-row"><span class="ctag">主线</span><div class="chain"'+tpl+'>'+chainRow(main,"→")+"</div></div>";
+    if(fb.length){
+      out+='<div class="chain-row fb"><span class="ctag">'+esc(c.side_label||"兜底")+'</span><div class="chain"'+tpl+'><div class="cspace" style="grid-column:1/'+span+'"></div>'+chainRow(fb,"⇢")+"</div>"+
+        (c.fallback_note?'<div class="cnote">'+esc(c.fallback_note)+"</div>"+
+           (c.fallback_note.length>120?'<button type="button" class="inline-more" title="展开完整说明">展开</button>':""):"")+"</div>";
+    }
+    var ext=c.external||[];
+    var ax=c.aux||[];
+    if(ax.length){
+      // 2026-10-09：verifier / dnscrypt-proxy / aghdq(DoQ) / 境外加密解析器 不在默认解析路径上，
+      // 单独成行，避免被读成"主链路先过 verifier、再经 dnscrypt 出口"。
+      var acols=[];
+      for(var q2=0;q2<ax.length;q2++){ if(q2) acols.push("20px"); acols.push("minmax(170px,1fr)"); }
+      out+='<div class="chain-row fb"><span class="ctag">'+esc(c.aux_label||"旁路 / 辅助")+'</span><div class="chain" style="grid-template-columns:'+acols.join(" ")+'">'+chainRow(ax,"·")+"</div></div>";
+    }
+    if(ext.length){
+      var ecols=[];
+      for(var q=0;q<ext.length;q++){ if(q) ecols.push("20px"); ecols.push("minmax(170px,1fr)"); }
+      out+='<div class="chain-row fb"><span class="ctag">'+esc(c.external_label||"外部参照")+'</span><div class="chain" style="grid-template-columns:'+ecols.join(" ")+'">'+chainRow(ext,"·")+"</div></div>";
+    }
+    html("chain-box",out);
+    (function(){
+      var o=(d&&d.observe)||null, box=document.getElementById("observe-box");
+      if(!box) return;
+      if(!o){ box.innerHTML='<span class="muted">无数据</span>'; return; }
+      var f=o.devfp||{}, nd=f.ndpi||{};
+      var sdotc=function(s){ return '<span class="sdot '+stClass(s)+'"></span>'; };
+      var l1='<div>'+sdotc(o.nginx_stream&&o.nginx_stream.active?'ok':'error')+' <b>Nginx stream</b>（DoT :853 TLS 终结 → AGH DoT（宿主 8854 → 容器 853），后端证书校验）· '+esc((o.nginx_stream||{}).brief||'-')+'</div>';
+      var l2='<div style="margin-top:6px">'+sdotc(f.ok?'ok':'warn')+' <b>devfp</b> 设备指纹看板 /devices/ · '+(f.ok?('设备 '+num(f.devices||0)+' · 连接 '+num(f.conns||0)+' · DoH 请求 '+num(f.doh_requests||0)):'<span class="val-warn">采集不可用（数据源未就绪，非「0 台设备」）</span>')+'</div>';
+      var t = nd.flows? ('最近一轮 '+num(nd.flows)+' 条流，已归属 '+num(nd.attributed||0)+' 条'+((nd.protos||[]).length? ' · 协议 '+nd.protos.map(function(p){return p.proto+'×'+p.n;}).join("、"):'')) : '暂无数据（每 30 分钟一轮）';
+      var l3='<div style="margin-top:6px">'+sdotc(nd.flows?'ok':'idle')+' <b>nDPI</b> 协议/分类/风险判定 · '+esc(t)+'</div>';
+      var note=o.note? '<div class="label" style="margin-top:8px;font-weight:400">'+esc(o.note)+'</div>':'';
+      box.innerHTML=l1+l2+l3+note;
+    })();
+  }
+
+  /* ---------- 探测 ---------- */
+  function renderProbes(d){
+    var ps=d.probes||[];
+    if(!ps.length){ html("probe-rows",'<tr><td colspan="6" class="sub">无数据</td></tr>'); return; }
+    var rows=[],bars=[],max=1;
+    ps.forEach(function(p){ if((p.p50_ms||0)>max) max=p.p50_ms||0; });
+    ps.forEach(function(p){
+      var cls = p.status==="ok" ? "val-ok" : (p.status==="warn" ? "val-warn" : "val-err");
+      rows.push('<tr style="--s:0%"><td data-label=""><b>'+esc(p.target)+'</b><div class="sub" style="margin:2px 0 0">'+esc(p.label)+
+        '<span class="opt"> · '+esc(p.addr)+'</span></div></td>'+
+        '<td class="mono opt addr" data-label="地址">'+esc(p.addr)+'</td>'+
+        '<td class="num '+cls+'" data-label="p50">'+fmtMs(p.p50_ms)+
+        '</td><td class="num" data-label="最大">'+fmtMs(p.max_ms)+
+        '</td><td class="mono res" data-label="结果">'+esc(p.rcode)+
+        '</td><td data-label="状态"><span class="sdot '+stClass(p.status)+'"></span></td></tr>');
+      var w=Math.max(2,Math.round((p.p50_ms||0)/max*100));
+      var color = p.status==="ok"?"var(--accent)":(p.status==="warn"?"var(--warn)":"var(--err)");
+      bars.push('<div class="hbar"><span class="t">'+esc(p.target)+" · "+esc(p.label)+'</span>'+
+        '<span class="b"><i style="width:'+w+'%;background:'+color+'"></i></span>'+
+        '<span class="v">'+fmtMs(p.p50_ms)+"</span></div>");
+    });
+    html("probe-rows",rows.join(""));
+    html("probe-bars",bars.join(""));
+  }
+
+  /* ---------- AGH ---------- */
+  function renderAgh(d){
+    var a=d.agh||{},c=a.config||{};
+    html("agh-cfg-grid",[
+      kvRow("容器",(a.container||"—")+" · "+(a.uptime||"—")+" · "+(a.mem||"—")),
+      kvRow("主上游",asList(c.upstream_dns).map(fmtUp).join(", ")||"—"),
+      kvRow("兜底上游",asList(c.fallback_dns).map(fmtUp).join(", ")||"—"),
+      kvRow("upstream_mode",c.upstream_mode||"—"),
+      kvRow("upstream_timeout",c.upstream_timeout_s||"—"),
+      kvRow("fastest_timeout",(c.fastest_timeout||"—")+(c.upstream_mode==="fastest_addr"?"":"（仅 fastest_addr 模式生效；当前 "+(c.upstream_mode||"—")+"）")),
+      kvRow("缓存",(c.cache_enabled?"开启":"关闭")+" · "+fmtBytes(c.cache_size_b)+(c.cache_optimistic?" · optimistic":"")),
+      kvRow("缓存 TTL min / max",(c.cache_ttl_min===undefined?"—":c.cache_ttl_min+"s")+" / "+
+        (c.cache_ttl_max===undefined?"—":(String(c.cache_ttl_max)==="0"?"不设上限（跟随上游 TTL）":c.cache_ttl_max+"s"))+
+        // 2026-10-09 事实核查：原来这里写"陈旧毒缓存窗口 ≤60s"，但那是**死分支**（仅当 cache_ttl_max===60
+      // 才显示，而实测 cache_ttl_max=86400）且**概念挂错了旋钮**：AGH 的陈旧应答窗口由 optimistic 缓存决定
+      // （实测答案 TTL 30s / 最大陈旧 10m），与 cache_ttl_max 无关。改为按后端下发的真实值披露。
+        (c.cache_optimistic?(c.cache_optimistic_max_age?("（optimistic：答案 TTL "+(c.cache_optimistic_answer_ttl||"?")+"，最多陈旧 "+c.cache_optimistic_max_age+"）"):"（optimistic 已开，陈旧上限未取到）"):"")),
+      kvRow("AGH 过期缓存",c.cache_optimistic?"开启（仅 AGH 层，非全链路上限）":"关闭（配置中的陈旧参数不生效；Unbound 仍需单独查看）"),
+      kvRow("DNSSEC 验证",c.enable_dnssec?"开启":"关闭",c.enable_dnssec?"val-ok":"val-warn"),
+      kvRow("被拦域名返回什么",
+        (c.blocking_mode==="nxdomain"? "NXDOMAIN（域名不存在）"
+          : c.blocking_mode==="default"? "0.0.0.0 / ::（指向空地址）"
+          : c.blocking_mode==="refused"? "REFUSED（拒绝）"
+          : (c.blocking_mode||"—"))
+        + (c.blocked_response_ttl? (" · 缓存 "+c.blocked_response_ttl+"s") : "")
+        + (c.blocking_mode==="default"? "　⚠️ Linux 客户端会把 0.0.0.0 当 localhost 去连" : ""),
+        (c.blocking_mode==="default"?"val-warn":"")),
+      kvRow("EDNS Client Subnet",c.edns_client_subnet?"开启":"关闭"),
+      kvRow("限速 / goroutines",String(c.ratelimit===undefined?"—":c.ratelimit)+" / "+(c.max_goroutines||"—")),
+      kvRow("容器内 DNS 端口",c.dns_port||"—")
+    ].join(""));
+
+    var ups=a.top_upstreams||[], upTotal=ups.reduce(function(s,u){return s+(u.count||0);},0)||1;
+    html("agh-up-rows", ups.length?ups.map(function(u){
+      var s=share(100*(u.count||0)/upTotal);
+      return '<tr style="--s:'+s+'%"><td class="mono" data-label="上游">'+esc(u.addr)+
+        '</td><td class="num" data-label="请求">'+num(u.count)+
+        '</td><td class="num val-ok" data-label="命中">'+num(u.cached)+
+        '</td><td class="num val-warn" data-label="未命中">'+num(u.miss)+"</td></tr>";
+    }).join("") : '<tr><td colspan="4" class="sub">窗口内无上游请求</td></tr>');
+
+    // 2026-10-09：客户端改用 AGH 窗口计数差分（带 QPS、不受 querylog 按条数截断影响），
+    // 并明确标注 **DoT 侧真实客户端 IP 未透传**（nginx stream → docker-proxy 使 AGH 只看到网关
+    // 172.18.0.1，家侧所有 DoT 设备被合并成一条）——这正是"不能按 IP 识别探针"的同一根因。
+    var _ov=d.overview||{}, cr=_ov.clients_rate;
+    if(cr&&cr.length){
+      var crTot=cr.reduce(function(s,x){return s+(x.total||0);},0)||1;
+      html("agh-client-rows", cr.map(function(x){
+        var s=share(100*(x.total||0)/crTot);
+        return '<tr style="--s:'+s+'%"><td class="mono" data-label="客户端">'+esc(x.ip)+
+          (x.note?('<div class="sub opt" style="margin:2px 0 0">'+esc(x.note)+'</div>'):'')+
+          '</td><td class="num" data-label="QPS">'+num(x.qps,2)+
+          '</td><td class="num" data-label="累计">'+num(x.total)+
+          '</td><td class="num opt share" data-label="占比">'+num(s)+"%</td></tr>";
+      }).join("")
+      +((_ov.clients_note)?('<tr><td colspan="4" class="sub">'+esc(_ov.clients_note)+'</td></tr>'):''));
+    } else {
+      var cl=a.top_clients||[], clTotal=cl.reduce(function(s,x){return s+(x.queries||0);},0)||1;
+      html("agh-client-rows", cl.length?cl.map(function(x){
+        var s=share(100*(x.queries||0)/clTotal);
+        return '<tr style="--s:'+s+'%"><td class="mono" data-label="客户端">'+esc(x.ip||x.ecs)+
+          '</td><td class="num" data-label="查询数">'+num(x.queries)+
+          '</td><td class="num opt share" data-label="占比">'+num(s)+"%</td></tr>";
+      }).join("") : '<tr><td colspan="4" class="sub">无数据</td></tr>');
+    }
+
+    var sl=a.top_slow||[], slMax=(sl[0]&&sl[0].ms)||1;
+    html("agh-slow-rows", sl.length?sl.map(function(s0){
+      var s=share(100*(s0.ms||0)/slMax);
+      return '<tr style="--s:'+s+'%"><td class="mono" data-label="">'+esc(s0.host)+
+        '<div class="sub opt" style="margin:2px 0 0">'+esc(s0.type)+" · "+esc(s0.upstream)+"</div></td>"+
+        '<td class="opt" data-label="类型">'+esc(s0.type)+
+        '</td><td class="num '+latClass(s0.ms)+'" data-label="耗时">'+fmtMs(s0.ms)+
+        '</td><td class="mono opt" data-label="上游">'+esc(s0.upstream)+"</td></tr>";
+    }).join("") : '<tr><td colspan="4" class="sub">窗口内没有 &gt;500ms 的未命中请求</td></tr>');
+
+    var bt=a.by_type||[], btTotal=bt.reduce(function(s,t){return s+(t.count||0);},0)||1;
+    html("agh-type-rows", bt.length?bt.map(function(t){
+      var s=share(100*(t.count||0)/btTotal);
+      return '<tr style="--s:'+s+'%"><td data-label="">'+esc(t.type)+' <span class="share">'+num(s)+'%</span></td>'+
+        '<td class="num" data-label="数量">'+num(t.count)+
+        '</td><td class="num" data-label="p90">'+fmtMs(t.p90_ms)+"</td></tr>";
+    }).join("") : '<tr><td colspan="3" class="sub">无数据</td></tr>');
+
+    var lg=a.log||{};
+    // 2026-10-09 事实核查修正：
+    //  ① "主上游超时"必须**按失败交换计数**（含 `upstream_type=main` 且含 `i/o timeout` 的行）：
+    //     一次超时会产生 2 行日志（response received … / exchange failed …），按行计数会虚高约一倍
+    //     （24h 实测：行 56 vs 失败交换 28）。
+    //  ② AGH **未配置兜底上游**（fallback_dns=[]）⇒ 不存在"兜底超时"这个指标，直接写明"未配置"，
+    //     不要留一个恒为 0 的数字让人误读成"兜底通道很健康"。
+    //  ③ `error` 行原先统计全部 [error]，实测窗口内 3 条全是**看板自己凭据错误登录 AGH** 的认证失败，
+    //     会被误读成 dnsproxy 故障；这里拆开显示。
+    html("agh-log-grid",[
+      kvRow("主上游超时（按失败交换计数）",num(lg.io_timeout_main),lg.io_timeout_main?"val-warn":"val-ok"),
+      kvRow("dnsproxy 错误行",num(lg.error_lines_dnsproxy),lg.error_lines_dnsproxy?"val-warn":"val-ok"),
+      kvRow("其它错误行（含看板自身登录失败）",num(lg.error_lines_other)),
+      kvRow("兜底上游","未配置（主上游失败时，AGH 无法切换兜底）")
+    ].join(""));
+  }
+
+  /* ---------- unbound ---------- */
+  function pctOf(a,b){ return (b>0 && a!==null && a!==undefined) ? ((100.0*a/b).toFixed(2)+"%") : "—"; }
+  function dlt(v){
+    if(v===null||v===undefined||isNaN(v)) return "—";
+    v=Number(v);
+    if(!isFinite(v)) return "—";
+    return v<0 ? "基线变化（增量不可比）" : ("+"+num(v));
+  }
+  function ubStatRows(st,dl){
+    st=st||{}; dl=dl||{};
+    var sec=st.secure||0, bog=st.bogus||0, q=st.queries||0, sf=st.servfail;
+    var win=dl.span_s?Math.round(dl.span_s/60):null;
+    var rows=[
+      ["缓存命中率",num(st.hit_pct,1)+"%"],["命中 / 未命中",num(st.cachehits)+" / "+num(st.cachemiss)],
+      // 2026-10-09 事实核查：原来这两个分支**完全对调** —— mode==="forward" 渲染成"直接递归 + DNSSEC 验证"、
+      // mode==="recursive" 渲染成"裸递归"。实测 A 的 list_forwards 为空（真身：直接递归 + DNSSEC 验签），
+      // B 有 6 条国内 DoT forward（真身：转发）。按实测改写，并删掉会把 A 说成无 DNSSEC 的"裸递归"。
+      /* 2026-10-09 修正（前后不一致）：原来**不分模式**都渲染"转发模式 / 转发目标"两行，
+         于是递归型的 unbound A 会显示"转发目标 —"，看着像"转发目标取不到"；而同一页面的
+         导语、链路节点副标题、本卡副标题都写"A 直接递归（无 forward-zone）"。
+         现在按实测模式自适应：递归实例不再出现"转发目标"行（值为 null 的行会被过滤掉）。 */
+      ["解析方式",(st.mode==="forward"?"转发（实际目标见 forward-addr；本地 DNSSEC 验签）":(st.mode==="recursive"?"直接递归（从根逐级查询，无 forward-zone）+ DNSSEC 验签":"—"))],
+      ["转发目标",(st.mode==="forward"?(st.forwards&&st.forwards.length?st.forwards.join(" · "):"—"):null)],
+      // 2026-10-09 口径：unbound 的 requestlist.avg 是"自启动以来的平均队列长度"，
+      // 而 requestlist.max 是"历史最高水位"——一个是均值、一个是极值，且都以自启动为基准。
+      // 原来只写 "avg / max" 容易被读成"当前队列的平均/峰值"。这里把两者都标清基准。
+      ["请求队列（自启动基准）",(st.queue_avg===undefined?"—":"平均 "+st.queue_avg)+" 条 · 历史峰值 "+num(st.queue_max)+" 条"],
+      // 不再报 bogus/(secure+bogus)：分母只覆盖带 DNSSEC 状态的应答，天然高占比，读不出健康度
+      ["验签 通过 / 无法完成",num(sec)+" / "+num(bog)+"（占查询 "+pctOf(sec,q)+" / "+pctOf(bog,q)+"）"],
+      ["验签失败 rrset（真正的拒签）",(st.rrset_bogus===undefined?"—":num(st.rrset_bogus))+" 累计 ｜ 近 "+(win||"?")+" 分钟 "+dlt(dl.rrset_bogus)],
+      ["SERVFAIL / 占查询",num(sf)+" / "+pctOf(sf,q)+" 累计 ｜ 近 "+(win||"?")+" 分钟 "+dlt(dl.servfail)],
+      ["窗口增量（bogus / 总查询）",dlt(dl.bogus)+" / "+dlt(dl.queries)+" ｜ 采样 "+num(dl.samples)],
+      ["递归回复数（累计；A、B 都会上报，与实例是递归还是转发无关）",num(st.recursion_replies)],["预取 / 过期直答",num(st.prefetch)+" / "+num(st.zero_ttl)],
+      ["缓存占用",fmtBytes(st.mem_message_b)+" / "+fmtBytes(st.mem_rrset_b)],["运行时长",fmtDur(st.uptime_s)]
+    ];
+    return '<div class="kv">'+rows.filter(function(r){ return r[1]!==null; }).map(function(r){ return kvRow(r[0],r[1]); }).join("")+"</div>";
+  }
+  /* Unbound time.histogram uses fixed exponential bins and counts requests that require upstream processing; pure cache hits are excluded. Merge into six readable bands. */
+  function ubHistogram(hist){
+    var BANDS=[[0,1,"<1ms"],[1,10,"1–10ms"],[10,50,"10–50ms"],[50,200,"50–200ms"],
+               [200,1000,"0.2–1s"],[1000,1e9,">1s"]];
+    var acc=[0,0,0,0,0,0], total=0;
+    (hist||[]).forEach(function(h){
+      var t=Number(h.to_ms)||0, c=Number(h.count)||0;
+      for(var i=0;i<BANDS.length;i++){
+        if(t<=BANDS[i][1]||i===BANDS.length-1){ acc[i]+=c; total+=c; break; }
+      }
+    });
+    if(!total) return '<div class="sub">暂无耗时样本</div>';
+    var max=Math.max.apply(null,acc)||1;
+    return BANDS.map(function(b,i){
+      if(!acc[i]) return "";
+      var w=Math.round(acc[i]/max*100);
+      var pctv=(100.0*acc[i]/total).toFixed(1);
+      return '<div class="hbar"><span class="t">'+b[2]+'</span>'+
+        '<span class="b"><i style="width:'+Math.max(2,w)+'%"></i></span>'+
+        '<span class="v">'+acc[i]+'<span class="hshare"> '+pctv+'%</span></span></div>';
+    }).join("")+'<div class="sub" style="margin-top:8px">共 '+total+' 次解析（纯缓存命中不计入）</div>';
+  }
+  function ubConfig(c){
+    var keys=[["num-threads","num_threads"],["msg-cache","msg_cache_size"],["rrset-cache","rrset_cache_size"],
+      ["prefetch","prefetch"],["过期应答（serve-expired）","serve_expired"],["最大过期年龄（秒）","serve_expired_ttl"],
+      ["等待新答后才用过期答（毫秒）","serve_expired_client_timeout"],
+      ["use-caps-for-id","use_caps_for_id"],["qname-minimisation","qname_minimisation"],
+      ["aggressive-nsec","aggressive_nsec"],["IPv6 出站传输（关闭不等于禁止 AAAA）","do_ip6"],["cache-min-ttl","cache_min_ttl"]];
+    return '<div class="kv">'+keys.map(function(k){
+      var v=c[k[1]];
+      if(typeof v==="boolean") v=v?"是":"否";
+      return kvRow(k[0], v===undefined?"—":v);
+    }).join("")
+      + (c.forward_addr&&c.forward_addr.length
+          ? '<div class="kvrow"><span class="k">forward-addr</span><span class="v mono" style="font-size:11.5px">'+
+            esc(c.forward_addr.join(" · "))+"</span></div>"
+          : "")
+      + "</div>";
+  }
+  function renderUnbound(d){
+    var list=d.unbound||[];
+    if(!list.length){ html("ub-box",'<div class="card sub">无数据</div>'); return; }
+    html("ub-box",list.map(function(u){
+      var st=u.stats||{},inf=u.infra||{},ci=u.container_info||{};
+      var health = ci.health && ci.health!=="-"?ci.health:(ci.status||"-");
+      var hcls = (health==="healthy"||health==="running")?"val-ok":"val-warn";
+      var tops=inf.top||[], topMax=(tops[0]&&tops[0].rtt_ms)||1;
+      var top=tops.map(function(t){
+        var s=share(100*(t.rtt_ms||0)/topMax);
+        return '<tr style="--s:'+s+'%"><td class="mono" data-label="">'+esc(t.addr)+
+          '</td><td class="mono opt" data-label="zone">'+esc(t.zone)+
+          '</td><td class="num '+(t.rtt_ms>500?"val-warn":"")+'" data-label="rtt">'+num(t.rtt_ms)+" ms</td></tr>";
+      }).join("");
+      return '<div class="card">'+
+        '<div class="row"><div><div style="font-weight:600;font-size:15.5px">'+esc(u.name)+
+        ' <span class="pill">'+esc(u.addr)+'</span></div>'+
+        '<div class="sub" style="margin-top:6px">'+esc(String(u.role||"").replace(/\*\*/g,""))+" · 容器 "+esc(u.container)+
+        ' <span class="'+hcls+'">'+esc(health)+'</span> · 内存 '+esc(ci.mem_usage||"—")+"</div></div>"+
+        '<div class="donut" style="--c:var(--accent);--p:'+(Number(st.hit_pct)||0).toFixed(2)+'"><div class="in"><b>'+num(st.hit_pct,1)+"%</b><span>hit</span></div></div></div>"+
+        '<div class="ginner" style="margin-top:22px">'+
+          "<div><div class=\"label\" style=\"margin-bottom:12px\">运行统计</div>"+ubStatRows(st,u.delta)+"</div>"+
+          '<div><div class="label" style="margin-bottom:12px">解析耗时分布（统计需要上游处理的请求；纯缓存命中不计入）</div>'+ubHistogram(st.histogram)+"</div>"+
+        "</div>"+
+        '<div style="margin-top:26px">'+
+          '<div><div class="label" style="margin-bottom:12px">关键配置</div>'+ubConfig(u.config||{})+"</div>"+
+          '<div><div class="label" style="margin-bottom:12px">Unbound infra 缓存 RTT 最高记录（非客户端端到端耗时；已记录 '+num(inf.total)+
+            " 个 · ≥500ms "+num(inf.slow_count)+' 个）</div>'+
+            '<div class="scroll"><table class="resp"><thead><tr><th>地址</th><th class="opt">所属域</th><th class="num">RTT (ms)</th></tr></thead><tbody>'+
+            (top||'<tr><td colspan="3" class="sub">无数据</td></tr>')+"</tbody></table></div></div>"+
+        "</div></div>";
+    }).join(""));
+  }
+
+  /* ---------- dnsguard ---------- */
+  function renderDnsguard(d){
+    var g=d.dnsguard||{}, s=g.stats||{};
+    txt("dg-state", g.active?"运行中":"未运行");
+    function doqTag(name, ok, ms){
+      return name+" "+(ok===true?("正常 "+num(ms,0)+"ms"):(ok===false?"异常":"—"));
+    }
+    txt("dg-sub", (g.listen?"监听 "+(g.listen_addr||"172.18.0.1:5355"):"端口未监听")+" · 内存 "+(g.mem_mb!==null&&g.mem_mb!==undefined?num(g.mem_mb,1)+" MB":"—")+
+        " · 干净候选：DNSCrypt "+doqTag("本机",(d.dnsguard.guard_metrics||{}).fast_dnscrypt_ok,(d.dnsguard.guard_metrics||{}).fast_dnscrypt_ms)+" / DoQ1 "+doqTag("aghdq→NextDNS",g.doq_ok,g.doq_ms)+" / 认证 DoT×3（DoQ2 已停用）");
+    txt("dg-learned", num(g.learned));
+    txt("dg-updated", g.updated? ("最近更新 "+new Date(g.updated*1000).toLocaleString()):"—");
+    txt("dg-redirect", num(s.redirect||0));
+    // 短摘要只放"总量 + 命中"，细节全部进 dg-grid（旧的 run-on 长串会把 <b> 当纯文本显示）
+    var _hitSum=(s.r1||0)+(s.r2||0)+(s.r3||0)+(s.r4||0)+(s.r5||0)+(s.r7||0);
+    txt("dg-q", ((Number(g.pending_total||0)===0 && g.correct_ok!==false)?"当前无待确认条目（不代表从未发现投毒）":"⚠ 有 "+num(g.pending_total||0)+" 个待确认")+
+        " · 总查询 "+num(s.q||0)+" · 疑似异常 "+num(_hitSum)+" 次 · 可信通道竞速 "+num(s.clean_races||0)+" 次");
+    var dgr=[], _hit=(s.r1||0)+(s.r2||0)+(s.r3||0)+(s.r4||0)+(s.r5||0)+(s.r7||0);
+    dgr.push(kvRow("总查询", num(s.q||0)));
+    dgr.push(kvRow("策略采用计数（历史累计，不等于投毒次数）", "CN "+num(s.policy_adopt_cn||0)+" · A "+num(s.policy_adopt_a||0)+" · 已准入缓存 "+num(s.adm_cache_hit||0)));
+    dgr.push(kvRow("后台预热（历史累计）", "提交 "+num(s.hot_submitted||0)+" · 刷新 "+num(s.hot_refreshed||0)+" · 失败 "+num(s.hot_failed||0)));
+    dgr.push(kvRow("备用源 readiness 判定（计数，不代表此刻状态）", "通过 "+num(s.alt_ready||0)+" · 未就绪 "+num(s.alt_not_ready||0)+" · 跳过 "+num(s.alt_unavailable_skip||0)));
+    dgr.push(kvRow("判据命中合计（R1–R5、R7；不含 R8 核对次数）", num(_hit)+" 次"));
+    dgr.push('<div class="kvsub">判据命中（R1–R7）与地址核对（R8）</div>');
+    dgr.push(kvRow("R1：已知注入地址 / 已确认学习集 / 大厂跨族网段", num(s.r1||0)+" 次", "", "①"));
+    dgr.push(kvRow("主上游答不出、可信通道答得出", num(s.r2||0)+" 次", "", "②"));
+    dgr.push(kvRow("已判定域名：直接走可信通道", num(s.r3||0)+" 次", "", "③"));
+    dgr.push(kvRow("CNAME 伪造特征", num(s.r4||0)+" 次", "", "④"));
+    dgr.push(kvRow("清洗后多采样抖动", num(s.r5||0)+" 次", "", "⑤"));
+    // 2026-10-09 事实核查：guard 的 _stats 里**没有 r6 键**（只有 r1–r5/r7/r7_soft/r8_*），原来 `s.r6||0`
+    // 恒显示 0 —— 一个永远为 0 的"判据统计"会让人误以为 R6 从未命中。R6 的命中实际记入学习/核验计数，
+    // 这里如实说明而不是继续显示 0。（payload 里 r6=null 可佐证。）
+    dgr.push(kvRow("证书对照（R6）", "无独立计数（命中记入学习/核验计数）", "", "⑥"));
+    dgr.push(kvRow("严格网段命中（弱证据：改道但不入黑名单、不 SERVFAIL）",
+        num(s.r7||0)+" 次"+(s.r7_soft?("（保留原答案 "+num(s.r7_soft)+"）"):""), "", "⑦"));
+    // 2026-10-09 修：⑧（地址交叉核对）原来被推在十行之后，与"判据命中（R1–R8）"的 ①–⑦ 分开了，
+    // 读起来像是另一组的指标。R8 同属判据清单，整组（⑧ + 核对结果/加密核对通道/多出来的地址/
+    // IPv6 不一致/可信通道也没地址）移到 ⑦ 之后，保持 ①–⑧ 连续。
+    dgr.push(kvRow("地址交叉核对", num(s.r8_checked||0)+" 次", "", "⑧"));
+    dgr.push(kvRow("核对结果", "一致 "+num(s.r8_agree||0)+" · 改道 "+num(s.r8_adopt||0)+" · 钉住改发 "+num(s.r8_pinned||0)+" · 通道不可用 "+num(s.r8_miss||0)));
+    dgr.push(kvRow("加密核对通道", "成功 "+num(s.r8_auth_ok||0)+" · 不可用 "+num(s.r8_auth_none||0),
+        (Number(s.r8_auth_none)>0?"val-warn":"val-ok")));
+    dgr.push(kvRow("多出来的地址：可疑就换掉／不可疑就保留", num(s.r8_extra||0)+" / "+num(s.r8_extra_soft||0)+" 次"));
+    dgr.push(kvRow("IPv6 不一致（只记录）", num(s.r8_v6_miss||0)));
+    dgr.push(kvRow("可信通道也没地址（只记录）", num(s.r8_noans||0)));
+    var sm=d.security_metrics||g.security_metrics||{};
+    dgr.push(kvRow("DNSSEC 已验证", num(sm.dnssec_validated||0)+" 次", "val-ok"));
+    /* 2026-10-09 问题3：guard 的该计数是"unbound A SERVFAIL"（含上游不可达/DNSSEC 边界拒答），
+       不是验签失败；真实验签失败看 unbound 的"验签失败 rrset"(num.rrset.bogus)。
+       该值 >0 是常态，不能再据此告警。 */
+    dgr.push(kvRow("Unbound SERVFAIL（可能含验签拒绝或上游失败）", num(sm.unbound_servfail_fc||0)+" 次"));
+    dgr.push(kvRow("跨源答案冲突", num(sm.cross_source_conflict||0)+" 次", Number(sm.cross_source_conflict||0)>0?"val-warn":"val-ok"));
+    dgr.push(kvRow("fail-closed 原因", (sm.fail_closed_reason&&sm.fail_closed_reason.length)?sm.fail_closed_reason[sm.fail_closed_reason.length-1]:"暂无", (sm.fail_closed_reason&&sm.fail_closed_reason.length)?"val-warn":"val-ok"));
+    var ac=d.anomaly_categories||g.anomaly_categories||{};
+    dgr.push(kvRow("CDN/Geo 差异", num(ac.cdn_geo_difference||0)+" 条", "val-warn"));
+    dgr.push(kvRow("跨源冲突", num(ac.cross_source_conflict||0)+" 条", Number(ac.cross_source_conflict||0)>0?"val-warn":"val-ok"));
+    dgr.push(kvRow("明确投毒", num(ac.explicit_poison||0)+" 条", Number(ac.explicit_poison||0)>0?"val-err":"val-ok"));
+    dgr.push(kvRow("Unbound SERVFAIL（可能含验签拒绝或上游失败）", num(ac.unbound_servfail_fc||0)+" 条"));
+    if(ac.recent_examples&&ac.recent_examples.length){ dgr.push('<div class="kvsub">最近分类事件</div>'); ac.recent_examples.forEach(function(e){ dgr.push(kvRow(e.category, esc(e.text))); }); }
+    dgr.push('<div class="kvsub">通道与运维</div>');
+    dgr.push(kvRow("查不实就直接失败（SERVFAIL，合计）", num(s.fail_closed||0)+" 次"));
+    // 2026-10-09 B1：把「通道堵塞被拒」与「上游真实 SERVFAIL」分开——两者的运维含义完全不同
+    var gm=(d.dnsguard&&d.dnsguard.guard_metrics)?d.dnsguard.guard_metrics:{};
+    dgr.push(kvRow("另列：业务闸门拒绝（不是 fail-closed 子项；探针另列）",
+        num(gm.admission_reject||0)+" 次"+(gm.admission_reject_rate!=null?(" · "+num(gm.admission_reject_rate,1)+" 次/分"):"")+" · 应答 REFUSED(5)+EDE22（不进 AGH 缓存）",
+        (Number(gm.admission_reject_rate||0)>30?"val-err":(Number(gm.admission_reject_rate||0)>3?"val-warn":"val-ok"))));
+    dgr.push(kvRow("其中：上游 SERVFAIL（原因需另核对）", num(gm.fc_unbound_servfail||0)+" 次", "val-ok"));
+    dgr.push(kvRow("其中：已判投毒（fail-closed）", num(gm.fc_known_poison||0)+" 次",
+        Number(gm.fc_known_poison||0)>0?"val-warn":"val-ok"));
+    if(gm.fc_other) dgr.push(kvRow("其中：其它 fail-closed", num(gm.fc_other||0)+" 次"));
+    dgr.push(kvRow("拥塞结束后自动清 AGH 缓存（C1）",
+        num(gm.cache_clears||0)+" 次"+(gm.cache_clear_reason?(" · "+esc(gm.cache_clear_reason)):""),
+        Number(gm.cache_clears||0)>0?"val-ok":"val-idle"));
+    dgr.push(kvRow("可信通道竞速", num(s.clean_races||0)+" 次（并发 "+num(s.clean_hedged||0)+"）"));
+    dgr.push(kvRow("干净候选谁先答出来", "DoQ1 "+num(s.win_doq||0)+" · 认证 DoT "+num(s.win_dot||0)+" · DNSCrypt "+num(s.win_dnscrypt||0)+" · DoQ2 已停用（历史 "+num(s.win_doq2||0)+"）"));
+    dgr.push(kvRow("可信通道全部失败", num(s.clean_fail||0)+" 次"));
+    if(s.tc_retry) dgr.push(kvRow("应答被截断 → 改走 TCP 重取", "触发 "+num(s.tc_retry)+" · 成功 "+num(s.tc_retry_ok),
+        (Number(s.tc_retry_ok)<Number(s.tc_retry)?"val-warn":"val-ok")));
+    if(s.cn_overlap) dgr.push(kvRow("国内域名：两条通道同时问", num(s.cn_overlap)+" 次"));
+    dgr.push(kvRow("国内域名分支", "采用 B "+num(s.cn_verify_b||0)+" · 无可比 "+num(s.cn_skip||0)+" · B 可疑拦截 "+num(s.cn_b_denied||0)));
+    dgr.push(kvRow("邮件/文本等记录核对（MX/TXT/NS…）",
+        "实时核对 "+num(s.r8t_checked||0)+"（仅计未命中本地核对缓存者）· 判定一致 "+num(s.r8t_agree||0)+
+        "（含缓存复用，故可能大于实时核对）· 多出记录 "+num(s.r8t_extra||0)+
+        " · 原通道空应答 "+num(s.r8t_empty||0)+" · 通道不可用 "+num(s.r8t_none||0)+" · 改道 "+num(s.r8t_adopt||0)));
+    if(s.budget_skip) dgr.push(kvRow("核验预算跳过（历史计数；不证明当前允许未核验答案）", num(s.budget_skip||0)+" 次", "val-warn"));
+    if(s.qtype_other) dgr.push(kvRow("其他类型查询", num(s.qtype_other||0)));
+    dgr.push(kvRow("手动白名单生效", num(s.allow_hits||0)+" 次"));
+    dgr.push(kvRow("非 .cn 域名却返回国内 IP（只记录）", num(s.cn_foreign||0)+" 次"));
+    if(s.stale_out) dgr.push(kvRow("出口 stale 应答（Unbound 标记 EDE 3/19）",
+        num(s.stale_out)+" 次"+((s["stale_out_local-cn"]!=null)?(" · 来源 local-cn "+num(s["stale_out_local-cn"])):"")+
+        " · 只在无新数据时下发；不写准入缓存、不延长出口 TTL", "val-idle"));
+    (function(){
+      /* 2026-10-15（F5 加固）：guard 与 verifier 必须跑同一个发布；两个 stats_meta.json
+         的 release_id / guard.py sha256 / verifier 协议号任一不符即为不一致。 */
+      var idn=(d.dnsguard||{}).identity||{};
+      if(!idn.release) return;
+      if(idn.match){
+        dgr.push(kvRow("发布一致性（guard 与 verifier 同发布）",
+          '<b class="val-ok">一致</b> · '+esc(idn.release)+" · sha "+esc(idn.sha)+" · proto "+esc(String(idn.proto))+
+          " · guard pid "+esc(String(idn.guard_pid))+" / verifier pid "+esc(String(idn.verifier_pid))));
+      }else{
+        dgr.push(kvRow("发布一致性（guard 与 verifier 同发布）",
+          '<b class="val-err">不一致</b> · guard '+esc(idn.release)+"（sha "+esc(idn.sha)+" · proto "+esc(String(idn.proto))+" · pid "+esc(String(idn.guard_pid))+
+          "）／ verifier "+esc(idn.verifier_release)+"（sha "+esc(idn.verifier_sha)+" · proto "+esc(String(idn.verifier_proto))+" · pid "+esc(String(idn.verifier_pid))+
+          "）· 由服务器侧 release_consistency.py 门禁裁决", "val-err"));
+      }
+    })();
+    dgr.push(kvRow("运行方式", (g.enabled?"开机自启":"未设自启")+(s.fast_nx?(" · DNSSEC 快路 "+num(s.fast_nx)+" 次"):"")));
+    var CORE_ROWS=11;  /* 手机默认显示：总量 2 行 + 判据标题 + ①–⑧，共 11 行；其余折叠进"明细" */
+    // 2026-10-09 阶段2：填充探针/压测折叠区块
+    (function(){
+      var pg=[], gm2=(d.dnsguard&&d.dnsguard.guard_metrics)?d.dnsguard.guard_metrics:{};
+      var ov=(d.overview||{});   /* 修复：本作用域无 o，只有 d/g/s */
+      var psq=(ov.probe_sample_queries!=null)?ov.probe_sample_queries:0;
+      pg.push(kvRow("探针/压测查询（样本内）", num(psq)+" 条 · 其中走上游 "+num(ov.probe_sample_allowed||0)+" · 缓存命中 "+num(ov.probe_sample_hits||0)+" · 被拦截 "+num(ov.probe_sample_blocked||0)));
+      pg.push(kvRow("探针源地址（按 IP 识别）", ((ov.probe_src||[]).join(" · "))||"—"));
+      (function(){var m=ov.probe_sample_by_ip||{},a=[];for(var k in m){a.push(esc(k)+"="+num(m[k]));}
+        pg.push(kvRow("样本内探针来源分布", a.join(" · ")||"—"));})();
+      pg.push(kvRow("guard 探针通道（独立小闸门，端口 "+num(ov.probe_port||gm2.probe_port||5356)+"）",
+        "查询 "+num(gm2.probe_q||0)+" · 通道堵塞 "+num(gm2.probe_admission_reject||0)+" 次", "val-idle"));
+      pg.push(kvRow("guard 已分类业务入口（采样期间）", gm2.entry_client!=null?num(gm2.entry_client)+" 条（不含主机入口；旧 guard_user_q 非完整口径）":"未采集"));
+      html("probe-grid", pg.join(""));
+      txt("probe-note", "直连 guard :5356 的探针使用独立闸门；AGH/DoT 入口探测仍会经过业务路径，也共享 CPU、网络和上游资源；用户指标按来源 IP 与 QNAME 滚动表排除已识别探针；总量口径仍以 AGH 累计计数为准，不按来源拆分。");
+    })();
+    html("dg-grid", dgr.map(function(h,i){ return i>=CORE_ROWS ? h.replace('class="kvrow"','class="kvrow more"').replace('class="kvsub"','class="kvsub more"') : h; }).join(""));
+    txt("dg-test", g.correct_ok===true?"通过":(g.correct_ok===false?"失败":"—"));
+    txt("dg-test-sub", g.test_domain? ("实测 "+g.test_domain+"："+num(g.probe_ms,0)+" ms，返回 "+((g.probe_ips||[]).join(", ")||"—")) : "—");
+    var rows=(g.top||[]).map(function(e){
+      return '<tr><td class="mono" data-label="域名">'+esc(e.domain)+
+        '</td><td class="opt" data-label="判据">'+esc(e.why||"—")+
+        '</td><td class="mono opt" data-label="原答案">'+esc(e.bad||"—")+
+        '</td><td class="mono opt" data-label="改用">'+esc(e.clean||"—")+
+        '</td><td class="num" data-label="次数">'+num(e.hits)+
+        '</td><td class="num" data-label="处理"><button class="btn" data-dg="forget" data-dom="'+esc(e.domain)+'">撤销</button></td></tr>';
+    }).join("");
+    html("dg-rows", rows||'<tr><td colspan="6" class="sub">当前未返回域名明细；不等于学习集为空或从未发现异常</td></tr>');
+    var pend=(g.pending||[]).map(function(e){
+      return '<tr><td class="mono" data-label="域名">'+esc(e.domain)+
+        '</td><td class="mono opt" data-label="unbound">'+esc(e.unbound||"—")+
+        '</td><td class="mono opt" data-label="干净上游">'+esc(e.clean||"—")+
+        '</td><td class="num" data-label="次数">'+num(e.count)+
+        '</td><td class="num" data-label="处理">'+
+        '<button class="btn" data-dg="confirm" data-dom="'+esc(e.domain)+'">确认投毒</button> '+
+        '<button class="btn" data-dg="ignore" data-dom="'+esc(e.domain)+'">忽略</button></td></tr>';
+    }).join("");
+    html("dg-pend", pend||'<tr><td colspan="5" class="sub">暂无待确认条目</td></tr>');
+    txt("dg-pend-sub", "待确认 "+num(g.pending_total||0)+" 条 · 已忽略 "+num(g.ignored_total||0)+
+        " 条 ｜ 累计自动排除（stats.json 恢复，含重启前）：证书证实为 CDN 边缘 "+num(s.cdn_skipped||0)+" · 国内就近差异 "+num(s.geo_skipped||0)+
+        " · IPv6 差异 "+num(s.v6_skipped||0)+" · 域名自身轮转 "+num(s.rot_skipped||0)+" · 抖动采样检查 "+num(s.jitter_checks||0)+
+        " ｜ 证书不匹配判投毒 "+num(s.cert_learned||0)+" 条 · .cn 改用加密国内源 "+num(s.cn_verify_b||0)+
+        " 次 · 学习 IP 交叉印证升级 "+num(s.ip_promoted||0)+" 条");
+    var logs=(g.recent||[]).map(function(l){
+      var cls=(l.indexOf("LEARN")>=0)?"val-warn":"";
+      return '<tr><td class="mono '+cls+'" data-label="" style="font-size:12.5px">'+esc(l)+"</td></tr>";
+    }).join("");
+    html("dg-log", logs||'<tr><td class="sub" data-label="">暂无</td></tr>');
+  }
+
+  /* ---------- dnscrypt-proxy ---------- */
+  function renderDnscrypt(d){
+    var x=d.dnscrypt||{};
+    var _gs=((d.dnsguard||{}).stats)||{};   /* 用 guard 自身计数说明 CN 域名的真实路径 */
+    var el=document.getElementById("dc-state");
+    if(el){ el.textContent=(x.active?"运行中":"未运行"); el.className="pill"+((x.active)?"":" val-err"); }
+    txt("dc-sub",(x.enabled?"开机自启":"未设自启")+" · 内存 "+((x.mem_mb===null||x.mem_mb===undefined)?"—":num(x.mem_mb,1)+" MB")+
+        " · 监听 "+(((x.listen||[]).join(" · "))||"未监听"));
+    txt("dc-probe", x.probe_ok?fmtMs(x.probe_ms):"—");
+    html("dc-grid",[
+      kvRow("服务单元",x.service||"—"),
+      kvRow("监听地址",((x.listen||[]).join(" · ")||"未监听"),((x.listen||[]).length)?"val-ok":"val-err"),
+      kvRow("匿名路由",x.routing?("经 "+esc(x.routing)):"未启用匿名中继",x.routing?"val-ok":"val-warn"),
+      kvRow("在用解析器 / 中继",((x.servers&&x.servers.length)?(x.servers.length+" 个："+x.servers.join(" · ")):esc(x.servers_note||"—"))+" · 匿名中继 "+esc(x.relay||"—")),
+      /* 2026-10-15 事实核查：guard 现在优先读**类型化名单** cn-domains-typed.txt（由
+         refresh-cn-rules.py 生成，保留 v2fly 的 full:/domain:/suffix: 匹配类型），
+         forwarding-rules.txt 只作回落（dnscrypt-proxy 仍用它做 CN 转发）。
+         精确=只匹配该域本身；子域=匹配自身及其子域；无点条目（品牌 gTLD）一律丢弃。 */
+      kvRow("CN 分流名单（guard 生效口径）",
+        "类型化 "+num(_gs.cn_typed_total||0)+" 条（精确 "+num(_gs.cn_typed_full||0)+" / 子域 "+
+        num((Number(_gs.cn_typed_domain||0))+(Number(_gs.cn_typed_suffix||0)))+"）"+
+        ((Number(_gs.cn_typed_active||0)===1)?' <b class="val-ok">已载入</b>':' <b class="val-warn">未载入</b>')+
+        ((_gs.cn_typed_loaded_ts?(" · 载入 "+new Date(_gs.cn_typed_loaded_ts*1000).toLocaleString()):""))+
+        ((Number(_gs.cn_typed_fail||0)>0)?(" · 载入失败 "+num(_gs.cn_typed_fail)+" 次"):"")),
+      kvRow("CN 否决名单（境内域名不得走国内路径的否决集）",
+        num(_gs.cn_veto_entries||0)+" 条 · 载入 "+(_gs.cn_veto_loaded_ts?new Date(_gs.cn_veto_loaded_ts*1000).toLocaleString():"—")+
+        " · 载入失败 "+num(_gs.cn_veto_fail||0)+" 次 · 来源 v2fly geolocation-!cn（有界展开，剔除与国内名单冲突项）"),
+      kvRow("CN IP 段（判定国内 IP）",
+        num(_gs.cn_ip_nets||0)+" 条 · 同源 ispip.clang.cn（07 天未更新时 guard 自动回源）"),
+      kvRow("dnscrypt-proxy 转发规则文件",
+        num(x.rules_count)+" 条 · 文件更新 "+((x.rules_mtime?new Date(x.rules_mtime*1000).toLocaleString():"—"))+
+        "（差值 "+num((x.rules_count||0)-(x.rules_count_guard||0))+" 个无点品牌 gTLD 由 guard 丢弃：baidu / taobao / alibaba 这类，.cn 已由后缀规则覆盖）"),
+      /* 2026-10-09 实测补登：CN 域名并非"由 B 作答"，而是"A 主答 + 并发送 B、A 无应答时才用 B"。
+         取证：25 条用例（CN 名单/后缀/子域/境外）与 guard.is_cn_domain 逐条一致（0 不符）；
+         guard 代码 domestic() 在 A 有应答时 `return r, "A"`，仅 A 无应答才 bget() → fallback_b；
+         B 收包 100% 来自 guard 的 CN 判定（unbound_b_noncn_attempt=0，非 CN 另计 b_noncn_blocked）。 */
+      kvRow("CN 域名实际路径（A 主答 · 并发预发 B）",
+        "B 预发 "+num(_gs.cn_overlap||0)+" 次 · B 实际作答 "+num(_gs.fallback_b||0)+" 次 · R2 采用 B "+num(_gs.cn_verify_b||0)+" 次"+
+        " · A、B 均无地址（沿用 A 应答）"+num(_gs.cn_skip||0)+" 次 · 非 CN 拦在 B 外 "+num(_gs.b_noncn_blocked||0)+" 次")
+    ].join(""));
+    /* 2026-10-15：刷新入口已统一为每日 04:35 的 refresh-all-cn-lists.sh，一轮跑三项
+       （域名名单 / 否决+IP 名单 / 清单校验），日志末行形如
+       "=== 2026-10-15 13:11:27 汇总 rc: domain=0 veto_ip=0 verify=0 ==="。 */
+    (function(){
+      var r=String(x.refresh_last||"");
+      var m=r.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})[\s\S]*?domain=(-?\d+)\s+veto_ip=(-?\d+)\s+verify=(-?\d+)/);
+      if(!m){ txt("dc-refresh", r||"暂无刷新记录"); return; }
+      function st(v){ return (String(v)==="0")?'<b class="val-ok">成功</b>':('<b class="val-err">失败 rc='+esc(v)+'</b>'); }
+      html("dc-refresh", esc(m[1])+" 一轮三项 · 域名名单 "+st(m[2])+" · 否决+IP 名单 "+st(m[3])+" · 清单校验 "+st(m[4])+
+        "<br>任一失败即保留旧名单（有门禁与备份）；guard 按文件 mtime 热重载（≤60s），无需重启服务。");
+    })();
+  }
+
+  /* ---------- 服务器 ---------- */
+  function renderServer(d){
+    var s=d.server||{},m=s.mem||{},sw=s.swap||{},dk=s.disk||{};
+    function setBar(id,pct,warn,err){
+      var el=$(id); if(!el) return;
+      el.style.width=Math.min(100,Number(pct)||0)+"%";
+      el.style.background=(Number(pct)>=err)?"var(--err)":(Number(pct)>=warn?"var(--warn)":"var(--accent)");
+    }
+    txt("sv-cpu",num(s.cpu_pct,1)+"%");
+    setBar("sv-cpu-bar",s.cpu_pct,50,80);
+    txt("sv-load","负载 "+((s.load||[]).map(function(x){return Number(x).toFixed(2);}).join(" / ")||"—")+
+      " · "+(s.cpu_count||"—")+" 核 · 运行 "+fmtDur(s.uptime_s));
+    txt("sv-mem",num(m.pct,1)+"%");
+    setBar("sv-mem-bar",m.pct,75,90);
+    txt("sv-mem-sub",(m.used_mb||"—")+" / "+(m.total_mb||"—")+" MB · 可用 "+(m.available_mb||"—")+" MB");
+    txt("sv-swap",num(sw.pct,1)+"%");
+    setBar("sv-swap-bar",sw.pct,60,85);
+    txt("sv-swap-sub",(sw.used_mb||"—")+" / "+(sw.total_mb||"—")+" MB");
+    txt("sv-disk",num(dk.pct,1)+"%");
+    setBar("sv-disk-bar",dk.pct,75,90);
+    txt("sv-disk-sub",(dk.used_gb||"—")+" / "+(dk.total_gb||"—")+" GB");
+
+    var net=s.net||[];
+    html("sv-net", net.length?net.map(function(n){
+      return kvRow(n.iface,"↓ "+(n.rx_kbps||0).toFixed(1)+" Kb/s · ↑ "+(n.tx_kbps||0).toFixed(1)+" Kb/s");
+    }).join("") : kvRow("—","—"));
+    html("sv-host", kvRow("主机名",s.hostname||"—")+kvRow("采集耗时",num(d.collect_ms)+" ms")+
+      kvRow("服务器时间",d.server_time||"—"));
+    var tls=s.tls||{},ng=s.nginx||{};
+    var dl=tls.days_left,dcls=(dl===undefined)?"":(dl<7?"val-err":(dl<30?"val-warn":"val-ok"));
+    var csrc=(tls.live_ok===true)?"853 实时握手":(tls.live_ok===false?"853 握手失败→回退文件":"文件副本");
+    var csame=(tls.drift===true)?"⚠ 与 nginx 文件不一致"
+              :((tls.live_ok===true&&tls.file_fingerprint)?"与 nginx 文件一致":"—");
+    var ccls=(tls.drift===true)?"val-err":((tls.live_ok===true)?"val-ok":"val-warn");
+    html("sv-entry",
+      kvRow("Nginx",(ng.version||"—")+" · "+(ng.active?"运行中":"已停止"),ng.active?"val-ok":"val-err")+
+      kvRow("证书域名",tls.domain||"—")+
+      kvRow("证书到期",tls.not_after||"—",dcls)+
+      kvRow("剩余天数",dl===undefined?"—":dl+" 天",dcls)+
+      kvRow("来源 / 一致性",csrc+" · "+csame,ccls)+
+      kvRow("TLS 版本",tls.tls_version||"—"));
+  }
+
+  /* ---------- 容器 ---------- */
+  function renderContainers(d){
+    var list=d.container_list||[];
+    html("ct-rows", list.length?list.map(function(c){
+      var hcls=(c.health==="healthy"||c.health==="running")?"val-ok":(c.health==="-"? "" : "val-warn");
+      return '<tr><td data-label="">'+esc(c.name)+'<div class="sub mono opt" style="margin:2px 0 0;font-size:11px">'+esc(c.image)+"</div></td>"+
+        '<td class="mono opt" style="font-size:12px" data-label="镜像">'+esc(c.image)+
+        '</td><td data-label="状态">'+esc(c.status)+
+        '</td><td class="'+hcls+'" data-label="健康">'+esc(c.health||"—")+
+        '</td><td class="num" data-label="CPU">'+esc(c.cpu_pct||"0")+
+        '%</td><td class="num mono" style="font-size:12px" data-label="内存">'+
+        esc(c.mem_usage||"—")+'</td><td class="num opt" data-label="重启">'+num(c.restarts)+"</td></tr>";
+    }).join("") : '<tr><td colspan="7" class="sub">无数据</td></tr>');
+  }
+
+  /* ---------- 走势 ----------
+     声明式图表清单：新增一个指标只要在这里加一行（后端 HISTORY 里存了什么就能画什么） */
+  var HIST_CHARTS=[
+    // 延迟
+    {g:"hist-latency", id:"sp-allp90",  key:"latency_all_p90_ms", label:"全部查询 p90（含缓存命中 · 样本）", fmt:fmtMs, color:"var(--cache)",
+     tip:"每分钟一个点；每点按本次 querylog 取数（按条数截断）计算全部查询 p90。⚠ 高流量时取数可能只覆盖窗口的一部分（见总览的窗口覆盖/截断说明），因此曲线代表样本而非整个统计窗口；相邻点高度相关，平滑属正常，突变才值得注意。"},
+    {g:"hist-latency", id:"sp-ubmed",   key:"unbound_rec_med_ms", label:"unbound A 解析耗时（自启动累计中位，非本窗口；转发模式下含上游响应）", fmt:fmtMs, color:"var(--accent)",
+     note:"来自 unbound-control 的累计直方图：它是自 unbound 启动以来的中位数，对近期变化极不敏感，不能当「当前耗时」读"},
+    // 链路探针
+    // 2026-10-09：这 6 张图的每个点都是**每轮 2–3 次采样**的中位数，样本极小（冷查询 2 次、握手 3 次），
+    // 所以点与点之间的抖动主要是抽样噪声；原来只写 "p50" 会被误当成稳定的分位估计，这里补上口径说明。
+    {g:"hist-probe", id:"sp-p-agh",   key:"probe_agh_ms",        label:"AGH 冷查询 p50",       fmt:fmtMs, color:"var(--ok)", note:"每轮 2 次采样"},
+    {g:"hist-probe", id:"sp-p-uba",   key:"probe_unbound_a_ms",  label:"unbound A 冷查询 p50", fmt:fmtMs, color:"var(--ok)", note:"每轮 2 次采样"},
+    {g:"hist-probe", id:"sp-p-ubb",   key:"probe_unbound_b_ms",  label:"unbound B 冷查询 p50", fmt:fmtMs, color:"var(--ok)", note:"每轮 2 次采样"},
+    {g:"hist-probe", id:"sp-p-dcp",   key:"probe_dnscrypt_ms",   label:"dnscrypt-proxy 冷查询 p50", fmt:fmtMs, color:"var(--ok)", note:"每轮 2 次采样"},
+    {g:"hist-probe", id:"sp-p-360",   key:"probe_dot360_ms",     label:"360 DoT TCP 握手",     fmt:fmtMs, color:"var(--accent)", note:"每轮 3 次采样"},
+    {g:"hist-probe", id:"sp-p-ald",   key:"probe_alidns_ms",     label:"阿里 DoT TCP 握手",    fmt:fmtMs, color:"var(--accent)", note:"每轮 3 次采样"},
+    // 流量与上游
+    {g:"hist-flow", id:"sp-miss",     key:"cache_misses",  label:"AGH 缓存未命中（querylog 样本，受取数上限截断）", fmt:fCount, color:"var(--threats)",
+     note:"来自 querylog 取数（按条数截断，上限由后端 AGH_API_LIMIT 决定，下方会显示本轮的实际上限）。要看准确的上游量请用上面「真上游 QPS（窗口计数差分）」那张"},
+    {g:"hist-flow", id:"sp-uniq",     key:"uniq_hosts",    label:"不同域名数（样本内唯一主机名）", fmt:fCount, color:"var(--queries)",
+     tip:"本次 querylog 取数内出现的不同域名个数，不是整个统计窗口的值。突然暴涨通常意味着测速或扫描类流量；新域名通常无法命中缓存，会增加上游查询量和超时风险。" },
+    {g:"hist-flow", id:"sp-slow",     key:"slow_count",    label:"慢查询数（>500ms · querylog 样本，不等同告警）",    fmt:fCount, color:"var(--err)"},
+    // 2026-10-09 单位统一：速率与条数**分两张图、各自标注单位**，不再让同一序列在两处以不同单位出现
+    {g:"hist-flow", id:"sp-qps",  key:"qps_total",   label:"QPS（AGH 窗口计数差分 · 权威、不受取数上限截断）", fmt:function(v){return num(v,2)+" QPS";}, color:"var(--queries)", note:"单位恒为 QPS：相邻两次采样的 num_dns_queries 之差 ÷ 实测 Δt"},
+    {g:"hist-flow", id:"sp-qpsb", key:"qps_blocked", label:"拦截 QPS（窗口计数差分）", fmt:function(v){return num(v,2)+" QPS";}, color:"var(--ads)"},
+    {g:"hist-flow", id:"sp-q1m",  key:"queries_1m",  label:"近 60 秒到达条数（条/分钟，不是 QPS）", fmt:fCount, color:"var(--queries)", note:"这是条数不是速率；且来自 querylog 样本，窗口被取数上限截断时该值仍准、窗口累计值不准"},
+    // 2026-10-09：比率类也分"权威（窗口计数差分）"与"样本"两套，避免同屏不同源
+    {g:"hist-flow", id:"sp-chauth", key:"cache_hit_ratio_auth", label:"AGH 缓存命中率（采样计数差分）", fmt:fPct, color:"var(--cache)", min:0, max:100, noSmooth:true, note:"每点按相邻采样窗口计数差分：命中率=1−Δ上游应答/Δ放行查询；Δ放行查询=Δ总查询−Δ拦截。整点换桶那一个区间 AGH 上游计数无法差分，会记为缺口"},
+    {g:"hist-flow", id:"sp-upshare", key:"upstream_share", label:"真上游占比（Δ上游应答/Δ放行查询）", fmt:fPct, color:"var(--threats)", min:0, max:100, noSmooth:true, note:"与命中率互补：越接近 100% 说明缓存越不顶用、递归压力越大"},
+    {g:"hist-flow", id:"sp-bkauth", key:"block_ratio_auth",    label:"拦截率（权威：Δ拦截/Δ总查询）", fmt:fPct, color:"var(--ads)", min:0, max:100, noSmooth:true, note:"AGH 计数是滚动 24 小时窗口；整点最旧桶过期时总量会下降，该区间改按同一小时桶差分/拼接，算不出就留缺口而不是显示 >100%"},
+    {g:"hist-flow", id:"sp-ups",    key:"qps_upstream",        label:"真上游 QPS（窗口计数差分）", fmt:function(v){return num(v,2)+" QPS";}, color:"var(--threats)"},
+    // 解析器
+    {g:"hist-resolver", id:"sp-unbound", key:"unbound_hit_pct",   label:"unbound A 缓存命中率",  fmt:fPct, color:"#5b9bd5", min:0, max:100, noSmooth:true, note:"取自 unbound-control stats_noreset 的自启动累计（看板不会清零；unbound 重启后归零）"},
+    {g:"hist-resolver", id:"sp-ubchain", key:"unbound_cache_hit_pct", label:"unbound A+B 缓存命中率（自报累计）", fmt:fPct, color:"#7fb3e0", min:0, max:100, noSmooth:true, note:"cachehits/(cachehits+cachemiss)；合并两个解析器的累计值，不是本分钟命中率，也不代表 router/AGH/guard 全链路缓存率；重启后从零累积"},
+    {g:"hist-resolver", id:"sp-guard-fast", key:"guard_fast_source_doq_ms", label:"dnsguard 干净通道 DoQ1 保活往返（aghdq→NextDNS over QUIC）", fmt:fmtMs, color:"var(--ok)", note:"来自 guard keepalive（每轮全新随机域名）· 单次采样，抖动主要是抽样噪声；当前也是 A 的转发出口；保活样本不等于每次业务查询耗时"},
+    // 服务器
+    {g:"hist-server", id:"sp-cpu",  key:"cpu_pct",     label:"CPU 使用率",  fmt:fPct, color:"var(--accent)", min:0, max:100},
+    {g:"hist-server", id:"sp-mem",  key:"mem_pct",     label:"内存使用率",  fmt:fPct, color:"var(--accent)", min:0, max:100},
+    {g:"hist-server", id:"sp-swap", key:"swap_pct",    label:"Swap 使用率", fmt:fPct, color:"var(--warn)", min:0, max:100},
+    {g:"hist-server", id:"sp-disk", key:"disk_pct",    label:"磁盘使用率",  fmt:fPct, color:"var(--accent)", min:0, max:100},
+    {g:"hist-server", id:"sp-load", key:"load1",       label:"系统负载（1 分钟）", fmt:function(v){return num(v,2);}, color:"var(--accent)"},
+  ];
+
+  // 生成走势卡片（只做一次）
+  function initHistory(){
+    HIST_CHARTS.forEach(function(c){
+      var host=$(c.g); if(!host || $(c.id)) return;
+      host.insertAdjacentHTML("beforeend",
+        '<div class="card"><div class="label"'+(c.tip?(' title="'+esc(c.tip)+'"'):"")+'>'+esc(c.label)+
+        '</div><svg class="spark" id="'+c.id+'" viewBox="0 0 300 52" preserveAspectRatio="none"></svg>'+
+        '<div class="sub" id="'+c.id+'-sub">—</div></div>');
+    });
+  }
+
+  function renderHistory(d){
+    var h=d.history||{}, ht=tail(h.t);
+    HIST_CHARTS.forEach(function(c){
+      var all=h[c.key]||[];
+      spark(c.id,tail(all),{color:c.color, ts:ht, fmt:c.fmt, min:c.min, max:c.max, noSmooth:c.noSmooth});
+      var vis=(tail(all)||[]).filter(function(x){ return x!==null&&x!==undefined; });
+      var e2=$(c.id+"-sub"); if(!e2) return;
+      if(!vis.length){ e2.textContent="窗口内无样本"; return; }
+      var last=vis[vis.length-1];
+      var lo=Math.min.apply(null,vis), hi=Math.max.apply(null,vis);
+      var s="当前 "+c.fmt(last);
+      if(hi>lo && c.note!=="自启动累计，正常缓慢增长") s+=" · 区间 "+c.fmt(lo)+"–"+c.fmt(hi);
+      if(c.note) s+=" · "+c.note;
+      if((c.id==="sp-miss"||c.id==="sp-allp90")&&d.self&&d.self.agh_api_limit) s+=" · 本轮取数上限 "+num(d.self.agh_api_limit)+" 条";
+      e2.textContent=s;
+    });
+  }
+
+  function render(d){
+    state.data=d;
+    renderHealth(d);
+    txt("cs-health",(d.alerts&&d.alerts.length)?"需关注":"正常"); renderOverview(d); renderChain(d); renderProbes(d);
+    renderAgh(d); renderDnsguard(d); renderUnbound(d); renderDnscrypt(d); renderServer(d); renderContainers(d); renderHistory(d);
+  }
+
+  /* ---------- 计时 / 拉取 ---------- */
+  function updateClock(){
+    if(!state.lastOk) return;
+    var sec=Math.floor((Date.now()-state.lastOk)/1000);
+    txt("ts-rel",ago(sec));
+    txt("countdown","下次自动刷新 "+state.secondsLeft+" 秒");
+    var ind=$("fresh-ind");
+    if(ind){
+      ind.className="fresh "+(sec<90?"f-ok":(sec<240?"f-warn":"f-err"));
+      ind.title = sec<90?"数据新鲜":(sec<240?"数据略旧（超过 90 秒）":"数据已过期（超过 4 分钟）");
+    }
+  }
+  function showError(msg, retryable){
+    var b=$("err-banner");
+    var tail = state.lastOk ? ("　·　下面仍是 " + ago(Math.floor((Date.now()-state.lastOk)/1000)) + " 的数据") : "";
+    b.innerHTML='<span>'+esc(msg)+tail+'</span>'+
+      '<span class="ebright"><span id="eb-count"></span><button class="btn" id="btn-retry">立即重试</button></span>';
+    b.classList.remove("hidden");
+    var rb=document.getElementById("btn-retry");
+    if(rb) rb.onclick=function(){ retry.at=0; retry.n=0; load(true); };
+    if(retryable!==false){
+      var d=RETRY_DELAYS[Math.min(retry.n, RETRY_DELAYS.length-1)];
+      retry.at=Date.now()+d*1000;
+      retry.n++;
+    }
+  }
+  function clearError(){ $("err-banner").classList.add("hidden"); retry.n=0; retry.at=0; }
+  function tickRetry(){
+    if(!retry.at) return;
+    var left=Math.ceil((retry.at-Date.now())/1000);
+    var el=document.getElementById("eb-count");
+    if(el) el.textContent = left>0 ? (left+" 秒后自动重试") : "正在重试…";
+    if(left<=0){ retry.at=0; load(false); }
+  }
+
+  function load(fresh){
+    if(state.loading) return;
+    state.loading=true;
+    var btn=$("btn-refresh");
+    btn.disabled=true;
+    var old=btn.innerHTML;
+    btn.innerHTML="刷新中…";
+    var req=new XMLHttpRequest();
+    req.open("GET", API+(fresh?"?fresh="+Date.now():""), true);
+    req.timeout=20000;
+    req.onreadystatechange=function(){
+      if(req.readyState!==4) return;
+      state.loading=false;
+      btn.disabled=false; btn.innerHTML=old;
+      if(req.status===200){
+        try{
+          var d=JSON.parse(req.responseText);
+          state.lastOk=Date.now();
+          AUTO=d.auto_refresh_s||AUTO;
+          state.secondsLeft=AUTO;
+          authReloaded=false;
+          txt("foot-cost",(d.collect_ms||0)+" ms");
+          txt("ts-abs",d.server_time||"");
+          clearError(); render(d); updateClock();
+        }catch(e){ showError("返回数据解析失败："+e.message); }
+      }else if(req.status===401){
+        if(!authReloaded){
+          authReloaded=true;
+          showError("登录凭据已失效，正在重新请求认证…", false);
+          setTimeout(function(){ location.reload(); }, 1200);
+        }else{
+          showError("登录凭据已失效（HTTP 401）：请关掉本页重新打开，或清除该站点的保存密码后重试。", false);
+        }
+      }else if(req.status===502||req.status===503||req.status===504){
+        showError("看板后端暂时不可用（HTTP "+req.status+"，通常是服务正在重启/更新），已自动重试。");
+      }else if(req.status===0){
+        showError("网络不可达，已自动重试。");
+      }else{
+        showError("数据获取失败：HTTP "+req.status+"，已自动重试。");
+      }
+    };
+    req.ontimeout=function(){ state.loading=false; btn.disabled=false; btn.innerHTML=old;
+      showError("后端 "+(req.timeout/1000)+" 秒未响应，已自动重试。"); };
+    req.onerror=function(){ state.loading=false; btn.disabled=false; btn.innerHTML=old;
+      showError("看板数据请求失败，已自动重试。"); };
+    req.send();
+  }
+
+  initHistory();
+  $("btn-refresh").onclick=function(){ state.secondsLeft=AUTO; load(true); };
+  setInterval(function(){
+    tickRetry();
+    if(state.lastOk){
+      if(!retry.at){
+        state.secondsLeft--;
+        if(state.secondsLeft<=0){ state.secondsLeft=AUTO; load(false); }
+      }
+      updateClock();
+    }else{ updateClock(); }
+  },1000);
+  document.addEventListener("visibilitychange",function(){
+    if(!document.hidden && state.lastOk && Date.now()-state.lastOk>AUTO*1000){ state.secondsLeft=AUTO; load(false); }
+  });
+
+  load(false);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+[Unit]
+Description=Check Unbound alt readiness
+
+[Timer]
+# 方案 §4 第 2 项：**低频检查 60 秒** ✓（原 10 s 是"高频轮询"，与方案不符 ✗）。
+# 与 90 s 有效期配合：稳态下 `checked_monotonic` 的最大年龄 ≈ 60 s < 90 s ✓；
+# 单个 tick 失败 ⇒ `consecutive_ok` 归零 ⇒ 最多 ~120 s 后重新 ready（保守方向 ✓）。
+OnBootSec=5s
+OnUnitInactiveSec=60s
+# 允许合并唤醒（省电/省 CPU，偏差 ≤5 s 对 90 s 窗口无影响 ✓）
+AccuracySec=5s
+RandomizedDelaySec=2s
+
+[Install]
+WantedBy=timers.target

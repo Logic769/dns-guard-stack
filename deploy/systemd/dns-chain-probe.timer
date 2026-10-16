@@ -1,0 +1,9 @@
+[Unit]
+Description=Run layered DNS stability probe every 5 minutes (Task7: lowered from 60s)
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=5s
+Persistent=true
+[Install]
+WantedBy=timers.target

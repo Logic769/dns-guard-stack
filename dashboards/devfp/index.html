@@ -1,0 +1,2058 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#2b3a42">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z' fill='%2367b279'/%3E%3C/svg%3E">
+<title>设备指纹看板 · dns.example.com</title>
+<style>
+/* ===========================================================================
+   devfp 设计 token（2026-10-05 重排落地）
+   规则：颜色分"填充档 / 文字档"——填充档只用于图形（对比度需 3:1），
+        文字一律用 *-text 档（需 4.5:1）。间距 4pt 基准 8 档，字号 8 档，圆角 5 个。
+   =========================================================================== */
+:root{
+  /* 主色：填充/图表/焦点环 */
+  --accent:#67b279;
+  --accent-strong:#35734a;      /* 白字按钮底色（白字 5.67:1 ✓） */
+  --accent-text:#35734a;        /* 绿字（白底 5.67:1 ✓） */
+  --accent-soft:rgba(103,178,121,.14);
+
+  --bg:#eef1f4; --card:#ffffff; --card2:#f7f9fa; --track:#e9edf0; --line:#e4e9ec;
+  --text:#33393e;               /* 白底 11.4:1 ✓ */
+  --text-2:#4e5860;             /* 白底 7.27:1 / 页底 6.58:1 ✓ 次要文字 */
+  --text-3:#606a72;             /* 白底 5.52:1 / 卡片2 5.23 / 页底 5.00 / track 4.69 ✓ 表头/label/caption */
+  --muted:#8a949e;              /* 仅 ≥18px 或纯装饰（白底 3.08:1，不要再给小字） */
+
+  --queries:#6b757d;
+  --blocked:#f67247; --blocked-text:#c04a24;
+  --ok:#67b279; --ok-text:#35734a;
+  --threats:#e0a33e; --threats-text:#8a5a00;
+  --err:#d9534f; --err-text:#b02a26;
+  --info:#45aaf2; --info-text:#2569a0;
+  --purple:#a55eea;
+
+  --sidebar:#2b3a42; --sidebar-text:#c2ced5; --sidebar-active:#fff;
+
+  /* 间距 4pt / 8 档 */
+  --s1:4px; --s2:8px; --s3:12px; --s4:16px; --s5:20px; --s6:24px; --s8:32px; --s10:40px;
+
+  /* 字号 8 档 */
+  --fs-2xs:11px; --fs-xs:12px; --fs-sm:13px; --fs-md:14px; --fs-lg:16px; --fs-xl:20px; --fs-2xl:24px;
+  --lh-tight:1.25; --lh-base:1.6; --lh-row:1.45;
+
+  /* 圆角 5 个 */
+  --r-bar:3px; --r-ctl:8px; --r-card:12px; --r-panel:14px; --r-pill:999px;
+
+  --shadow-1:0 1px 2px rgba(20,40,60,.06);
+  --shadow-2:0 2px 8px rgba(20,40,60,.10);
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+
+  --sidebar-w:224px; --page-pad:var(--s6); --gap:var(--s6); --topbar-h:56px;
+}
+html[data-theme="dark"]{
+  --bg:#0f1417; --card:#171e22; --card2:#212b31;
+  --track:#2b3840; --line:#2b3840;
+  --text:#dbe3e8; --text-2:#aab7c0; --text-3:#9aa8b2;
+  --muted:#8796a0;
+  --sidebar:#131c21;
+  --accent-text:#8ed3a2; --ok-text:#8ed3a2; --blocked-text:#f78a63;
+  --threats-text:#e0a33e; --err-text:#e8837f; --info-text:#6cbcf5;
+  --accent-soft:rgba(103,178,121,.20);
+  --shadow-1:0 1px 2px rgba(0,0,0,.5); --shadow-2:0 2px 10px rgba(0,0,0,.45);
+}
+
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--text);font-size:var(--fs-sm);line-height:var(--lh-base);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;overflow-x:clip;overflow-wrap:break-word}
+a{color:inherit;text-decoration:none}
+code,.mono{font-family:var(--mono);font-size:var(--fs-sm)}
+b,strong{font-weight:600}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:inherit}
+.num{font-variant-numeric:tabular-nums}
+
+h2.sec{font-size:var(--fs-lg);margin:0 0 var(--s1);font-weight:600;line-height:var(--lh-tight)}
+h3.sub{font-size:var(--fs-xs);margin:var(--s5) 0 var(--s2);font-weight:600;color:var(--text-3);letter-spacing:0}
+
+/* ---------- 侧边栏 ---------- */
+.sidebar{position:fixed;top:0;left:0;bottom:0;width:var(--sidebar-w);background:var(--sidebar);
+  color:var(--sidebar-text);display:flex;flex-direction:column;z-index:20}
+.brand{display:flex;align-items:center;gap:11px;padding:var(--s5) var(--s5) var(--s4);color:#fff;font-weight:600;font-size:var(--fs-lg)}
+.brand .logo{width:28px;height:28px;flex:0 0 28px}
+.brand small{display:block;font-weight:400;font-size:var(--fs-2xs);color:#8fa2ac;margin-top:1px}
+.nav{padding:var(--s1) 0 var(--s5);overflow-y:auto;flex:1}
+.nav a{display:flex;align-items:center;gap:var(--s3);padding:10px var(--s4);font-size:var(--fs-sm);
+  color:var(--sidebar-text);border-left:3px solid transparent;transition:background .12s;cursor:pointer}
+.nav a:hover{background:rgba(255,255,255,.05);color:#fff}
+.nav a.active{color:var(--sidebar-active);border-left-color:var(--accent);background:rgba(255,255,255,.07)}
+.nav a .chip{margin-left:auto}
+.sidebar-foot{padding:var(--s3) var(--s4);font-size:var(--fs-2xs);color:#7d8e98;border-top:1px solid rgba(255,255,255,.08);line-height:1.7}
+.sidebar-foot b{color:#c2ced5}
+
+.main{margin-left:var(--sidebar-w);min-height:100vh;display:flex;flex-direction:column}
+.topbar{position:sticky;top:0;z-index:15;background:var(--card);border-bottom:1px solid var(--line);
+  min-height:var(--topbar-h);padding:var(--s2) var(--page-pad);display:flex;align-items:center;gap:var(--s4);flex-wrap:wrap}
+.topbar h1{font-size:var(--fs-xl);margin:0;font-weight:600;white-space:nowrap;line-height:var(--lh-tight)}
+.topbar .meta{font-size:var(--fs-xs);color:var(--text-3);white-space:nowrap}
+.topbar .meta b{color:var(--text)}
+.fresh{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--text-3);white-space:nowrap}
+.fresh .sdot{margin:0}
+.tools{margin-left:auto;display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.content{padding:var(--page-pad);display:flex;flex-direction:column;gap:var(--gap);flex:1}
+section{display:none}
+section.on{display:block}
+
+/* ---------- 原语：chip / badge / sdot / btn ---------- */
+.chips{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px;border-radius:var(--r-pill);
+  background:var(--card2);border:1px solid var(--line);font-size:var(--fs-xs);color:var(--text-2);
+  white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip b{color:var(--text);font-weight:600;margin:0 2px}
+.chip.warn{background:rgba(224,163,62,.16);border-color:transparent;color:var(--threats-text)}
+.chip.err{background:rgba(217,83,79,.14);border-color:transparent;color:var(--err-text)}
+.chip.ok{background:var(--accent-soft);border-color:transparent;color:var(--accent-text)}
+.sidebar .chip{height:20px;padding:0 8px;background:rgba(255,255,255,.12);border-color:transparent;color:var(--sidebar-text)}
+.sidebar .chip b{color:#fff}
+
+.badge{display:inline-flex;align-items:center;height:20px;padding:0 var(--s2);border-radius:var(--r-pill);
+  background:var(--track);color:var(--text-3);font-size:var(--fs-2xs);white-space:nowrap;font-variant-numeric:tabular-nums}
+.badge.ok{background:var(--accent-soft);color:var(--ok-text)}
+.badge.doh{background:rgba(69,170,242,.16);color:var(--info-text)}
+.badge.warn{background:rgba(224,163,62,.18);color:var(--threats-text)}
+.badge.err{background:rgba(217,83,79,.15);color:var(--err-text)}
+.badge.quic{background:rgba(165,94,234,.16);color:#6d34a8}
+/* 窄屏的协议简写（替代徽标：徽标有 padding，4 列布局放不下 2 个以上） */
+.pshort{font-size:var(--fs-2xs);font-weight:600;white-space:nowrap;letter-spacing:.02em}
+.pshort.ok{color:var(--ok-text)} .pshort.doh{color:var(--info-text)}
+.pshort.quic{color:#6d34a8} .pshort.mute{color:var(--text-3)}
+
+.sdot{width:8px;height:8px;border-radius:50%;display:inline-block;vertical-align:middle;background:var(--track);flex:0 0 8px}
+.sdot.ok{background:var(--ok)} .sdot.warn{background:var(--threats)}
+.sdot.err{background:var(--err)} .sdot.idle{background:var(--track)}
+
+.btn{border:1px solid var(--line);background:var(--card2);color:var(--text);border-radius:var(--r-ctl);
+  padding:7px var(--s3);font-size:var(--fs-sm);cursor:pointer;display:inline-flex;align-items:center;gap:6px;line-height:1.2;font-family:inherit}
+.btn:hover{border-color:var(--accent);color:var(--accent-text)}
+.btn.primary{background:var(--accent-strong);border-color:var(--accent-strong);color:#fff}
+.btn.primary:hover{background:#2b5f3c;border-color:#2b5f3c;color:#fff}
+.btn.icon{padding:7px 10px}
+
+/* ---------- 卡片 / 面板 ---------- */
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-1)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-1);
+  padding:var(--s5);display:flex;flex-direction:column;gap:var(--s3)}
+.panel.fixed{height:300px}
+.panel>header{display:flex;align-items:baseline;justify-content:space-between;gap:var(--s3);flex-wrap:wrap}
+.panel>header h2{font-size:var(--fs-lg);font-weight:600;margin:0;line-height:var(--lh-tight);min-width:0;overflow:hidden;text-overflow:ellipsis}
+.panel>header .unit{font-size:var(--fs-xs);color:var(--text-3);flex:0 0 auto}
+.grid12{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--s4);align-items:start}
+.c7{grid-column:span 7}.c5{grid-column:span 5}.c12{grid-column:span 12}
+.kpirow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:var(--s4)}
+.hint{font-size:var(--fs-xs);color:var(--text-3);margin:0 0 var(--s3);max-width:660px}
+.hint b{color:var(--text)}
+.muted{color:var(--text-3)}
+.small{font-size:var(--fs-xs)}
+.mono-s{font-family:var(--mono);font-size:var(--fs-xs);color:var(--text-3);overflow-wrap:anywhere}
+.row{display:flex;gap:var(--s3);flex-wrap:wrap;align-items:center}
+.stack{display:flex;flex-direction:column;gap:var(--s3)}
+
+details.hint-box{border:1px solid var(--line);border-radius:var(--r-card);background:var(--card);
+  box-shadow:var(--shadow-1);margin-bottom:0}
+details.hint-box>summary{cursor:pointer;padding:var(--s3) var(--s4);font-size:var(--fs-xs);font-weight:600;color:var(--text-3);
+  list-style:none;display:flex;align-items:center;gap:var(--s2)}
+details.hint-box>summary::-webkit-details-marker{display:none}
+details.hint-box>summary::before{content:"▸";font-size:10px;transition:transform .12s}
+details.hint-box[open]>summary::before{transform:rotate(90deg)}
+details.hint-box>.body{padding:0 var(--s4) var(--s4);font-size:var(--fs-xs);color:var(--text-2);line-height:var(--lh-base);max-width:680px}
+details.hint-box>.body p{margin:0 0 var(--s2)}
+
+/* ---------- KPI ---------- */
+.kpi{padding:var(--s4);display:flex;flex-direction:column;min-height:112px}
+.kpi .label{font-size:var(--fs-xs);color:var(--text-3);display:flex;align-items:center;gap:6px}
+.kpi .num{font-size:var(--fs-2xl);font-weight:600;line-height:1.2;font-variant-numeric:tabular-nums;margin-top:2px}
+.kpi .kbadge{display:inline-block;font-size:var(--fs-2xs);padding:1px 8px;border-radius:var(--r-pill);margin-left:var(--s2);
+  background:var(--track);color:var(--text-3);vertical-align:middle;white-space:nowrap;font-variant-numeric:tabular-nums}
+.kpi .kbadge.ok{background:var(--accent-soft);color:var(--ok-text)}
+.kpi .kbadge.warn{background:rgba(224,163,62,.2);color:var(--threats-text)}
+.kpi .kbadge.err{background:rgba(217,83,79,.18);color:var(--err-text)}
+.kpi .cap{font-size:var(--fs-xs);color:var(--text-3);line-height:1.5;margin-top:var(--s1);
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.kpi .bar{height:6px;border-radius:var(--r-bar);background:var(--track);margin-top:auto;overflow:hidden}
+.kpi .bar>i{display:block;height:100%;border-radius:var(--r-bar);background:var(--accent)}
+.kpi .bar>i.warn{background:var(--threats)}
+.kpi .bar>i.err{background:var(--err)}
+
+/* ---------- 状态条（概览顶部 + 抽屉统计共用） ---------- */
+.statstrip{display:flex;flex-wrap:wrap;gap:var(--s2) var(--s5);align-items:center;font-size:var(--fs-xs);color:var(--text-3);
+  padding:var(--s3) var(--s4);border:1px solid var(--line);border-radius:var(--r-card);background:var(--card2)}
+.statstrip b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+.statstrip .sep{width:1px;height:14px;background:var(--line)}
+.statstrip>span{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.statstrip .kpis{display:flex;gap:var(--s6);flex-wrap:wrap}
+.statstrip .kpis div{display:flex;flex-direction:column}
+.statstrip .kpis div b{font-size:var(--fs-xl);line-height:1.2}
+.statstrip .kpis div span{font-size:var(--fs-xs);color:var(--text-3);font-weight:400}
+
+/* ---------- 迷你条（全站唯一的占比图形） ---------- */
+.mini{width:56px;height:6px;border-radius:var(--r-bar);background:var(--track);overflow:hidden;display:inline-block;vertical-align:middle}
+.mini>i{display:block;height:100%;border-radius:var(--r-bar);background:var(--accent)}
+.mini.wide{width:100%}
+.cell.stack{display:flex;flex-direction:column;justify-content:center;gap:var(--s1)}
+
+/* ---------- 数据表 ---------- */
+.tblwrap{overflow:auto;max-width:100%}
+table{width:100%;border-collapse:collapse;font-size:var(--fs-sm)}
+th{text-align:left;font-weight:600;color:var(--text-3);font-size:var(--fs-xs);
+  padding:10px var(--s3);border-bottom:1px solid var(--line);white-space:nowrap;background:var(--card);
+  position:sticky;top:0;z-index:2}
+td{padding:10px var(--s3);border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+tr.clickable{cursor:pointer}
+tr.clickable:hover{background:var(--card2)}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+td .mini{margin-top:var(--s1)}
+.tblcard{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-1);overflow:hidden}
+.more{padding:10px var(--s3);font-size:var(--fs-xs);color:var(--text-3);cursor:pointer;border-top:1px solid var(--line)}
+.more:hover{color:var(--accent-text)}
+
+/* ---------- 设备密集行列表（Linear 式：固定槽位 / 44px / 分组 / 首列钉住） ---------- */
+.devtools{display:flex;gap:var(--s3);align-items:center;flex-wrap:wrap;margin-bottom:var(--s4)}
+.devtools .grow{flex:1 1 300px}
+input[type=text],input[type=search],textarea,select{background:var(--card);border:1px solid var(--line);
+  border-radius:var(--r-ctl);padding:8px var(--s3);color:var(--text);font-size:var(--fs-sm);font-family:inherit;width:100%}
+input[type=search]::-webkit-search-cancel-button{cursor:pointer}
+select{width:auto}
+label.ck{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-xs);color:var(--text-3);white-space:nowrap;cursor:pointer}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r-ctl);overflow:hidden}
+.seg button{border:0;background:var(--card);padding:7px var(--s3);font-size:var(--fs-xs);cursor:pointer;
+  color:var(--text-3);font-family:inherit}
+.seg button.on{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+
+.devcnt{font-size:var(--fs-xs);color:var(--text-3);margin:0 0 var(--s3)}
+.devcnt b{color:var(--text)}
+/* ⚠ 不要给 .devtable / .scroll 设 overflow:hidden|auto —— 任何非 visible 的 overflow 都会
+   让它成为 position:sticky 的滚动容器，吸顶表头与分组头会立刻失效（已实测复现）。
+   圆角改由表头自身的圆角贴合；列宽用 fr 自适应，全宽下不产生横向滚动。 */
+.devtable{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);box-shadow:var(--shadow-1)}
+.devtable .scroll{overflow:visible}
+.devtable .head,.devtable .row{display:grid;
+  grid-template-columns:
+    minmax(120px,1.75fr) minmax(64px,.85fr) minmax(72px,1fr) minmax(58px,.8fr)
+    minmax(72px,1fr) minmax(66px,.95fr) 58px 68px 54px 66px minmax(84px,1.15fr)
+    minmax(66px,.8fr) minmax(96px,1.05fr);
+  gap:0 var(--s2);align-items:center;padding:0 var(--s3)}
+.devtable .head{position:sticky;top:var(--topbar-h);z-index:3;height:36px;background:var(--card2);
+  border-radius:var(--r-card) var(--r-card) 0 0;
+  border-bottom:1px solid var(--line);font-size:var(--fs-xs);font-weight:600;color:var(--text-3);white-space:nowrap}
+.devtable .head>span{overflow:hidden;text-overflow:ellipsis}
+.devtable .group{position:sticky;top:calc(var(--topbar-h) + 36px);z-index:2;height:32px;display:flex;align-items:center;
+  gap:var(--s2);padding:0 var(--s3);background:var(--card2);border-top:1px solid var(--line);
+  border-bottom:1px solid var(--line);font-size:var(--fs-xs);font-weight:600;color:var(--text-2);cursor:pointer}
+.devtable .group .n{color:var(--text-3);font-weight:400;font-variant-numeric:tabular-nums}
+.devtable .group .tw{margin-left:auto;color:var(--text-3);font-weight:400}
+.devtable .row{height:44px;border-bottom:1px solid var(--line);cursor:pointer;font-size:var(--fs-sm);
+  content-visibility:auto;contain-intrinsic-size:auto 44px}
+.devtable .row:hover{background:var(--card2)}
+.devtable .row:last-child{border-bottom:0}
+input.pick{width:16px;height:16px;flex:0 0 16px;margin:0;cursor:pointer;accent-color:var(--accent)}
+.cell{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cell.mono{font-family:var(--mono);font-size:var(--fs-xs);color:var(--text-2)}
+.cell.num{text-align:right;font-variant-numeric:tabular-nums;font-weight:600}
+.cell.name{display:flex;align-items:center;gap:var(--s2)}
+.cell.name .nm{font-size:var(--fs-md);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cell.name .id{font-size:var(--fs-2xs);color:var(--text-3);flex:0 0 auto;font-variant-numeric:tabular-nums}
+.dash{color:var(--text-3)}
+.devtable .row>.c-name,.devtable .head>.c-name{position:sticky;left:0;z-index:1;background:inherit}
+.devtable .row>.c-name{background:var(--card)}
+.devtable .row:hover>.c-name{background:var(--card2)}
+.devempty{padding:var(--s6);text-align:center;color:var(--text-3);font-size:var(--fs-sm)}
+
+/* ---------- 行列表（最近活跃设备） ---------- */
+.rowlist{display:flex;flex-direction:column}
+.rowlist .r{display:grid;grid-template-columns:minmax(0,1.6fr) 148px 88px 84px;gap:var(--s3);
+  align-items:center;min-height:44px;padding:var(--s1) var(--s2);border-radius:var(--r-ctl);cursor:pointer}
+.rowlist .r:hover{background:var(--card2)}
+.rowlist .r+.r{border-top:1px solid var(--line)}
+.rowlist .nm{font-size:var(--fs-sm);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rowlist .meta{font-size:var(--fs-xs);color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rowlist .amt{text-align:right;font-size:var(--fs-sm);font-variant-numeric:tabular-nums}
+.rowlist .hd{display:grid;grid-template-columns:minmax(0,1.6fr) 148px 88px 84px;gap:var(--s3);
+  padding:0 var(--s2) var(--s1);font-size:var(--fs-xs);color:var(--text-3);font-weight:600}
+
+/* ---------- 走势图 ---------- */
+.chartwrap{position:relative;margin-top:var(--s2)}
+.bars{display:flex;align-items:flex-end;gap:2px;height:120px;border-bottom:1px solid var(--line)}
+.bars i{flex:1;background:var(--accent);opacity:.72;border-radius:var(--r-bar) var(--r-bar) 0 0;min-height:2px}
+.bars i.zero{background:var(--track);opacity:1}
+.chartwrap .spark{position:absolute;left:0;right:0;bottom:0;width:100%;height:120px;pointer-events:none}
+.chartwrap .gridline{position:absolute;left:0;right:0;border-top:1px dashed var(--line);opacity:.8}
+.axis{position:relative;height:16px;margin-top:var(--s1);font-size:var(--fs-2xs);color:var(--text-3)}
+.axis span{position:absolute;transform:translateX(-50%)}
+.axis span:first-child{transform:none}
+.legend{display:flex;gap:var(--s4);flex-wrap:wrap;font-size:var(--fs-xs);color:var(--text-3);margin-top:var(--s1)}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:-1px;margin-right:5px}
+
+/* ---------- 协议分布 ---------- */
+.proto{display:flex;flex-direction:column;gap:var(--s3)}
+.proto .p{display:flex;flex-direction:column;gap:var(--s1)}
+.proto .p .t{display:flex;justify-content:space-between;gap:var(--s3);font-size:var(--fs-sm)}
+/* 名称必须是"可伸缩并截断"的 flex 项：默认 min-width:auto 会缩到 min-content（最长单词，
+   实测 320px 下只剩 60px、每行 4 字），而不是占用剩余宽度。 */
+.proto .p .t>span:first-child{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.proto .p .t .n{flex:0 0 auto;color:var(--text-3);font-size:var(--fs-xs);font-variant-numeric:tabular-nums;white-space:nowrap}
+.proto .p .mini{width:100%}
+
+/* ---------- nDPI ---------- */
+.ndpi{display:flex;flex-direction:column;gap:var(--s3)}
+.ndpi .tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s3)}
+.ndpi .tile{border:1px solid var(--line);border-radius:var(--r-ctl);padding:var(--s3)}
+.ndpi .tile .t{font-size:var(--fs-xs);color:var(--text-3)}
+.ndpi .tile .v{font-size:var(--fs-xl);font-weight:600;font-variant-numeric:tabular-nums;line-height:1.3}
+.ndpi .risk{font-size:var(--fs-xs);color:var(--threats-text);line-height:1.6}
+
+/* ---------- 设备卡片（窄屏降级 / 手动切换） ---------- */
+.cards{display:grid;gap:var(--s3);
+  /* minmax(min(340px,100%),1fr)：窄屏时 340px 会被 100% 顶掉，绝不撑破容器 */
+  grid-template-columns:repeat(auto-fill,minmax(min(340px,100%),1fr));align-items:start}
+.devcard{padding:var(--s4);cursor:pointer;display:flex;flex-direction:column;gap:var(--s2)}
+.devcard:hover{border-color:var(--accent)}
+.devcard .nm{font-weight:600;font-size:var(--fs-md);display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.devcard .sub{font-size:var(--fs-xs);color:var(--text-3);overflow-wrap:anywhere}
+.devcard .fp{font-family:var(--mono);font-size:var(--fs-xs);color:var(--text-3);overflow-wrap:anywhere}
+.kvrow{display:grid;grid-template-columns:96px minmax(0,1fr);gap:0 var(--s3);align-items:baseline;
+  padding:6px 0;border-bottom:1px dashed var(--line);font-size:var(--fs-sm);line-height:var(--lh-row)}
+.kvrow:last-child{border-bottom:0}
+.kvrow .k{color:var(--text-3)}
+.kvrow .v{text-align:left;min-width:0;overflow-wrap:anywhere}
+
+/* ---------- 抽屉 ---------- */
+.drawer{position:fixed;inset:0;background:rgba(12,20,26,.42);z-index:40;display:none}
+.drawer.on{display:block}
+.drawer .panel2{position:absolute;top:0;right:0;bottom:0;width:min(1040px,100%);background:var(--bg);
+  box-shadow:var(--shadow-2),-8px 0 26px rgba(0,0,0,.22);overflow-y:auto;padding:0;display:block}
+.drawer .dhead{position:sticky;top:0;z-index:5;display:flex;align-items:flex-start;gap:var(--s3);
+  padding:var(--s4) var(--s6);background:var(--card);border-bottom:1px solid var(--line)}
+.drawer .dhead .dh-main{min-width:0;flex:1}
+.drawer .dhead h2{font-size:var(--fs-xl);font-weight:600;margin:0 0 var(--s1);line-height:var(--lh-tight);display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap}
+.drawer .dhead .meta{font-size:var(--fs-xs);color:var(--text-3);overflow-wrap:anywhere}
+.drawer .dbody{padding:var(--s5) var(--s6) var(--s8)}
+.drawer .close{flex:0 0 auto}
+.tabs{display:flex;gap:var(--s1);flex-wrap:wrap;margin:var(--s4) 0 var(--s3);position:sticky;top:64px;z-index:4;
+  background:var(--bg);padding:var(--s2) 0}
+.tabs button{border:1px solid var(--line);background:var(--card);border-radius:var(--r-pill);padding:6px var(--s3);
+  font-size:var(--fs-xs);cursor:pointer;color:var(--text-3);font-family:inherit}
+.tabs button.on{background:var(--accent-soft);border-color:transparent;color:var(--accent-text);font-weight:600}
+.verdict{background:var(--card);border:1px solid var(--line);border-radius:var(--r-card);
+  box-shadow:var(--shadow-1),inset 4px 0 0 var(--accent);padding:var(--s4);margin-top:var(--s3)}
+.verdict>.row>div{min-width:0;flex:1 1 auto}
+.verdict>.row>button{flex:0 0 auto}
+.verdict .vl{font-size:var(--fs-xl);font-weight:600;line-height:var(--lh-tight);margin-top:var(--s1)}
+.verdict .caveat{font-size:var(--fs-xs);color:var(--threats-text);line-height:var(--lh-base);margin-top:var(--s2)}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:0 var(--s3);font-size:var(--fs-sm);margin:0}
+.kv dt{color:var(--text-3);padding:6px 0;border-bottom:1px dashed var(--line)}
+.kv dd{margin:0;padding:6px 0;border-bottom:1px dashed var(--line);overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.kv dt:last-of-type,.kv dd:last-of-type{border-bottom:0}
+.kpis{display:flex;gap:var(--s6);flex-wrap:wrap}
+.kpis div b{display:block;font-size:var(--fs-xl);font-weight:600;font-variant-numeric:tabular-nums;line-height:1.2}
+.kpis div span{font-size:var(--fs-xs);color:var(--text-3)}
+.msg{padding:10px var(--s4);border-radius:var(--r-ctl);font-size:var(--fs-sm);margin-bottom:var(--s3);display:none}
+.msg.on{display:block}
+.msg.ok{background:var(--accent-soft);color:var(--accent-text)}
+.msg.err{background:rgba(217,83,79,.13);color:var(--err-text)}
+.pane{display:block}
+.pill{font-family:var(--mono);font-size:var(--fs-xs);background:var(--card2);border:1px solid var(--line);
+  border-radius:var(--r-ctl);padding:1px 6px;display:inline-block;margin:1px 3px 1px 0;overflow-wrap:anywhere}
+pre.raw{margin:0;white-space:pre-wrap;background:var(--card);padding:var(--s3);border-radius:var(--r-ctl);
+  border:1px solid var(--line);font-family:var(--mono);font-size:var(--fs-xs);line-height:1.5;tab-size:2;max-height:420px;overflow:auto}
+
+@media (max-width:1180px){
+  .kpirow{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .c7,.c5{grid-column:span 12}
+  .panel.fixed{height:auto}
+  /* 中等宽度放不下 11 列 → 退回固定列宽 + 横向滚动。
+     代价：.scroll 变成滚动容器，此时 sticky 的偏移基准是"容器 scrollport"而不是页面，
+     top:var(--topbar-h) 会把表头硬推下去盖住数据行（实测：head 639 / 首行 578，差 61px）。
+     所以这里必须把吸顶关掉。 */
+  .devtable .scroll{overflow-x:auto;overscroll-behavior-x:contain}
+  .devtable .head,.devtable .group{position:static}
+  .devtable .head,.devtable .row{grid-template-columns:minmax(120px,1.6fr) 72px 82px 68px 80px 76px 58px 68px 54px 66px minmax(90px,1.2fr) minmax(66px,.8fr) minmax(96px,1.05fr);
+    min-width:940px}
+}
+@media (max-width:860px){
+  .sidebar{position:static;width:100%;height:auto;flex-direction:column}
+  .nav{display:flex;overflow-x:auto;padding:0}
+  .nav a{border-left:none;border-bottom:3px solid transparent;white-space:nowrap;padding:10px var(--s3)}
+  .nav a .chip{display:none}
+  .main{margin-left:0}
+  .sidebar-foot{display:none}
+  .kv{grid-template-columns:1fr}
+  .kv dt{border-bottom:0;padding-bottom:0}
+  .kv dd{padding-top:0}
+  .panel{padding:var(--s4)}
+  .content{padding:var(--s4)}
+  /* 顶栏瘦身：相对时间够用，省掉一行 */
+  .topbar .meta{display:none}
+  .topbar h1{font-size:var(--fs-lg)}
+  .chips{flex-wrap:nowrap;overflow-x:auto;padding-bottom:2px}
+  .chip{flex:0 0 auto}
+  /* 设备列表：手机用紧凑 4 列（设备 / 协议 / 连接 / 最后活跃），其余 7 列隐藏。
+     比卡片视图省 90% 的竖向长度（89 张卡 ≈ 59000px → 表格 ≈ 4000px）。
+     4 列在 320px 也放得下 → 不要滚动容器，吸顶因此可以重新打开。 */
+  .devtable .scroll{overflow:visible}
+  .devtable .head,.devtable .row{min-width:0;
+    grid-template-columns:minmax(0,1.35fr) minmax(56px,.75fr) 52px 64px;
+    gap:0 var(--s2);padding:0 var(--s3)}
+  .devtable .head{position:sticky;top:var(--topbar-h);height:34px}
+  .devtable .group{position:sticky;top:calc(var(--topbar-h) + 34px)}
+  .devtable .head .c-inf,.devtable .head .c-role,.devtable .head .c-stack,.devtable .head .c-tcp,
+  .devtable .head .c-q,.devtable .head .c-rtt,.devtable .head .c-ja4,
+  .devtable .head .c-ipid,.devtable .head .c-edns,
+  .devtable .row .c-inf,.devtable .row .c-role,.devtable .row .c-stack,.devtable .row .c-tcp,
+  .devtable .row .c-q,.devtable .row .c-rtt,.devtable .row .c-ja4,
+  .devtable .row .c-ipid,.devtable .row .c-edns{display:none}
+  .devtable .row{height:48px;contain-intrinsic-size:auto 48px}
+  /* 抽屉：手机上标题不该沿用 20px 桌面字号，否则会把置信徽标挤到第二行（实测 194px / 每行 9 字） */
+  .drawer .dhead{padding:var(--s3) var(--s4)}
+  .drawer .dhead h2{font-size:var(--fs-lg)}
+  .drawer .dbody{padding:var(--s4) var(--s4) var(--s6)}
+  /* 分段导航在手机上会折成 2–3 行，吸顶会吃掉半屏 → 取消吸顶（桌面仍保持 sticky） */
+  .drawer .tabs{position:static}
+  /* 最近活跃设备：2 列，隐藏"推断" */
+  .rowlist .hd{display:none}
+  .rowlist .r{grid-template-columns:minmax(0,1fr) 76px;gap:0 var(--s2)}
+  .rowlist .r .c-inf{display:none}
+  .ndpi .tiles{grid-template-columns:minmax(0,1fr)}
+  /* 状态条：每段原本 nowrap，窄屏放不下会被 body 的 overflow-x:clip 直接切掉（实测 320px 越界 69px）。
+     改成"一段一行"：flex:1 1 100% 让它拿满整行，否则 min-width:auto 会把它缩到 min-content
+     （实测每行只剩 12 字）。配合 JS 在窄屏输出更短的文案。 */
+  .statstrip{gap:6px var(--s3)}
+  .statstrip>span{flex:1 1 100%;white-space:normal;overflow-wrap:break-word;align-items:flex-start}
+  .statstrip .sep{display:none}
+}
+@media (max-width:400px){
+  /* 极窄屏：KPI 收成单列，否则数字+徽标会撞在一起 */
+  .kpirow{grid-template-columns:minmax(0,1fr)}
+  .legend{gap:var(--s2)}
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none !important;animation:none !important;scroll-behavior:auto !important}
+}
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">
+    <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="#67b279" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6l8-4z"/><circle cx="12" cy="11" r="2.4"/><path d="M12 13.4V17"/>
+    </svg>
+    <div>设备指纹<small>DoT / DoH · dns.example.com</small></div>
+  </div>
+  <nav class="nav" id="nav">
+    <a data-v="overview" class="active">概览</a>
+    <a data-v="devices">设备<span class="chip" id="c-dev"><b>0</b></span></a>
+    <a data-v="dot">DoT 客户端<span class="chip" id="c-dot"><b>0</b></span></a>
+    <a data-v="doh">DoH 客户端<span class="chip" id="c-doh"><b>0</b></span></a>
+    <a data-v="fingerprints">指纹库</a>
+    <a data-v="events">事件流</a>
+    <a data-v="enroll">登记设备</a>
+    <a data-v="about">采集说明</a>
+  </nav>
+  <div class="sidebar-foot">
+    每 <b id="foot-int">30</b> 秒自动刷新<br>
+    抓包 <b id="foot-pkts">—</b> · 活动连接 <b id="foot-conns">—</b>
+  </div>
+</aside>
+
+<div class="main">
+  <div class="topbar">
+    <h1>设备指纹看板</h1>
+    <span class="meta">数据时间 <b id="ts">—</b></span>
+    <span class="fresh" id="fresh"><span class="sdot ok"></span><span id="ts-rel">等待首次加载…</span></span>
+    <div class="chips">
+      <span class="chip" id="cl-real" title="活跃且非扫描/自测的客户端簇">客户端 <b>–</b></span>
+      <span class="chip" id="cl-fp" title="全部指纹 / 其中的 DoT·DoH 指纹">指纹 <b>–</b></span>
+      <span class="chip" id="cl-probe" title="扫描器 / 自测探针 / 噪声簇">探测 <b>–</b></span>
+    </div>
+    <div class="tools">
+      <span class="meta" id="countdown">—</span>
+      <button class="btn primary" id="btn-refresh">立即刷新</button>
+      <button class="btn icon" id="btn-theme" title="切换主题">🌙</button>
+    </div>
+  </div>
+  <div class="content">
+    <div class="msg" id="msg"></div>
+
+    <!-- ============ 概览 ============ -->
+    <section id="v-overview" class="on">
+      <div class="statstrip" id="ov-health"></div>
+      <div class="kpirow" id="kpis" style="margin-top:var(--gap)"></div>
+      <div class="grid12" style="margin-top:var(--gap)">
+        <div class="panel fixed c7">
+          <header>
+            <h2>24 小时连接与查询走势</h2>
+            <span class="unit">柱=新建连接 · 线=DNS 查询</span>
+          </header>
+          <div id="ov-timeline"></div>
+        </div>
+        <div class="panel fixed c5">
+          <header><h2>协议分布（24h）</h2><span class="unit" id="ov-proto-total">—</span></header>
+          <div class="proto" id="ov-protos"></div>
+        </div>
+      </div>
+      <div class="grid12" style="margin-top:var(--s4)">
+        <div class="panel c7">
+          <header><h2>最近活跃设备</h2><span class="unit" id="ov-topdevs-unit">Top 8</span></header>
+          <div class="rowlist" id="ov-topdevs"></div>
+        </div>
+        <div class="panel c5">
+          <header><h2>来源 IP 分布</h2><span class="unit">按连接数</span></header>
+          <div class="tblwrap" id="ov-ips-wrap"></div>
+        </div>
+      </div>
+      <div class="grid12" style="margin-top:var(--s4)">
+        <div class="panel c7">
+          <header><h2>近 1 小时热门域名</h2><span class="unit">按查询数</span></header>
+          <div class="tblwrap" id="ov-domains-wrap"></div>
+        </div>
+        <div class="panel c5">
+          <header><h2>nDPI 旁路判定</h2><span class="unit">协议 / 分类 / 风险</span></header>
+          <div class="sub">nDPI 风险仅作为组合信号，需结合指纹漂移和重复行为判断。</div><div class="ndpi" id="ov-ndpi"><span class="muted small">加载中…</span></div>
+        </div>
+      </div>
+      <details class="hint-box" style="margin-top:var(--s4)">
+        <summary>看板口径与局限</summary>
+        <div class="body">
+          <p>只看<b>用本机 DoT/DoH 的设备</b>（服务器侧按指纹聚类）。数据来源三路：<b>被动抓包</b>（853/444/443 的 TLS ClientHello → JA3/JA4、TCP SYN → p0f 式指纹、握手 RTT）、<b>AdGuardHome 查询日志</b>（协议/查询行为）、<b>nginx DoH 访问日志</b>（HTTP 层指纹）。全部只读采集，不介入 DNS 解析链路。</p>
+          <p>设备卡片上的「推断」是用 TLS 栈结构 + TCP/IP 特征 + 查询域名 + HTTP 层 + 连接行为合成的结论，点开可看逐条证据。跨 NAT 看不到 MAC，因此<b>无法对应到具体硬件型号</b>；域名规则给出的厂商/OS 只是概率性线索，一律标注置信度并保留原始证据。证据不足就写「未识别」，不猜。</p>
+        </div>
+      </details>
+    </section>
+
+    <!-- ============ 设备 ============ -->
+    <section id="v-devices">
+      <h2 class="sec">设备</h2>
+      <p class="hint">设备按「<b>JA4/JA3 + TCP + HTTP/DNS 行为</b>」多证据聚类；单一 JA3/JA4 只作为线索，并显示置信度与漂移状态。点任意一行查看完整指纹与行为。名称可自行命名，命名后会同步到相同指纹的其他条目。</p>
+      <div class="devtools">
+        <div class="grow"><input type="search" id="dev-q" placeholder="搜索：IP / 名称 / JA3 / JA4 / UA / ASN / rDNS…"></div>
+        <select id="dev-sort" title="排序">
+          <option value="last">按最后活跃</option>
+          <option value="conns">按连接数</option>
+          <option value="queries">按 24h 查询数</option>
+          <option value="rtt">按握手 RTT</option>
+        </select>
+        <label class="ck" title="只显示已经通过 /join 绑定过的设备；未绑定的是抓包推导出来的猜测簇"><input type="checkbox" id="dev-bound" checked> 只看已绑定</label>
+        <label class="ck" title="排除公网扫描器，以及「只对 :443 建过连接、从未走本机解析器发过查询」的指纹"><input type="checkbox" id="dev-inuse" checked> 只在用设备</label>
+        <label class="ck"><input type="checkbox" id="dev-dnsonly" checked> 只看 DNS 设备</label>
+        <div class="seg" id="dev-mode">
+          <button data-m="list" class="on">列表</button>
+          <button data-m="cards">卡片</button>
+        </div>
+      </div>
+      <div class="devcnt" id="dev-count">—</div>
+      <div class="devtable" id="dev-table"></div>
+      <div class="cards" id="dev-list"></div>
+    </section>
+
+    <!-- ============ DoT ============ -->
+    <section id="v-dot">
+      <h2 class="sec">DoT 客户端（:853）</h2>
+      <p class="hint">经 TLS 直连 853 的客户端。853 现由 <b>Nginx stream</b> 前置终结 TLS（明文 DNS 记录后转发给 AGH），因此除了 ClientHello/TCP 指纹，还能看到<b>明文查询名、qtype、EDNS 特征（PADDING/DO 位/UDP 缓冲/COOKIE/ECS）、0x20 大小写随机化与每查询时延</b>。</p>
+      <div class="devcnt" id="dot-count">—</div>
+      <div class="devtable" id="dot-table"></div>
+      <div class="cards" id="dot-list"></div>
+    </section>
+
+    <!-- ============ DoH ============ -->
+    <section id="v-doh">
+      <h2 class="sec">DoH 客户端（:443 与 :444 均经 nginx）</h2>
+      <p class="hint">443 与 444 都由 nginx 终结 TLS 并反代到 AGH，因此两条路径都能拿到 HTTP 层指纹（UA、头集合、TLS 套件/曲线/ALPN/session 复用）与请求里解出的查询域名；AGH 侧记的是真实客户端 IP（XFF + trusted_proxies）。</p>
+      <div class="devcnt" id="doh-count">—</div>
+      <div class="devtable" id="doh-table"></div>
+      <div class="cards" id="doh-list"></div>
+    </section>
+
+    <!-- ============ 指纹库 ============ -->
+    <section id="v-fingerprints">
+      <h2 class="sec">指纹库</h2>
+      <p class="hint">按 JA4/JA3 汇总本机观测到的 TLS 指纹，并结合 TCP、HTTP/DNS 行为判断置信度；单一指纹不直接等同于设备身份。可用来识别「换 IP 不换客户端」的同一台设备，或发现新的客户端软件。</p>
+      <div class="tblcard"><div class="tblwrap" style="max-height:70vh"><table id="fp-tbl"></table></div></div>
+    </section>
+
+    <!-- ============ 事件 ============ -->
+    <section id="v-events">
+      <h2 class="sec">事件流</h2>
+      <div class="tblcard"><div class="tblwrap" style="max-height:70vh"><table id="ev-tbl"></table></div></div>
+    </section>
+
+    <!-- ============ 登记设备 ============ -->
+    <section id="v-enroll">
+      <h2 class="sec">登记设备</h2>
+      <p class="hint">在<b>家里的每台设备</b>上打开 <code>https://dns.example.com/join</code> 就行：<b>打开即自动登记，不用点按钮、不用填任何信息</b>。
+        页面会采集浏览器全量特征（UA-CH 高熵项、GPU/WebGL、字体、Canvas/AudioContext、屏幕与时区、权限与编解码矩阵等），
+        写入<b>四个持久 ID</b>（localStorage / IndexedDB / Cookie / Cache），并让这次 HTTPS 访问的 TLS 握手被抓包侧解析成 <code>ja4</code>；
+        同时判定这台设备此刻是否走 DoT/DoH（登记响应里就带回结论）。
+        名字由后端按硬件型号自动命名。<b>关联到哪个指纹簇由你在这里手动选择</b>（后端只给「建议」，不做自动绑定），登记记录也可以随时删除。
+        下面的「本机登记」按钮适合想手动指定名字的场合。</p>
+      <div class="grid12">
+        <div class="panel c5">
+          <h3 class="sub" style="margin-top:0">本机登记</h3>
+          <div class="row"><input type="text" id="en-name" placeholder="给这台设备起个名，如：客厅电视 / 我的手机" style="max-width:300px"></div>
+          <div class="row" style="margin-top:var(--s2)"><input type="text" id="en-note" placeholder="备注（可选）" style="max-width:300px"></div>
+          <div class="row" style="margin-top:var(--s3)">
+            <button class="btn primary" id="btn-enroll">登记这台设备</button>
+            <button class="btn" id="btn-fpview">预览将采集的指纹</button>
+          </div>
+          <div id="en-result" class="small muted" style="margin-top:var(--s3)"></div>
+          <pre class="raw" id="en-fp" style="display:none;max-height:260px;margin-top:var(--s3)"></pre>
+          <p class="hint" style="margin-top:var(--s3)">只在浏览器里读取公开属性，不发到任何第三方；采集内容可在上面预览。
+            注意：<b>Firefox/Safari 不提供 UA-CH，拿不到型号</b>，只能靠 UA 与 IP 推断。</p>
+        </div>
+        <div class="panel c7">
+          <h3 class="sub" style="margin-top:0">已登记的设备</h3>
+          <div id="enroll-list"><span class="muted small">加载中…</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ 说明 ============ -->
+    <section id="v-about">
+      <h2 class="sec">采集说明与局限</h2>
+      <div class="card" style="padding:var(--s5) var(--s6)">
+        <dl class="kv">
+          <dt>DoT :853</dt><dd>由 <b>Nginx stream</b> 前置终结 TLS（AGH 的 853 已挪到宿主回环 127.0.0.1:8854），再以 DoT 转发给 AGH；devfp 仅旁路抓包观察。所以除 ClientHello/ServerHello 与 TCP 指纹外，还能拿到：逐连接的<b>查询名/qtype/报文大小、EDNS 特征（PADDING 字节数、DO 位、宣称的 UDP 缓冲、DNS COOKIE、ECS）、0x20 大小写随机化、每查询时延</b>。</dd>
+          <dt>DoH :443 / :444</dt><dd>两条路径都由 nginx 终结 TLS 并反代到 AGH（容器 443 只发布在回环 127.0.0.1:4443），可记录 HTTP 层（UA、头、方法、状态、URL/POST 里解出的查询域名、TLS 套件/曲线/ALPN/session 复用）。</dd>
+          <dt>查询行为的归属</dt><dd>AGH querylog 只按出口 IP 归属；DoT 明文用同 <code>(ip, sport)</code> 连接精确归属，命中不了时若该 IP 只有一台设备则按 IP 归属，否则<b>不归属</b>（宁缺勿错）。另有 AGH 日志与抓包记录毫秒级「时间对齐」作为兜底（仅独占 IP 有效）。</dd>
+          <dt>查询行为</dt><dd>由 AGH querylog 增量读取（协议、qtype、上游、过滤命中、时延、ECS、Top 域名、最近查询）。</dd>
+          <dt>设备聚类</dt><dd>JA4/JA3 + TCP 指纹；无 TLS 时退化为「源 IP + TCP 指纹」。</dd>
+          <dt>OS 猜测</dt><dd>启发式 p0f-lite（TTL 跳数/窗口/MSS/WScale/选项顺序），置信度分高中低，仅供参考，原始值一律完整保留。</dd>
+          <dt>探测连接</dt><dd>只完成 TCP 三次握手、不发 ClientHello 就关闭的连接（常见于上游健康检查/端口探测）会被标记为「无载荷探测」，并按其 TCP 指纹并入同源同指纹的设备，不会单独虚增设备。</dd>
+          <dt>握手时延</dt><dd>SYN-ACK 发出 → 客户端下一个包到达的实测 RTT（毫秒）。注意不是 SYN→SYN-ACK（那只是本机处理耗时）。</dd>
+          <dt>设备推断</dt><dd>跨 NAT 看不到 MAC；DoH 的 HTTP 层与 DoT 明文（Nginx stream）能看到一部分载荷，但都读不到硬件型号。推断引擎用七类证据合成厂商/OS/TLS 栈/版本区间/设备角色：①TLS 栈结构；②TCP/IP 特征；③查询域名规则库；④HTTP 层；⑤连接行为；⑥版本线索；⑦DoT 明文画像。每条证据都在设备详情「推断依据」里列出，证据不足就写「未识别」。</dd>
+          <dt>局限</dt><dd>① 服务器无公网 IPv6，只能看到 IPv4 客户端；② 家庭设备经 CPE NAT 后同源 IP，只能靠指纹区分，<b>无法对应到具体硬件型号</b>；③ DoH 只能看到请求元数据、DoT 明文只覆盖 DNS 层，都看不到「设备内哪个 App 在解析」；④ 域名规则给出的厂商/OS 是<b>概率性线索</b>；⑤ 服务器侧一律看不到 MAC，没有 OUI 厂商库可用；⑥ Nginx stream 终结后，AGH 面板里 DoT 的客户端维度会退化成前端一个 IP；⑦ devfp 重启前就建立、之后不再发 SYN/ClientHello 的长连接无法指纹化。</dd>
+          <dt>保留策略</dt><dd>连接明细保留 7 天、DoH 请求保留 14 天；最近查询环形缓存 4 万条；小时级聚合长期保留。</dd>
+        </dl>
+        <div class="row" style="margin-top:var(--s4)">
+          <button class="btn" onclick="exp('devices','json')">导出设备 JSON</button>
+          <button class="btn" onclick="exp('devices','csv')">导出设备 CSV</button>
+          <button class="btn" onclick="exp('conns','csv')">导出连接 CSV</button>
+          <button class="btn" onclick="exp('dns','csv')">导出 DNS 小时聚合 CSV</button>
+          <a class="btn" href="/chain/" target="_blank" rel="noopener">链路看板</a>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<!-- 设备详情抽屉 -->
+<div class="drawer" id="drawer">
+  <div class="panel2"><div id="drawer-body"></div></div>
+</div>
+
+<script>
+"use strict";
+var REFRESH = 30, TIMER = null, LEFT = REFRESH, CUR = null;
+var VIEW = "overview";
+var MODE = "list", SORT = "last", Q = "", DNSONLY = true, INUSE = true;
+var PICK = false, SEL = {};   /* 归并模式：勾选多个指纹簇，告诉看板"这些是同一台设备" */
+var SUMMARY = null, EVENTS = null, DEV = {dev:null, dot:null, doh:null};
+var GROUP_OPEN = {gw:true, client:true, unknown:true, scan:false};
+var EXPAND = {ips:false, domains:false};
+var JA4CACHE = {};
+/* 页面挂在 /devices/ 下，API 与页面同前缀 */
+var API = (function(){ var p = location.pathname.replace(/\/index\.html$/,""); p = p.replace(/\/$/,""); return p; })();
+
+try{ MODE = localStorage.getItem("devfp-mode") || "list"; }catch(e){}
+try{ SORT = localStorage.getItem("devfp-sort") || "last"; }catch(e){}
+try{ if(localStorage.getItem("devfp-inuse") === "0") INUSE = false; }catch(e){}
+
+function $(s, r){ return (r||document).querySelector(s); }
+function $$(s, r){ return Array.prototype.slice.call((r||document).querySelectorAll(s)); }
+function esc(s){ return String(s==null?"":s).replace(/[&<>"'\/]/g, function(c){
+  return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;","/":"&#47;"}[c]; }); }
+function fmtTs(t){
+  if(!t) return "—";
+  var d = new Date(t*1000);
+  return d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate())+" "+p2(d.getHours())+":"+p2(d.getMinutes())+":"+p2(d.getSeconds());
+}
+function p2(n){ return (n<10?"0":"")+n; }
+function rel(t){
+  if(!t) return "—";
+  var s = Math.max(0, Math.floor(Date.now()/1000 - t));
+  if(s<60) return s+" 秒前";
+  if(s<3600) return Math.floor(s/60)+" 分钟前";
+  if(s<86400) return Math.floor(s/3600)+" 小时前";
+  return Math.floor(s/86400)+" 天前";
+}
+function nfmt(n){
+  n = Number(n||0);
+  if(n>=1e9) return (n/1e9).toFixed(2)+"G";
+  if(n>=1e6) return (n/1e6).toFixed(2)+"M";
+  if(n>=1e4) return (n/1e3).toFixed(1)+"k";
+  return String(n);
+}
+function bfmt(n){
+  n = Number(n||0);
+  if(n>=1073741824) return (n/1073741824).toFixed(2)+" GiB";
+  if(n>=1048576) return (n/1048576).toFixed(1)+" MiB";
+  if(n>=1024) return (n/1024).toFixed(1)+" KiB";
+  return n+" B";
+}
+function getJSON(u, cb){
+  var x = new XMLHttpRequest();
+  x.open("GET", API+u, true);
+  x.onreadystatechange = function(){
+    if(x.readyState!==4) return;
+    if(x.status!==200){ cb({error:"HTTP "+x.status}); return; }
+    var d;
+    /* ⚠ 只包 JSON.parse，绝不把 cb 包进 try：
+       否则回调里抛的任何异常都会被吞掉，再拿异常字符串二次调用 cb，
+       把"渲染崩溃"伪装成"数据错误"（本看板曾因此在抽屉里显示 TypeError 原文）。 */
+    try{ d = JSON.parse(x.responseText); }catch(e){ cb({error:"返回不是合法 JSON："+String(e)}); return; }
+    cb(d);
+  };
+  x.send();
+}
+function postJSON(u, body, cb){
+  var x = new XMLHttpRequest();
+  x.open("POST", API+u, true);
+  x.setRequestHeader("Content-Type","application/json");
+  x.onreadystatechange = function(){
+    if(x.readyState!==4) return;
+    var d;
+    try{ d = JSON.parse(x.responseText); }catch(e){ cb({error:"返回不是合法 JSON："+String(e)+" / HTTP "+x.status}); return; }
+    cb(d);
+  };
+  x.send(JSON.stringify(body||{}));
+}
+function showMsg(t, cls){
+  var m = $("#msg");
+  m.className = "msg on " + (cls||"ok");
+  m.textContent = t;
+  setTimeout(function(){ m.className = "msg"; }, 4000);
+}
+function badge(t, cls){ return '<span class="badge '+(cls||"")+'">'+esc(t)+'</span>'; }
+function mini(pct, tip){
+  return '<span class="mini"'+(tip? ' title="'+esc(tip)+'"':'')+'><i style="width:'+
+    Math.max(0,Math.min(100,Number(pct)||0))+'%"></i></span>';
+}
+function pills(arr, n){
+  arr = arr||[];
+  var out = arr.slice(0, n||14).map(function(v){ return '<span class="pill">'+esc(v)+'</span>'; }).join("");
+  if(arr.length > (n||14)) out += '<span class="muted small"> +'+(arr.length-(n||14))+'…</span>';
+  return out || '<span class="muted small">—</span>';
+}
+/* 协议徽标：颜色只区分信息类别，状态由 .sdot 表达 */
+function protoBadge(k, n){
+  var cls = {"dot":"ok","doh444":"doh","doh443":"doh","quic":"quic","tls443":""}[k] || "";
+  return badge(k+(n!=null? " ×"+n : ""), cls);
+}
+function seenDot(x){
+  if(!x.last_seen) return "idle";
+  var age = Date.now()/1000 - x.last_seen;
+  if(age < 180) return "ok";
+  if(age < 1800) return "warn";
+  return "idle";
+}
+
+/* ==================== 概览 ==================== */
+function renderSummary(d){
+  SUMMARY = d;
+  var dev = d.devices||0, act = d.devices_active||0, nw = d.devices_new24||0;
+
+  /* --- 顶栏 chips：每个数字都必须自解释（原来"指纹 292"其实含 300 个公网扫描器簇） --- */
+  var s = d.clusters || null;
+  if(s){
+    var junk = Number(s.scanner||0) + Number(s.self_test||0) + Number(s.noise||0);
+    $("#cl-real").innerHTML = '活跃 1h <b>'+nfmt(s.active)+'</b>';
+    $("#cl-real").title = "最近一小时有行为、且非扫描/自测/噪声的客户端簇（后端口径）。"+
+      "设备页默认按「在用（24h）」过滤，与这个数字是不同时间窗。";
+    $("#cl-fp").innerHTML = 'DNS 指纹 <b>'+nfmt(s.fingerprints_dns)+'</b>';
+    $("#cl-fp").title = "用过本机 DoT/DoH 的指纹数（全部指纹 "+s.fingerprints+"，其中 "+Number(s.fingerprints)-Number(s.fingerprints_dns)+" 个只访问过 443 网页）";
+    $("#cl-probe").className = junk>0 ? "chip warn" : "chip";
+    $("#cl-probe").innerHTML = '扫描+噪声 <b>'+nfmt(junk)+'</b>';
+    $("#cl-probe").title = "扫描 "+s.scanner+" · 自测 "+s.self_test+" · 噪声 "+s.noise+
+      " —— 这些是公网扫描器/健康检查，不是你的设备";
+  }
+  $("#ts").textContent = fmtTs(d.ts);
+  var cnt = {"dot":0,"doh":0};
+  (d.by_kind||[]).forEach(function(k){
+    if(k.kind==="dot") cnt.dot += k.devs||0;
+    if(k.kind==="doh444"||k.kind==="doh443") cnt.doh += k.devs||0;
+  });
+  /* 侧栏「设备」徽标 = 已绑定设备数（后端 bound_devices）。口径必须与设备页一致，
+     否则会出现"徽标 376 / 列表 2"这种对不上的情况——2026-10-05 设备页收紧为只显示已绑定设备。 */
+  var boundN = (d.bound_devices != null) ? d.bound_devices : null;
+  $("#c-dev").innerHTML = '<b>'+nfmt(boundN != null ? boundN : dev)+'</b>';
+  var navDev = document.querySelector('#nav a[data-v="devices"]');
+  if(navDev) navDev.title = "已人工绑定过的设备 "+nfmt(boundN||0)+" 台（设备页只显示这些）"+
+    "　·　绑定在「登记设备」页手动选择；未绑定的指纹簇是抓包推导出来的猜测，默认隐藏，可在设备页一键展开";
+  $("#c-dot").innerHTML = '<b>'+nfmt(cnt.dot)+'</b>';
+  $("#c-doh").innerHTML = '<b>'+nfmt(cnt.doh)+'</b>';
+  $("#foot-pkts").textContent = d.sniff? nfmt(d.sniff.packets) : "off";
+  $("#foot-conns").textContent = nfmt(d.live_conns);
+
+  /* --- 健康状态条（提到最前：一眼判断采集是否正常） --- */
+  renderHealth(d);
+
+  /* --- KPI：8 张 = 4×2，全部渲染 track 保证条贴底齐平 --- */
+  var classified = (d.by_kind||[]).reduce(function(a,b){ return a+(b.n||0); },0);
+  /* 窄屏文案表：双列时每张卡只有 ~157px，长句会被挤成"每行 10 字"（实测）。
+     说明文字只是辅助，窄屏换短版；完整解释仍在该卡 title 里。 */
+  var capsShort = {
+    "DoT/DoH 设备": "用过本机 DNS 服务的设备数",
+    "24h DNS 查询": "dot/doh/plain 三路",
+    "连接记录": "累计 TLS/TCP",
+    "24h 活跃": "近 1 小时有行为",
+    "24h 新增": "首次出现的指纹",
+    "24h DoH 请求": "经 nginx /dns-query",
+    "无载荷探测": "未发 ClientHello 的握手",
+    "平均握手 RTT": "SYN-ACK→下一个包"
+  };
+  var narrow = window.innerWidth < 860;
+  var kpi = [
+    ["DoT/DoH 设备", nfmt(dev), "用过本机 853/444/443 DNS 服务的指纹设备数"+
+      (d.devices_web_only? "（另有 "+d.devices_web_only+" 个指纹只访问过 443 网页，非 DNS 设备）":""),
+      {badge: dev? Math.round(act/Math.max(1,dev)*100)+"% 活跃":"—", cls:"ok",
+       pct: dev? act/Math.max(1,dev)*100:0, title:"徽标 = 最近一小时有行为的占比"}],
+    ["24h DNS 查询", nfmt(d.dns_queries), "含 dot / doh / plain 三路",
+      {pct:null, title:"无占比语义（绝对值指标）"}],
+    ["连接记录", nfmt(d.conns), "累计 TLS/TCP 连接",
+      {badge: d.conns? Math.round(classified/Math.max(1,d.conns)*100)+"% 已归类":"—",
+       pct: d.conns? classified/Math.max(1,d.conns)*100:0, title:"已归类到 DoT/DoH 的连接占比"}],
+    ["24h 活跃", nfmt(act), "最后一小时内有行为",
+      {pct: dev? act/Math.max(1,dev)*100:0, title:"占全部指纹设备比例"}],
+    ["24h 新增", nfmt(nw), "首次出现的指纹",
+      {pct:null, title:"无占比语义"}],
+    ["24h DoH 请求", nfmt(d.doh_requests), "经 nginx 的 /dns-query",
+      {pct:null, title:"无占比语义"}],
+    ["无载荷探测", nfmt(d.probes), "只握手不发 ClientHello 的连接",
+      {badge: (d.conns? (d.probes/Math.max(1,d.conns)*100).toFixed(1)+"%":"—"), cls:"warn",
+       pct: d.conns? d.probes/Math.max(1,d.conns)*100:0, barCls:"warn",
+       title:"只完成 TCP 握手、未发 ClientHello 的连接占比（健康检查/端口探测）"}],
+    ["平均握手 RTT", (d.rtt_avg!=null? d.rtt_avg+" ms":"—"), "SYN-ACK → 客户端下一个包",
+      {status: (d.rtt_avg!=null && d.rtt_avg<=80)? "ok":(d.rtt_avg!=null? "warn":"idle"),
+       badge: (d.rtt_avg!=null? (d.rtt_avg<=80? "良好":"偏高") : "无样本"),
+       cls: (d.rtt_avg!=null && d.rtt_avg<=80)? "ok":"warn",
+       pct: d.rtt_avg!=null? Math.min(100, d.rtt_avg/200*100) : 0,
+       barCls: (d.rtt_avg!=null && d.rtt_avg>80)? "warn":"",
+       title:"相对 200ms 基准；≤80ms 判为良好"}]
+  ];
+  $("#kpis").innerHTML = kpi.map(function(k){
+    var o = k[3] || {};
+    var dot = o.status? '<span class="sdot '+o.status+'"></span>' : '';
+    var bd = o.badge? '<span class="kbadge '+(o.cls||'')+'">'+esc(o.badge)+'</span>' : '';
+    var w = (o.pct!=null)? Math.max(0,Math.min(100,Number(o.pct)||0)) : 0;
+    return '<div class="card kpi"'+(o.title? ' title="'+esc(o.title)+'"':'')+'>'+
+      '<div class="label">'+dot+esc(k[0])+'</div>'+
+      '<div class="num">'+esc(k[1])+bd+'</div>'+
+      '<div class="cap">'+esc((narrow && capsShort[k[0]])? capsShort[k[0]] : k[2])+'</div>'+
+      '<div class="bar"><i class="'+(o.barCls||'')+'" style="width:'+w.toFixed(1)+'%"></i></div></div>';
+  }).join("");
+
+  /* --- 走势 --- */
+  var hrs = {}, q = {};
+  (d.hourly||[]).forEach(function(r){ hrs[r.h] = r.conns; });
+  (d.hourly_dns||[]).forEach(function(r){ q[r.h] = r.n; });
+  var nowh = Math.floor(Date.now()/1000/3600)*3600, keys = [];
+  for(var i=23;i>=0;i--) keys.push(nowh - i*3600);
+  $("#ov-timeline").innerHTML = timeline(keys, hrs, q);
+
+  /* --- 协议分布 --- */
+  var pk = (d.by_kind||[]).slice().sort(function(a,b){ return (b.n||0)-(a.n||0); });
+  var tot = pk.reduce(function(a,b){ return a+(b.n||0); },0)||1;
+  var names = {"dot":"DoT :853 (Nginx stream)","doh444":"DoH :444 (nginx)","doh443":"DoH :443 (nginx)",
+               "tls443":"443 待定(非 /dns-query)","quic":"QUIC/UDP"};
+  $("#ov-proto-total").textContent = nfmt(tot)+" 次连接";
+  $("#ov-protos").innerHTML = pk.map(function(k){
+    var pc = Math.round((k.n||0)/tot*100);
+    return '<div class="p"><div class="t"><span title="'+esc((names[k.kind]||k.kind)+' · '+(k.devs||0)+' 台')+'">'+
+      esc(names[k.kind]||k.kind)+
+      ' <span class="muted">· '+(k.devs||0)+' 台</span></span>'+
+      '<span class="n">'+nfmt(k.n)+' 次 · '+pc+'%</span></div>'+
+      mini(pc)+'</div>';
+  }).join("") || '<div class="muted small">暂无数据</div>';
+
+  /* --- 来源 IP（Top N + 展开全部） --- */
+  var ips = (d.by_ip||[]);
+  var ipsMax = Math.max.apply(null, ips.map(function(x){ return Number(x.n)||0; }).concat([1]));
+  var ipsShow = EXPAND.ips? ips : ips.slice(0,8);
+  var r2 = '<table><thead><tr><th>源 IP</th><th class="num">连接</th><th class="num">设备</th><th>最后活跃</th></tr></thead><tbody>';
+  ipsShow.forEach(function(x){
+    var w = Math.round((Number(x.n)||0)/ipsMax*100);
+    r2 += '<tr><td class="mono-s">'+esc(x.ip)+'</td>'+
+      '<td class="num">'+nfmt(x.n)+mini(w, "占最大来源 IP 的 "+w+"%")+'</td>'+
+      '<td class="num">'+esc(x.devs)+'</td><td class="muted small">'+rel(x.last_ts)+'</td></tr>';
+  });
+  r2 += '</tbody></table>';
+  if(ips.length > 8) r2 += '<div class="more" onclick="toggleExpand(\'ips\')">'+
+    (EXPAND.ips? '收起' : '共 '+ips.length+' 个来源 IP，展开全部 →')+'</div>';
+  $("#ov-ips-wrap").innerHTML = r2;
+
+  /* --- 最近活跃设备（行列表，不再是卡中卡） --- */
+  var tds = (d.top_devices||[]).slice(0,8);
+  $("#ov-topdevs-unit").textContent = "Top "+tds.length+" / 共 "+((d.top_devices||[]).length)+" 台";
+  $("#ov-topdevs").innerHTML = tds.length? (
+    '<div class="hd"><span class="c-name">设备</span><span class="c-inf">推断</span>'+
+      '<span class="c-conn" style="text-align:right">连接</span><span class="c-last" style="text-align:right">最后活跃</span></div>'+
+    tds.map(function(x){
+      var inf = x.infer||{};
+      var p = x.protos_obj||{};
+      var pb = Object.keys(p).sort().map(function(k){ return protoBadge(k, null); }).join(" ");
+      return '<div class="r" onclick="openDevice('+x.id+')" title="'+esc((x.src_ips_list||[]).join(", "))+'">'+
+        '<div class="c-name"><div class="nm">'+esc(x.label||inf.label||x.os_guess||("设备 #"+x.id))+'</div>'+
+        '<div class="meta">'+pb+'</div></div>'+
+        '<div class="meta c-inf">'+esc(inf.label||"—")+(inf.confidence? "（"+esc(inf.confidence)+"）":"")+'</div>'+
+        '<div class="amt c-conn">'+nfmt(x.conn_count)+'</div>'+
+        '<div class="amt c-last">'+rel(x.last_seen)+'</div></div>';
+    }).join("")) : '<div class="muted small">暂无设备</div>';
+
+  /* --- 热门域名 --- */
+  var doms = (d.top_domains||[]);
+  var domMax = Math.max.apply(null, doms.map(function(x){ return Number(x.n)||0; }).concat([1]));
+  var domShow = EXPAND.domains? doms : doms.slice(0,10);
+  var r3 = '<table><thead><tr><th>域名</th><th class="num">查询数(1h)</th></tr></thead><tbody>';
+  domShow.forEach(function(x){
+    var w = Math.round((Number(x.n)||0)/domMax*100);
+    r3 += '<tr><td class="mono-s">'+esc(x.qh)+'</td><td class="num">'+nfmt(x.n)+mini(w, "占最高域名 "+w+"%")+'</td></tr>';
+  });
+  r3 += '</tbody></table>';
+  if(doms.length > 10) r3 += '<div class="more" onclick="toggleExpand(\'domains\')">'+
+    (EXPAND.domains? '收起' : '共 '+doms.length+' 个域名，展开全部 →')+'</div>';
+  $("#ov-domains-wrap").innerHTML = r3;
+
+  renderNdpi(d);
+
+  if(d.events) renderEvents({events:d.events});
+}
+
+function toggleExpand(k){ EXPAND[k] = !EXPAND[k]; if(SUMMARY) renderSummary(SUMMARY); }
+
+function renderHealth(d){
+  var box = document.getElementById("ov-health");
+  if(!box) return;
+  var sn = d.sniff || {};
+  var drops = (Number(sn.sock_drops)||0), errs = (Number(sn.errors)||0);
+  var capOk = !(drops||errs);
+  var tail = d.tail || {};
+  var lag = (tail.agh_off!=null && tail.agh_size!=null)? (tail.agh_size - tail.agh_off) : null;
+  var nd = d.ndpi || {};
+  var compact = window.innerWidth < 860;   /* 窄屏文案减半：一行一个指标，不再折成三行 */
+  var parts = [];
+  if(compact){
+    parts.push('<span title="内核抓包统计"><span class="sdot '+(capOk?'ok':'warn')+'"></span> 抓包 <b>'+
+      (sn.packets!=null? nfmt(sn.packets):'off')+'</b> · 丢包 <b>'+nfmt(drops)+'</b> · 错 <b>'+nfmt(errs)+
+      '</b> · 连接 <b>'+nfmt(d.live_conns||0)+'</b></span>');
+    parts.push('<span><span class="sdot '+(d.doh_log_on?'ok':'idle')+'"></span> DoH 日志 <b>'+(d.doh_log_on?'已接入':'未接入')+'</b></span>');
+    parts.push('<span><span class="sdot '+(nd.flows?'ok':'idle')+'"></span> nDPI <b>'+(nd.flows? nfmt(nd.flows)+' 条流':'暂无')+
+      '</b>'+(nd.last_run? ' · '+rel(nd.last_run):'')+'</span>');
+    if(lag!=null) parts.push('<span title="AGH querylog 已读位置与文件末尾的差"><span class="sdot '+(lag<1048576?'ok':'warn')+
+      '"></span> AGH 待读 <b>'+nfmt(lag)+'</b> B</span>');
+    box.innerHTML = parts.join("");
+    return;
+  }
+  parts.push('<span title="内核抓包统计"><span class="sdot '+(capOk?'ok':'warn')+'"></span> 被动抓包 <b>'+
+    (sn.packets!=null? nfmt(sn.packets):'off')+'</b> 包 · ClientHello <b>'+nfmt(sn.tls||0)+
+    '</b> · 丢包 <b>'+nfmt(drops)+'</b> · 错误 <b>'+nfmt(errs)+'</b> · 活动连接 <b>'+nfmt(d.live_conns||0)+'</b></span>');
+  parts.push('<span class="sep"></span>');
+  parts.push('<span><span class="sdot '+(d.doh_log_on?'ok':'idle')+'"></span> DoH 日志 <b>'+(d.doh_log_on?'已接入':'未接入')+'</b></span>');
+  parts.push('<span class="sep"></span>');
+  parts.push('<span><span class="sdot '+(nd.flows?'ok':'idle')+'"></span> nDPI 判定 <b>'+(nd.flows? nfmt(nd.flows)+' 条流':'暂无')+
+    '</b>'+(nd.last_run? ' · '+rel(nd.last_run):'')+'</span>');
+  if(lag!=null){
+    parts.push('<span class="sep"></span>');
+    parts.push('<span title="AGH querylog 已读位置与文件末尾的差"><span class="sdot '+(lag<1048576?'ok':'warn')+
+      '"></span> AGH 日志待读 <b>'+nfmt(lag)+'</b> B</span>');
+  }
+  box.innerHTML = parts.join("");
+}
+
+function renderNdpi(d){
+  var box = document.getElementById("ov-ndpi");
+  if(!box) return;
+  var n = (d && d.ndpi) || null;
+  if(!n || !n.flows){
+    box.innerHTML = '<div class="muted small">暂无数据。nDPI 每 30 分钟抓一次 15 秒包；'+
+      '也可在服务器手工跑 <code>python3 /opt/devfp/devfp.py --ndpi-once</code> 立刻采一轮。</div>';
+    return;
+  }
+  var protos = (n.protos||[]).slice(0,4);
+  var total = (n.protos||[]).reduce(function(a,b){ return a+(b.n||0); },0)||1;
+  var out = '<div class="tiles">'+
+    '<div class="tile"><div class="t">流总数</div><div class="v">'+nfmt(n.flows)+'</div>'+
+      '<div class="muted small">已归属设备 '+nfmt(n.attributed)+' 条 · '+rel(n.last_run)+'</div></div>'+
+    '<div class="tile"><div class="t">协议种类</div><div class="v">'+(n.protos||[]).length+'</div>'+
+      '<div class="muted small">'+(n.categories||[]).length+' 个分类</div></div></div>';
+  if(protos.length){
+    out += '<div class="proto">'+protos.map(function(p){
+      var pc = Math.round((p.n||0)/total*100);
+      return '<div class="p"><div class="t"><span class="mono-s" style="color:var(--text-2)">'+esc(p.proto)+'</span>'+
+        '<span class="n">'+nfmt(p.n)+(p.devs? ' · '+p.devs+' 台':'')+'</span></div>'+mini(pc)+'</div>';
+    }).join("")+'</div>';
+  }
+  if((n.categories||[]).length){
+    out += '<div class="row" style="gap:var(--s2)">'+(n.categories||[]).slice(0,6).map(function(c){
+      return badge(c.category+" ×"+nfmt(c.n)); }).join(" ")+'</div>';
+  }
+  if((n.risks||[]).length){
+    out += '<div class="risk">'+(n.risks||[]).slice(0,4).map(function(r){
+      return '⚠ '+esc(r.risks)+' ×'+nfmt(r.n); }).join('<br>')+'</div>';
+  }
+  if((n.devices||[]).length){
+    out += '<div class="muted small">'+(n.devices||[]).slice(0,6).map(function(x){
+      return 'dev#'+x.id+' '+esc(x.label)+' → '+esc(x.protos||'')+'（'+nfmt(x.n)+' 条）'; }).join('<br>')+'</div>';
+  }
+  box.innerHTML = out;
+}
+
+function timeline(keys, hrs, q){
+  var maxC = 1, maxQ = 1;
+  keys.forEach(function(k){ maxC = Math.max(maxC, hrs[k]||0); maxQ = Math.max(maxQ, q[k]||0); });
+  var qs = keys.map(function(k, i){
+    return (i*(100/(keys.length-1))).toFixed(2)+","+(116-(q[k]||0)/maxQ*108).toFixed(1);
+  }).join(" ");
+  var bars = keys.map(function(k){
+    var v = hrs[k]||0, h = Math.round(v/maxC*112);
+    return '<i class="'+(v?"":"zero")+'" style="height:'+(v?Math.max(2,h):2)+'px" title="'+
+      new Date(k*1000).toLocaleString()+' · '+v+' 连接"></i>';
+  }).join("");
+  var lab = keys.map(function(k,i){
+    if(i%6) return "";
+    var d = new Date(k*1000);
+    return '<span style="left:'+(i*(100/(keys.length-1)))+'%">'+p2(d.getHours())+':00</span>';
+  }).join("");
+  return '<div class="chartwrap">'+
+      '<span class="gridline" style="bottom:66%"></span>'+
+      '<span class="gridline" style="bottom:33%"></span>'+
+      '<div class="bars">'+bars+'</div>'+
+      '<svg class="spark" viewBox="0 0 100 120" preserveAspectRatio="none" aria-hidden="true">'+
+      '<polyline points="'+qs+'" fill="none" stroke="var(--queries)" stroke-width="1.2" opacity=".85"/></svg>'+
+    '</div>'+
+    '<div class="axis">'+lab+'</div>'+
+    '<div class="legend"><span><i style="background:var(--accent);opacity:.72"></i>新建连接（左轴 0–'+
+      nfmt(maxC)+'）</span><span><i style="background:var(--queries)"></i>DNS 查询（右轴 0–'+nfmt(maxQ)+'）</span></div>';
+}
+
+/* ==================== 设备列表（表格 + 卡片） ==================== */
+/* 「在用设备」判据（2026-10-05）：这份看板统计的是所有对本机 853/443/444 建过 TLS 的指纹，
+   其中绝大多数是**公网扫描器**——只对 :443 建连接、从没走本机解析器发过一次查询。
+   实测（dns=1 共 184 条）：非噪声 131 → 非扫描 118 → 24h 有 DNS 查询 95 → 再加连接数≥3 = 15 台。
+   剩下 169 条里，`i_cc` 为 US/GB/NL 且 `dns24` 为 None 的占绝大多数，正是扫描器特征。
+   所以默认只显示「在用」，其余折叠并注明原因，而不是删掉。 */
+var SCAN_RE = /扫描|探测/;
+function hasDnsProto(x){
+  var p = x.protos_obj || {};
+  return !!(p.dot || p.doh443 || p.doh444);
+}
+function isScan(x){
+  return x.probe_class==="scanner" || x.probe_class==="self_test" || SCAN_RE.test(String(x.cluster_name||""));
+}
+function inUse(x){
+  return hasDnsProto(x) && !x.cluster_noise && !isScan(x) && (x.dns24||0) > 0 && (x.conn_count||0) >= 3;
+}
+function hay(x){
+  return [x.label, x.infer&&x.infer.label, x.infer&&x.infer.role, x.os_guess, x.ja4, x.ja3, x.ua,
+          x.i_org, x.as_org, x.i_rdns, x.rdns, x.asn, (x.src_ips_list||[]).join(" ")]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+function roleGroup(x){
+  if(x.probe_class==="scanner") return "scan";
+  if(x.probe_class==="self_test") return "self";
+  var r = ((x.infer||{}).role||"");
+  if(r.indexOf("网关")>=0 || r.indexOf("转发")>=0) return "gw";
+  if(r.indexOf("客户端")>=0) return "client";
+  return "unknown";
+}
+var GROUPS = [
+  {k:"gw",     name:"DNS 网关 / 转发器"},
+  {k:"client", name:"DNS 客户端"},
+  {k:"unknown",name:"未识别（证据不足）"},
+  {k:"scan",   name:"扫描 / 自测 / 噪声"}
+];
+function kindMatch(kind, x){
+  var p = x.protos_obj || {};
+  if(kind==="dot") return !!p.dot;
+  if(kind==="doh") return !!(p.doh443 || p.doh444);
+  return true;
+}
+function sortCmp(a, b){
+  if(SORT==="conns")   return (b.conn_count||0)-(a.conn_count||0);
+  if(SORT==="queries") return (b.dns24||0)-(a.dns24||0);
+  if(SORT==="rtt")     return ((b.rtt_ms==null?-1:b.rtt_ms)-(a.rtt_ms==null?-1:a.rtt_ms));
+  return (b.last_seen||0)-(a.last_seen||0) || (b.conn_count||0)-(a.conn_count||0);
+}
+/* 2026-10-05 口径收紧（用户要求）：设备页默认只显示"已通过绑定"的设备
+   —— 即 devices 表里有登记记录 (enrollments.matched_device) 指向它的那些簇。
+   未绑定的指纹簇只是抓包推导出来的猜测，默认隐藏但可一键展开。
+   注意：不去删库里的簇 —— 它们由 conns 推导，删了会被重新生成，属于毁数据。 */
+var BOUNDONLY = (function(){ try{ return localStorage.getItem("devfp-bound") !== "0"; }catch(e){ return true; } })();
+function pickDevices(kind, d){
+  var all = ((d && d.devices) || []);
+  /* 已归并的簇（linked_to 非空）不再单独成行——它们挂在主设备下，只贡献一个"N 簇"计数。
+     后端 /api/devices 不过滤 linked_to，所以这里必须自己过滤。 */
+  var childOf = {};
+  all.forEach(function(x){ if(x.linked_to) childOf[x.linked_to] = (childOf[x.linked_to]||0) + 1; });
+  var top = all.filter(function(x){ return !x.linked_to && kindMatch(kind, x); });
+  if(Q){
+    var q = Q.toLowerCase();
+    top = top.filter(function(x){ return hay(x).indexOf(q)>=0; });
+  }
+  top.sort(sortCmp);
+  /* 已绑定模式下不再叠加"只在用设备"这个启发式：绑定的设备必须永远可见，不能被启发式藏掉 */
+  var boundMode = (kind === "dev" && BOUNDONLY);
+  var use = boundMode ? top : (INUSE ? top.filter(inUse) : top);
+  return { list: use, inUseN: top.filter(inUse).length, totalN: top.length, childOf: childOf, boundMode: boundMode };
+}
+/* JA4/JA3 表用的 tcp_json 解析结果做记忆化：原来每台设备 parse 一次（300 次/刷新） */
+function tcpSig(x){
+  if(!x.tcp_json) return x.tcp_sig || "?";   /* 2026-10-09：tcp_json 写入停用后改用归一化列 tcp_sig */
+  if(JA4CACHE[x.tcp_json]!==undefined) return JA4CACHE[x.tcp_json];
+  var sig = "?";
+  try{ sig = (JSON.parse(x.tcp_json)||{}).sig || "?"; }catch(e){}
+  if(Object.keys(JA4CACHE).length < 2000) JA4CACHE[x.tcp_json] = sig;
+  return sig;
+}
+
+var CONT = {dev:{t:"dev-table", c:"dev-list", n:"dev-count"}, dot:{t:"dot-table", c:"dot-list", n:"dot-count"}, doh:{t:"doh-table", c:"doh-list", n:"doh-count"}};
+
+function renderKind(kind){
+  var d = DEV[kind];
+  var c = CONT[kind];
+  var box = document.getElementById(c.t), cbox = document.getElementById(c.c), cnt = document.getElementById(c.n);
+  if(!d || d.error){
+    if(box) box.innerHTML = '<div class="devempty">暂无数据（'+(d&&d.error? esc(d.error) : "未加载")+'）</div>';
+    if(cbox) cbox.innerHTML = "";
+    if(cnt) cnt.textContent = "";
+    return;
+  }
+  var pick = pickDevices(kind, d);
+  var list = pick.list;
+  /* 手机不再自动降级为卡片：89 张卡会叠成 5.9 万像素（≈75 屏），
+     改用 CSS 收敛成 4 列紧凑表格（≈4000 像素）。卡片改为用户显式选择。 */
+  var useCards = (MODE==="cards");
+  var maxConn = Math.max.apply(null, list.map(function(x){ return x.conn_count||0; }).concat([1]));
+  var maxQ = Math.max.apply(null, list.map(function(x){ return x.dns24||0; }).concat([1]));
+  if(cnt){
+    if(PICK){
+      var nsel = Object.keys(SEL).length;
+      cnt.innerHTML = '归并模式：已选 <b>'+nsel+'</b> 个指纹簇　·　'+
+        '<a href="javascript:mergeSelected()" style="color:var(--accent-text);font-weight:600">归并为 1 台设备 →</a>'+
+        '　·　<a href="javascript:cancelPick()" style="color:var(--text-3)">取消</a>'+
+        '　·　（以「连接数最多」的那个为主设备，其余挂到它下面）';
+    } else {
+    var hidden = pick.totalN - pick.inUseN;
+    /* 折叠分组里的行不渲染，标题里的数字必须扣掉，否则会出现"说 179 只画 177"。 */
+    var collapsed = 0;
+    if(kind==="dev"){
+      var b = {gw:0, client:0, unknown:0, scan:0};
+      list.forEach(function(x){ var g = roleGroup(x); b[g==="self"?"scan":g] += 1; });
+      GROUPS.forEach(function(g){ if(!GROUP_OPEN[g.k] && b[g.k]) collapsed += b[g.k]; });
+    }
+    var merged = 0;
+    Object.keys(pick.childOf).forEach(function(pid){ merged += pick.childOf[pid]; });
+    var head = pick.boundMode
+      ? '已绑定设备 <b>'+pick.totalN+'</b> 台'
+      : (INUSE ? '在用（24h）<b>'+pick.inUseN+'</b> 台' : '共 <b>'+pick.totalN+'</b> 条指纹');
+    var note = Q? '（已按「'+esc(Q)+'」筛选）' : '';
+    if(pick.boundMode){
+      note += '　·　只列<b>已人工绑定</b>的设备；未绑定的指纹簇是抓包推导出来的猜测，已隐藏';
+      note += '　·　<a href="javascript:toggleBound()" style="color:var(--accent-text)">显示全部指纹簇 →</a>';
+      note += '　·　绑定方式：在设备上打开 <b>https://dns.example.com/join</b> 登记，再到「登记设备」页手动选择关联';
+    }
+    if(merged > 0) note += '　·　<b>'+merged+'</b> 个簇已归并到主设备（行内「含 N 簇」）';
+    if(!pick.boundMode && INUSE && hidden > 0){
+      note += '　·　已隐藏 <b>'+hidden+'</b> 条：公网扫描器 / 只对 :443 建过连接、从未走本机解析器发查询 / 单次连接';
+    }
+    if(kind==="dev" && !DNSONLY && !pick.boundMode) note += '　·　含只访问过 443 网页的非 DNS 指纹';
+    if(collapsed) note += '　·　另有 <b>'+collapsed+'</b> 条在折叠分组内';
+    cnt.innerHTML = head + note + '　·　'+(useCards? '卡片' : '列表')+'（'+
+      ({last:"最后活跃",conns:"连接数",queries:"24h 查询数",rtt:"握手 RTT"}[SORT])+'排序）'+
+      (pick.boundMode? '' : '　·　<a href="javascript:startPick()" style="color:var(--accent-text)">选择并归并 →</a>')+
+      (!pick.boundMode && !INUSE? '　·　<a href="javascript:toggleInUse()" style="color:var(--accent-text)">只看在用设备 →</a>' : '');
+    }
+  }
+  var emptyBound = pick.boundMode && !list.length;
+  if(box){
+    box.style.display = list.length ? "" : "none";   /* 空态收起表头，免得出现"只有表头的空表" */
+    box.innerHTML = (useCards || !list.length) ? "" : tableHTML(kind, list, maxConn, maxQ, pick.childOf);
+  }
+  if(cbox){
+    cbox.innerHTML = emptyBound
+      ? '<div class="devempty">还没有已绑定的设备。<br>先在每台设备（手机 / 平板 / 电视 / 电脑）上打开 '+
+        '<b>https://dns.example.com/join</b>（打开即登记），再到「登记设备」页把登记记录<b>手动关联</b>到对应的指纹簇。<br><br>'+
+        '<a href="javascript:toggleBound()" style="color:var(--accent-text)">显示全部指纹簇（含未绑定的猜测）→</a></div>'
+      : (useCards? cardsHTML(list) : "");
+  }
+}
+function startPick(){ PICK = true; SEL = {}; var k = currentKind(); if(k) renderKind(k); }
+function cancelPick(){ PICK = false; SEL = {}; var k = currentKind(); if(k) renderKind(k); }
+function toggleSel(id){
+  if(SEL[id]) delete SEL[id]; else SEL[id] = 1;
+  var k = currentKind(); if(k) renderKind(k);
+}
+/* 归并：把选中的多个指纹簇标记为"同一台设备"。
+   主设备 = 连接数最多的那个；其余走 POST /api/device/label?id=<子> {"linked_to": <主>}。
+   后端 summary 只统计 linked_to IS NULL，所以归并后各处的设备数会真的下降。 */
+function mergeSelected(){
+  var ids = Object.keys(SEL).map(Number);
+  if(ids.length < 2){ showMsg("至少选 2 个簇才能归并", "err"); return; }
+  var d = DEV.dev || DEV.dot || DEV.doh;
+  var pool = (d && d.devices) || [];
+  var picked = pool.filter(function(x){ return ids.indexOf(x.id) >= 0; });
+  if(picked.length < 2){ showMsg("选中的簇不在当前数据里", "err"); return; }
+  picked.sort(function(a,b){ return (b.conn_count||0)-(a.conn_count||0); });
+  var parent = picked[0].id, children = picked.slice(1);
+  var done = 0, ok = 0;
+  children.forEach(function(c){
+    postJSON("/api/device/label?id="+c.id, {linked_to: parent}, function(r){
+      done++; if(r && r.ok !== false) ok++;
+      if(done === children.length){
+        showMsg("已把 "+ok+" 个簇归并到设备 #"+parent+"（主设备取连接数最多者）", "ok");
+        PICK = false; SEL = {};
+        DEV.dev = null; DEV.dot = null; DEV.doh = null;   /* 强制重取，计数才会更新 */
+        refresh();
+      }
+    });
+  });
+}
+function unlinkChild(id){
+  postJSON("/api/device/label?id="+id, {linked_to: 0}, function(r){
+    showMsg("已解除归并："+(r && r.ok !== false ? "成功" : "失败"), (r && r.ok !== false) ? "ok" : "err");
+    DEV.dev = null; DEV.dot = null; DEV.doh = null;
+    if(CUR) openDevice(CUR);
+    refresh();
+  });
+}
+function toggleInUse(){
+  INUSE = !INUSE;
+  try{ localStorage.setItem("devfp-inuse", INUSE? "1":"0"); }catch(e){}
+  syncInUseUi();
+  var k = currentKind(); if(k) renderKind(k);
+}
+function syncInUseUi(){
+  var cb = document.getElementById("dev-inuse");
+  if(cb) cb.checked = INUSE;
+}
+
+function tableHTML(kind, list, maxConn, maxQ, childOf){
+  if(!list.length) return '<div class="devempty">没有匹配的设备。试试清空搜索，或取消「只在用设备」「只看 DNS 设备」。</div>';
+  var head = '<div class="scroll"><div class="head">'+
+    '<span class="c-name">设备</span><span class="c-inf">推断</span><span class="c-proto">协议</span><span class="c-role">角色</span>'+
+    '<span class="c-stack">TLS 栈</span><span class="c-tcp">TCP/IP</span><span class="c-conn" style="text-align:right">连接</span>'+
+    '<span class="c-q" style="text-align:right">24h 查询</span><span class="c-rtt" style="text-align:right">RTT</span>'+
+    '<span class="c-last" style="text-align:right">最后活跃</span><span class="c-ja4">JA4</span>'+
+    '<span class="c-ipid">IP-ID</span><span class="c-edns">DoT 明文</span></div>';
+  var body = "";
+  if(kind==="dev"){
+    var buckets = {gw:[], client:[], unknown:[], scan:[]};
+    list.forEach(function(x){ var g = roleGroup(x); (buckets[g==="self"?"scan":g]||buckets.unknown).push(x); });
+    GROUPS.forEach(function(g){
+      var arr = buckets[g.k]||[];
+      if(!arr.length) return;
+      var open = GROUP_OPEN[g.k];
+      body += '<div class="group" onclick="toggleGroup(\''+g.k+'\')"><span>'+(open?"▾":"▸")+' '+esc(g.name)+
+        ' <span class="n">· '+arr.length+' 台</span></span><span class="tw">'+(open?"点击折叠":"点击展开")+'</span></div>';
+      if(open) body += arr.map(function(x){ return devRow(x, maxConn, maxQ, childOf); }).join("");
+    });
+  } else {
+    body = list.map(function(x){ return devRow(x, maxConn, maxQ, childOf); }).join("");
+  }
+  return head + body + '</div>';
+}
+
+function devRow(x, maxConn, maxQ, childOf){
+  var p = x.protos_obj||{}, inf = x.infer||{};
+  var keys = Object.keys(p).sort();
+  var compact = window.innerWidth < 860;
+  var protoHtml;
+  if(compact){
+    var seen = {}, short = [];
+    [["dot","DoT"],["doh444","DoH"],["doh443","DoH"],["quic","QUIC"],["tls443","TLS"]].forEach(function(kv){
+      if(p[kv[0]]!=null && !seen[kv[1]]){ seen[kv[1]] = 1; short.push(kv[1]); }
+    });
+    var cls = keys.indexOf("dot")>=0? "ok" : ((keys.indexOf("doh443")>=0||keys.indexOf("doh444")>=0)? "doh" : (keys.indexOf("quic")>=0? "quic":"mute"));
+    protoHtml = short.length? '<span class="pshort '+cls+'">'+esc(short.join("·"))+'</span>'
+                            : '<span class="dash">—</span>';
+  } else {
+    var badges = keys.slice(0,3).map(function(k){ return protoBadge(k, p[k]); });
+    if(x.probes24) badges.push(badge("探测 ×"+x.probes24, "warn"));
+    protoHtml = badges.join(" ") + (keys.length>3? ' <span class="dash">+'+(keys.length-3)+'</span>' : "");
+  }
+  var role = inf.role || (x.probe_class==="scanner"? "扫描/探测" : (x.probe_class==="self_test"? "自测探针" : null));
+  var stack = inf.stack? (inf.stack + (inf.stack_conf? "（"+inf.stack_conf+"）":"")) : null;
+  var tcp = x.os_guess? (x.os_guess + (x.os_confidence? "（"+x.os_confidence+"）":"")) : null;
+  var ja4 = x.ja4 || x.ja3 || (x.tcp_json? "tcp:"+tcpSig(x) : null);
+  var conf = inf.confidence? "（"+inf.confidence+"）" : "";
+  var cw = Math.round((x.conn_count||0)/maxConn*100), qw = Math.round((x.dns24||0)/maxQ*100);
+  var nm = x.label||inf.label||x.os_guess||("设备 #"+x.id);
+  function cell(cls, v, extra){
+    return '<span class="cell '+(cls||"")+' '+(extra||"")+'"'+(v? ' title="'+esc(v)+'"':'')+'>'+
+      (v? esc(v) : '<span class="dash">—</span>')+'</span>';
+  }
+  return '<div class="row" onclick="openDevice('+x.id+')">'+
+    '<span class="cell name c-name" title="'+esc(nm+(x.src_ips_list&&x.src_ips_list.length? " · "+x.src_ips_list.join(", "):""))+'">'+
+      (PICK? '<input type="checkbox" class="pick"'+(SEL[x.id]?' checked':'')+
+        ' onclick="event.stopPropagation();toggleSel('+x.id+')">' : '')+
+      '<span class="sdot '+seenDot(x)+'"></span>'+
+      '<span class="nm">'+esc(nm)+'</span>'+
+      '<span class="id">#'+x.id+'</span>'+
+      ((childOf && childOf[x.id])? '<span class="badge ok" title="已归并 '+childOf[x.id]+
+        ' 个指纹簇到本设备（点开详情可解除）">含 '+childOf[x.id]+' 簇</span>' : '')+
+    '</span>'+
+    '<span class="cell c-inf"'+(inf.label? ' title="'+esc(inf.label+conf)+'"':'')+'>'+
+      (inf.label? badge(inf.label, inf.confidence==="高"?"ok":"") : '<span class="dash">—</span>')+
+      (inf.confidence? ' <span class="muted">'+esc(conf)+'</span>':'')+'</span>'+
+    '<span class="cell c-proto">'+(protoHtml || '<span class="dash">—</span>')+'</span>'+
+    cell("c-role", role) +
+    cell("c-stack", stack) +
+    cell("c-tcp", tcp) +
+    '<span class="cell num stack c-conn">'+nfmt(x.conn_count||0)+'<span class="mini" title="相对本页最大连接数">'+
+      '<i style="width:'+cw+'%"></i></span></span>'+
+    '<span class="cell num stack c-q">'+nfmt(x.dns24||0)+'<span class="mini" title="相对本页最大 24h 查询数">'+
+      '<i style="width:'+qw+'%"></i></span></span>'+
+    cell("c-rtt", x.rtt_ms!=null? x.rtt_ms+" ms" : null, "num") +
+    '<span class="cell num c-last">'+esc(rel(x.last_seen))+'</span>'+
+    cell("c-ja4", ja4, "mono") +
+    cell("c-ipid", briefFp(x.ipid_class, 20)) +
+    cell("c-edns", briefFp(x.edns_profile, 30)) +
+  '</div>';
+}
+/* 看板列用的短文本：取第一个分号段、去掉括号说明、按长度截断（完整值放 title） */
+function briefFp(s, n){
+  if(s===null || s===undefined || s==="") return null;
+  s = String(s).split("\uff1b")[0].replace(/\uff08[^\uff09]*\uff09/g, "").trim();
+  if(!s) return null;
+  return s.length>n? s.slice(0, n-1)+"\u2026" : s;
+}
+function ednsText(s){
+  var t = "";
+  try{
+    var o = JSON.parse(s||"{}"); var p = [];
+    if(o.cookie_client) p.push("COOKIE");
+    if(o.ecs) p.push("ECS="+o.ecs);
+    if(o.padding) p.push("PAD="+o.padding);
+    t = p.join("\u3001");
+  }catch(e){ t = ""; }
+  return t;
+}
+function toggleGroup(k){ GROUP_OPEN[k] = !GROUP_OPEN[k]; renderKind("dev"); }
+
+function cardsHTML(list){
+  if(!list.length) return '<div class="devempty" style="grid-column:1/-1">没有匹配的设备。</div>';
+  return list.map(devCardFull).join("");
+}
+function devCardFull(x){
+  var p = x.protos_obj||{}, inf = x.infer||{};
+  var ips = x.src_ips_list||[];
+  var bs = Object.keys(p).sort().map(function(k){ return protoBadge(k, p[k]); }).join(" ");
+  if(x.probes24) bs += " "+badge("探测 ×"+x.probes24, "warn");
+  var ipinfo = [x.i_rdns, x.i_org||x.as_org, x.i_cc||x.country].filter(Boolean).join(" · ");
+  /* 槽位固定：空值渲染 — 占位，保证列与列之间第 N 行永远是同一个字段 */
+  function row(k, v){
+    var s = (v===null||v===undefined||v==="")? null : String(v);
+    var short = (s && s.length>104)? s.slice(0,102)+"…" : s;
+    return '<div class="kvrow"><span class="k">'+esc(k)+'</span><span class="v"'+
+      ((s && s!==short)? ' title="'+esc(s)+'"':'')+'>'+(short!=null? esc(short) : '<span class="dash">—</span>')+'</span></div>';
+  }
+  var role = inf.role || (x.probe_class==="scanner"? "扫描/探测" : (x.probe_class==="self_test"? "自测探针" : null));
+  return '<div class="card devcard" onclick="openDevice('+x.id+')">'+
+    '<div class="nm">'+esc(x.label|| inf.label || x.os_guess || ("设备 #"+x.id))+' '+bs+'</div>'+
+    row("推断", (inf.label||null)+(inf.confidence? "（"+inf.confidence+"置信）":""))+
+    row("型号", x.model)+
+    row("版本线索", inf.version_hint)+
+    row("TLS 栈", inf.stack? (inf.stack+(inf.stack_conf? "（"+inf.stack_conf+"）":"")) : null)+
+    row("TCP/IP", x.os_guess? (x.os_guess+(x.os_confidence? "（"+x.os_confidence+"）":"")) : null)+
+    row("DoT 明文", x.edns_profile)+
+    row("行为", x.behavior)+
+    row("nDPI", x.ndpi_proto? (x.ndpi_proto+(x.ndpi_category? "（"+x.ndpi_category+"）":"")+
+        (x.ndpi_risk? " · 风险 "+String(x.ndpi_risk).slice(0,50):"")) : null)+
+    row("归类", role)+
+    '<div class="sub">'+esc(ips.join(", ")||"—")+(ipinfo? ' · '+esc(ipinfo):'')+'</div>'+
+    '<div class="row small muted" style="gap:var(--s3)">'+
+      '<span>连接 '+nfmt(x.conn_count||0)+'</span><span>24h 连接 '+nfmt(x.conns24||0)+'</span>'+
+      '<span>24h 查询 '+nfmt(x.dns24||0)+'</span>'+
+      (x.qest24? '<span>估算查询 '+nfmt(x.qest24)+'</span>':'')+
+      (x.qrtt? '<span>查询往返 '+x.qrtt+'ms</span>':'')+
+      (x.rtt_ms? '<span>握手 '+x.rtt_ms+'ms</span>':'')+'<span>'+rel(x.last_seen)+'</span></div>'+
+    '<div class="fp">JA4 '+esc(x.ja4||"—")+'</div>'+
+    '<div class="fp">JA3 '+esc(x.ja3||"—")+'</div>'+
+    (x.ua? '<div class="sub">UA: '+esc(x.ua)+'</div>':'')+
+  '</div>';
+}
+
+function renderFingerprints(d){
+  var m = {}, order = [];
+  (d.devices||[]).forEach(function(x){
+    var key = x.ja4 || x.ja3 || ("tcp:"+tcpSig(x));
+    if(!m[key]){ m[key] = {key:key, n:0, devs:[], os:x.os_guess, ips:[], last:0, ua:x.ua}; order.push(key); }
+    var e = m[key];
+    e.n += (x.conn_count||0); e.devs.push(x.label||("设备 #"+x.id));
+    e.ips = e.ips.concat(x.src_ips_list||[]); e.last = Math.max(e.last, x.last_seen||0);
+    if(!e.os && x.os_guess) e.os = x.os_guess;
+    if(!e.ua && x.ua) e.ua = x.ua;
+  });
+  var rows = order.map(function(k){ return m[k]; }).sort(function(a,b){ return b.n-a.n; });
+  var h = '<thead><tr><th>JA4 / JA3</th><th>设备</th><th class="num">连接数</th><th>OS 猜测</th><th>源 IP</th><th>UA</th><th>最后</th></tr></thead><tbody>';
+  rows.forEach(function(r){
+    h += '<tr><td class="mono-s">'+esc(r.key)+'</td><td>'+esc(r.devs.join(", "))+'</td><td class="num">'+nfmt(r.n)+'</td>'+
+      '<td>'+esc(r.os||"—")+'</td><td class="mono-s">'+esc(r.ips.slice(0,4).join(", "))+'</td><td class="mono-s">'+
+      esc(r.ua||"")+'</td><td class="muted small">'+rel(r.last)+'</td></tr>';
+  });
+  h += '</tbody>';
+  $("#fp-tbl").innerHTML = h + (rows.length? "" : '<tbody><tr><td colspan="7" class="muted">暂无指纹</td></tr></tbody>');
+}
+function renderEvents(d){
+  EVENTS = d;
+  var h = '<thead><tr><th>时间</th><th>事件</th><th>设备</th><th>指纹</th><th>OS</th></tr></thead><tbody>';
+  (d.events||[]).forEach(function(e){
+    var nm = {"new_device":"发现新设备","fingerprint_change":"指纹变化"}[e.kind] || e.kind;
+    h += '<tr><td class="muted small">'+fmtTs(e.ts)+'</td><td>'+badge(nm, e.kind==="new_device"?"ok":"warn")+
+      '</td><td>'+esc(e.label||("设备 #"+e.device_id))+'</td><td class="mono-s">'+esc(e.ja4||e.fp_key||"")+
+      '</td><td>'+esc(e.os_guess||"")+'</td></tr>';
+  });
+  h += '</tbody>';
+  $("#ev-tbl").innerHTML = h + ((d.events||[]).length? "" : '<tbody><tr><td colspan="5" class="muted">暂无事件</td></tr></tbody>');
+}
+
+/* ==================== 设备详情 ==================== */
+function openDevice(id){
+  CUR = id;
+  $("#drawer").className = "drawer on";
+  $("#drawer-body").innerHTML = '<div class="dbody"><div class="muted">加载中…</div></div>';
+  getJSON("/api/device?id="+id, function(d){
+    if(d && d.error){
+      $("#drawer-body").innerHTML = '<div class="dbody"><div class="devempty">读取设备 #'+id+' 失败：'+esc(d.error)+
+        '<br>该条目可能已被清理，点「立即刷新」后重试。</div></div>';
+      return;
+    }
+    /* 防御：后端返回结构异常时给出可读提示，而不是让 v.tls 抛 TypeError */
+    if(!d || !d.device){
+      $("#drawer-body").innerHTML = '<div class="dbody"><div class="devempty">设备 #'+id+
+        ' 的详情为空（可能刚被清理）。点「立即刷新」后重试。</div></div>';
+      return;
+    }
+    try{ renderDetail(d); }
+    catch(e){
+      if(window.console && console.error) console.error("renderDetail 失败 device="+id, e);
+      $("#drawer-body").innerHTML = '<div class="dbody"><div class="devempty">渲染设备 #'+id+' 详情出错：'+
+        esc(e && e.message ? e.message : String(e))+'</div></div>';
+    }
+  });
+}
+/* 关抽屉时清空内容：原来留着 8000+ 个节点和整张明细表常驻内存 */
+function closeDrawer(){
+  $("#drawer").className = "drawer";
+  $("#drawer-body").innerHTML = "";
+  CUR = null;
+}
+document.addEventListener("keydown", function(e){
+  if(e.key === "Escape" && CUR != null) closeDrawer();
+});
+function renderDetail(d){
+  if(!d || !d.device) return;                 /* 防御：任何异常结构都不要往下走 */
+  var v = d.device, tls = v.tls||{}, tcp = v.tcp||{}, http = v.http||{}, t = v.tags_list||[];
+  var inf = v.infer || {};
+  var head = '<div class="dhead"><div class="dh-main">'+
+      '<h2>'+esc(v.label|| inf.label ||("设备 #"+v.id))+
+        (inf.confidence? ' <span class="badge '+(inf.confidence==="高"?"ok":"")+'">'+esc(inf.confidence)+'置信</span>':'')+'</h2>'+
+      '<div class="meta">'+esc((v.src_ips_list||[]).join(", "))+' · 首次 '+fmtTs(v.first_seen)+
+        ' · 最后 '+rel(v.last_seen)+' · 观测 '+nfmt(v.obs_count)+' 次</div>'+
+    '</div><button class="btn close" onclick="closeDrawer()">关闭 ✕</button></div>';
+  var html = head + '<div class="dbody">';
+  html += '<div class="verdict">'+
+      '<div class="row" style="justify-content:space-between;align-items:flex-start">'+
+        '<div><div class="muted small">推断结论（类别：'+esc(inf.class||"未识别")+'）</div>'+
+        '<div class="vl">'+esc(inf.label||"未识别")+'</div></div>'+
+        '<button class="btn" onclick="reinfer('+v.id+')">重新推断</button>'+
+      '</div>'+
+      ((inf.caveats||[]).map(function(c){ return '<div class="caveat">⚠ '+esc(c)+'</div>'; }).join(""))+
+      '<dl class="kv" style="margin-top:var(--s3)">'+
+      kv("TLS 栈", (inf.stack||"—")+(inf.stack_conf? "（"+inf.stack_conf+"置信）":""))+
+      kv("版本线索", inf.version_hint)+
+      kv("DoT 明文画像", v.edns_profile)+
+      kv("行为指纹", v.behavior)+
+      kv("nDPI 判定", (v.ndpi_proto? v.ndpi_proto+(v.ndpi_category? "（"+v.ndpi_category+"）":"")+(v.ndpi_risk? " · 风险信号："+String(v.ndpi_risk).slice(0,80) : "") : null))+
+      kv("型号（精确）", v.model)+
+      kv("TCP/IP", (inf.os||v.os_guess||"—")+(inf.os_conf? "（"+inf.os_conf+"置信）":""))+
+      kv("设备角色", (inf.role||"—")+(inf.role_conf? "（"+inf.role_conf+"置信）":""))+
+      kv("网络归属", [v.rdns, (v.as_org? "AS"+v.asn+" "+v.as_org:null), v.country].filter(Boolean).join(" · "))+
+      kv("推断时间", inf.ts? fmtTs(inf.ts):"—")+
+      '</dl></div>';
+
+  html += '<div class="statstrip" style="margin-top:var(--s4)"><div class="kpis">'+
+    '<div><b>'+nfmt(v.conn_count)+'</b><span>连接</span></div>'+
+    '<div><b>'+bfmt(v.bytes_in)+'</b><span>入向</span></div>'+
+    '<div><b>'+bfmt(v.bytes_out)+'</b><span>出向</span></div>'+
+    '<div><b>'+nfmt((d.recent||[]).length)+'</b><span>最近查询样本</span></div></div></div>';
+
+  html += '<h3 class="sub">命名与备注</h3><div class="row">'+
+    '<input type="text" id="ed-label" placeholder="设备名，如：家里的 DoT 转发器 / 我的手机" value="'+esc(v.label||"")+'" style="max-width:280px">'+
+    '<input type="text" id="ed-tags" placeholder="标签，逗号分隔" value="'+esc(t.join(","))+'" style="max-width:240px">'+
+    '<button class="btn primary" onclick="saveLabel('+v.id+')">保存</button></div>'+
+    '<div style="margin-top:var(--s2)"><input type="text" id="ed-note" placeholder="备注" value="'+esc(v.note||"")+'"></div>';
+
+  /* 设备归并：一个物理设备常在多个 App/协议上产生多个 JA4 指纹簇。
+     被动观测无法证明"是否是同一台"，所以由人来判定——这里提供归并与解除。 */
+  if((d.linked||[]).length){
+    html += '<h3 class="sub">已归并到本设备的指纹簇（'+d.linked.length+'）</h3>'+
+      '<p class="hint">这些簇被判定为同一台设备，因此不再单独计入设备数。解除后会重新单独计数。</p>'+
+      '<div class="tblwrap"><table><thead><tr><th>#</th><th>名称</th><th>OS</th><th>JA4</th><th>最后</th><th></th></tr></thead><tbody>'+
+      d.linked.map(function(m){
+        return '<tr><td>#'+m.id+'</td><td>'+esc(m.label||"—")+'</td><td>'+esc(m.os_guess||"—")+
+          '</td><td class="mono-s">'+esc(m.ja4||"—")+'</td><td class="muted small">'+rel(m.last_seen)+
+          '</td><td><button class="btn" onclick="unlinkChild('+m.id+')">解除归并</button></td></tr>';
+      }).join("")+'</tbody></table></div>';
+  }
+  if(v.linked_to){
+    html += '<h3 class="sub">归并状态</h3><p class="hint">本簇已归并到设备 <b>#'+v.linked_to+
+      '</b>，不单独计入设备数。</p><div class="row"><button class="btn" onclick="unlinkChild('+v.id+
+      ')">从 #'+v.linked_to+' 解除归并</button></div>';
+  }
+
+  html += '<h3 class="sub">指纹总览</h3><dl class="kv">'+
+    kv("JA4", v.ja4) + kv("JA3", v.ja3) + kv("JA4_a", v.ja4_a) + kv("JA4_b", v.ja4_b) + kv("JA4_c", v.ja4_c) +
+    kv("JA4 原序", tls.ja4_o) + kv("JA3 原串", v.ja3_str) +
+    kv("SNI", v.sni) + kv("ALPN", v.alpn) + kv("OS 猜测", (v.os_guess||"—")+"（"+(v.os_confidence||"?")+"置信）") +
+    kv("应用线索", v.app_guess) + kv("User-Agent", v.ua) + kv("rDNS", v.rdns) +
+    kv("ASN", (v.asn? "AS"+v.asn+" "+(v.as_org||"") : "—")) + kv("国家/前缀", (v.country||"—")+" "+(v.ip_prefix||"")) +
+    '</dl>';
+
+  html += '<div class="tabs">'+
+    '<button class="tab on" onclick="tab(\'inf\')">推断依据</button>'+
+    '<button class="tab" onclick="tab(\'ov\')">指纹详情</button>'+
+    '<button class="tab" onclick="tab(\'dns\')">DNS 行为</button>'+
+    '<button class="tab" onclick="tab(\'http\')">HTTP/DoH</button>'+
+    '<button class="tab" onclick="tab(\'conns\')">连接记录</button>'+
+    '<button class="tab" onclick="tab(\'raw\')">原始数据</button></div>';
+
+  var scores = (inf.scores||[]).map(function(s){
+    return '<tr><td>'+esc(s[0])+'</td><td>'+esc(s[1])+'</td></tr>'; }).join("");
+  var ev = (inf.evidence||[]).map(function(e){
+    return '<tr><td>'+badge(e.k)+'</td><td>'+esc(e.why)+'</td></tr>'; }).join("");
+  var doms = (v.top_domains_list||[]).map(function(x){ return '<span class="pill">'+esc(x)+'</span>'; }).join("");
+  html += '<div class="pane" data-p="inf">'+
+    '<p class="hint">型号（如「iPhone 16 / OPPO Find X9」）<b>无法从加密的 DoT/DoH 连接里直接读出</b>——跨 NAT 看不到 MAC，'+
+    'TLS 载荷加密，裸 DoH 客户端通常也不发 User-Agent。下面是综合 <b>TLS 栈结构 + TCP/IP 特征 + 查询域名 + HTTP 层 + 连接行为</b> 得出的推断，'+
+    '每条证据都列出来供复核；标「未识别」就是证据不足，不猜。</p>'+
+    '<div class="grid12">'+
+      '<div class="panel c5"><h3 class="sub" style="margin-top:0">候选评分</h3>'+
+      '<div class="tblwrap" style="max-height:320px"><table><thead><tr><th>候选</th><th>得分</th></tr></thead><tbody>'+
+      (scores||'<tr><td colspan="2" class="muted">暂无</td></tr>')+'</tbody></table></div></div>'+
+      '<div class="panel c7"><h3 class="sub" style="margin-top:0">Top 查询域名（指纹来源）</h3>'+
+      '<div class="muted small">'+(
+        inf.domains_source==="device-doh"? '来源：<b>该设备自己的 DoH 请求</b>（可归属）'
+        : inf.domains_source==="device-dot"? '来源：<b>该设备自己的 DoT 查询</b>（853 前置终结后的明文 → 同一连接精确归属，或该 IP 独占时按 IP 归属）'
+        : inf.domains_source==="device-doh+dot"? '来源：<b>该设备自己的 DoH 请求 + DoT 明文</b>（均已逐设备归属）'
+        : (inf.domains_source==="shared-ip"? '来源：<b>出口 IP 全量查询</b>——该 IP 下有多个指纹，仅供参考，不可归属'
+        : ((inf.top_domains||[]).length? '来源：该出口 IP 的聚合查询' : '暂无查询记录')))+
+        ((inf.dot_aligned_queries||0)>0? '（其中 '+nfmt(inf.dot_aligned_queries)+' 条 DoT 查询已按时间对齐归属到本设备）':'')+'</div>'+
+      '<div style="margin-top:var(--s2)">'+(doms||'<span class="muted small">暂无查询记录</span>')+'</div></div>'+
+    '</div>'+
+    '<h3 class="sub">证据链（按采集来源）</h3>'+
+    '<div class="tblwrap" style="max-height:420px"><table><thead><tr><th>来源</th><th>证据</th></tr></thead><tbody>'+
+    (ev||'<tr><td colspan="2" class="muted">暂无</td></tr>')+'</tbody></table></div></div>';
+
+  var extTbl = '<div class="tblwrap" style="max-height:330px"><table><thead><tr><th>类型</th><th>名称</th><th>值</th></tr></thead><tbody>'+
+    ((tls.extensions||[]).map(function(e){
+      return '<tr><td class="mono-s">'+esc(e.type)+'</td><td>'+esc(e.name||"")+'</td><td class="mono-s">'+
+        esc(Array.isArray(e.value)? e.value.join(", ") : (e.value==null?"":e.value))+'</td></tr>'; }).join("") ||
+      '<tr><td colspan="3" class="muted">该设备未抓到 ClientHello（可能是 UDP/DoQ 或复用会话）</td></tr>')+'</tbody></table></div>';
+  html += '<div class="pane" data-p="ov" style="display:none"><div class="grid12">'+
+    '<div class="panel c5"><h3 class="sub" style="margin-top:0">TLS ClientHello</h3><dl class="kv" style="grid-template-columns:110px minmax(0,1fr)">'+
+      kv("版本(cipher)", tls.version) + kv("legacy 版本", tls.legacy_version) +
+      kv("密码套件数", tls.cipher_count) + kv("扩展数", tls.extension_count) +
+      kv("GREASE", "cipher "+(tls.grease_ciphers||0)+" / ext "+(tls.grease_exts||0)) +
+      kv("曲线", (tls.curves||[]).join(", ")) + kv("签名算法", (tls.sig_algs||[]).join(", ")) +
+      kv("会话 ID 长度", tls.session_id_len) + kv("记录长度", tls.record_len) + '</dl>'+
+      '<div style="margin-top:var(--s2)">'+pills(tls.ciphers, 40)+'</div></div>'+
+    '<div class="panel c7"><h3 class="sub" style="margin-top:0">TCP/IP 指纹（p0f 式）</h3><dl class="kv" style="grid-template-columns:130px minmax(0,1fr)">'+
+      kv("初始 TTL / 跳数", (tcp.init_ttl||"—")+" / "+(tcp.hops==null?"—":tcp.hops)) +
+      kv("窗口 / MSS", (tcp.win||"—")+" / "+(tcp.mss||"—")) +
+      kv("窗口缩放", tcp.ws) + kv("SACK / TS", (tcp.sack?"有":"无")+" / "+(tcp.ts?"有":"无")) +
+      kv("TSval（当前）", tcp.tsval) +
+      kv("选项顺序", (tcp.order||[]).join("-")) + kv("选项原文", tcp.opts_raw) +
+      kv("IP-ID / DF", (tcp.ip_id==null?"—":tcp.ip_id)+" / "+(tcp.df?"1":"0")) +
+      kv("IP-ID 类别", (inf.tcp_extras||{}).ipid_class) +
+      kv("时钟漂移", ((inf.tcp_extras||{}).skew_ppm!=null? ((inf.tcp_extras||{}).skew_ppm+" ppm") : null)) +
+      kv("在线时长", ((inf.tcp_extras||{}).uptime_reliable? ((v.uptime_s/86400).toFixed(1)+" 天（TSval 基准）") : null)) +
+      kv("疑似重启", ((inf.tcp_extras||{}).reboots? ((inf.tcp_extras||{}).reboots+" 次（时间戳回退）") : null)) +
+      kv("入向重传率", (v.retrans_rate!=null? (v.retrans_rate+"%") : null)) +
+      kv("JA4T 风格", tcp.ja4t_like) + '</dl></div>'+
+    '<div class="panel c12"><h3 class="sub" style="margin-top:0">头部/证书</h3><dl class="kv" style="grid-template-columns:130px minmax(0,1fr)">'+
+      kv("ServerHello 版本", (d.conns[0]||{}).tls_ver) + kv("协商套件", (d.conns[0]||{}).cipher) +
+      kv("证书字节/数量", ((d.conns[0]||{}).cert_bytes||"—")+" / "+((d.conns[0]||{}).cert_count||"—")) +
+      kv("SNI", v.sni) + '</dl></div></div>'+
+    '<h3 class="sub">扩展列表（顺序即真实顺序）</h3>'+extTbl+'</div>';
+
+  var rows = d.dns_hours||[], agg = {}, ts = {};
+  rows.forEach(function(r){
+    var k = r.hour;
+    ts[k] = ts[k] || {n:0};
+    ts[k].n += r.n;
+    agg[r.proto] = (agg[r.proto]||0) + r.n;
+  });
+  var keys = Object.keys(ts).sort().slice(-48);
+  var maxN = 1; keys.forEach(function(k){ maxN = Math.max(maxN, ts[k].n); });
+  var bars = keys.map(function(k){
+    var h = Math.round(ts[k].n/maxN*112);
+    return '<i style="height:'+Math.max(2,h)+'px" title="'+fmtTs(+k)+' · '+ts[k].n+' 次"></i>';
+  }).join("");
+  var qt = {};
+  rows.forEach(function(r){ ["a","aaaa","https","ptr","other"].forEach(function(x){ qt[x]=(qt[x]||0)+r[x]; }); });
+  var recent = (d.recent||[]).map(function(r){
+    var isDotf = (r.src||"").indexOf("Nginx stream") === 0 || (r.src||"").indexOf("dotfront") === 0;
+    var srcTxt = (r.src==="dotfront-align"? "明文(时间对齐)" : (r.src==="dotfront-ip"? "明文(按IP)" :
+                 (r.src==="dotfront-plain"? "明文(未归属)" :
+                 (r.src==="Nginx stream-plain"? "明文(精确)" : (r.src==="Nginx stream-ip"? "明文(按IP)" :
+                 (r.src==="dot-tls-align"? "时间对齐" : "AGH 日志"))))));
+    var extra = isDotf
+      ? (function(){ var t = ednsText(r.edns), m = [];
+          if(r.do_bit) m.push("DO");
+          if(r.udp_size) m.push("UDP="+r.udp_size);
+          t = (t? t : "无 EDNS 选项") + (m.length? " " + m.join(" ") : "");
+          return '<span class="mono-s">'+esc(t)+'</span>'; })()
+      : '<span class="mono-s">'+esc(r.answer||"")+'</span>';
+    return '<tr><td class="muted small">'+fmtTs(r.ts)+'</td><td>'+(r.filtered?(badge("拦截","warn")+(r.rule? ' <span class="muted small" title="'+esc(r.rule)+'">'+esc(String(r.rule).slice(0,26))+'</span>':'')):badge("放行","ok"))+
+      '</td><td>'+protoBadge(r.cp||"", null)+'</td><td class="mono-s">'+esc(r.qh)+'</td><td>'+esc(r.qt)+
+      '</td><td class="muted small">'+(r.elapsed_ms==null?"":r.elapsed_ms+"ms")+
+      '</td><td class="muted small">'+esc(srcTxt)+'</td><td class="mono-s">'+extra+'</td></tr>';
+  }).join("");
+  html += '<div class="pane" data-p="dns" style="display:none">'+
+    '<div class="panel"><h3 class="sub" style="margin-top:0">48 小时查询量</h3><div class="chartwrap"><div class="bars">'+
+      (bars||'<span class="muted small">暂无</span>')+'</div></div>'+
+      '<div class="row small muted" style="margin-top:var(--s2);gap:var(--s5)">'+
+      Object.keys(agg).map(function(k){ return '<span>'+esc(k)+'：'+nfmt(agg[k])+'</span>'; }).join("")+'</div>'+
+      '<div class="row small muted" style="gap:var(--s5)">'+
+      ["a","aaaa","https","ptr","other"].map(function(k){ return '<span>'+k.toUpperCase()+'：'+nfmt(qt[k]||0)+'</span>'; }).join("")+'</div></div>'+
+    '<h3 class="sub">最近查询（环形缓存样本）</h3><div class="tblwrap" style="max-height:420px"><table>'+
+      '<thead><tr><th>时间</th><th>状态</th><th>协议</th><th>域名</th><th>类型</th><th>耗时</th><th>来源</th><th>明文字段 / 应答</th></tr></thead><tbody>'+
+      (recent||'<tr><td colspan="8" class="muted">暂无查询样本</td></tr>')+'</tbody></table></div>'+
+      '<p class="hint" style="margin-top:var(--s2)">「来源」= 这条查询凭什么算到本设备：<b>明文(精确)</b> Nginx stream 终结后同一连接 '+
+      '<code>(ip, sport)</code> 直接对上；<b>明文(按IP)</b> 该出口 IP 上只有这一台设备；<b>时间对齐</b> AGH 日志与抓包记录的毫秒级近似匹配（仅独占 IP）；'+
+      '<b>AGH 日志</b> 原始 querylog（按出口 IP）。DoT 明文行的「明文字段」即该查询带来的 EDNS 特征。</p></div>';
+
+  var doh = (d.doh||[]).map(function(r){
+    var h = {}; try{ h = JSON.parse(r.headers||"{}"); }catch(e){}
+    return '<tr><td class="muted small">'+fmtTs(r.ts)+'</td><td class="mono-s">'+esc(r.ip)+'</td><td class="mono-s">'+esc(r.method)+' '+esc(r.uri)+
+      '</td><td class="mono-s">'+(r.qname? esc(r.qname) : '<span class="muted">—</span>')+
+      '</td><td>'+esc(r.http_ver)+'</td><td>'+esc(r.status)+'</td><td class="mono-s">'+esc(r.cipher||"")+
+      '</td><td class="mono-s">'+esc(r.alpn||"")+'</td><td class="mono-s">'+esc(r.ua||"")+'</td><td class="mono-s">'+
+      esc(Object.keys(h).filter(function(k){return h[k];}).map(function(k){return k+": "+h[k];}).join(" | "))+'</td></tr>';
+  }).join("");
+  html += '<div class="pane" data-p="http" style="display:none">';
+  if(!doh){
+    html += '<div class="muted small">该设备没有经 nginx 的 DoH 记录。DoT 客户端（:853）本来就没有 HTTP 层，属于正常；'+
+      '若该设备走 DoH，请确认它连的是 :443 或 :444（这两个都由 nginx 终结）。</div>';
+  } else {
+    html += '<p class="hint">「查询域名」是从 DoH 请求里解出来的（GET 的 <code>?dns=</code> 或 POST 的 DNS 明文），'+
+      '<b>属于这台设备自己</b>，因此即使多设备共用出口 IP 也能用于设备推断。</p>'+
+      '<div class="tblwrap" style="max-height:520px"><table><thead><tr><th>时间</th><th>IP</th><th>请求</th>'+
+      '<th>查询域名</th><th>HTTP</th><th>状态</th><th>协商套件</th><th>ALPN</th><th>UA</th><th>头</th></tr></thead><tbody>'+doh+'</tbody></table></div>';
+  }
+  html += '</div>';
+
+  var conns = (d.conns||[]).map(function(c){
+    return '<tr><td class="muted small">'+fmtTs(c.ts)+'</td><td class="mono-s">'+esc(c.src_ip)+':'+esc(c.sport)+
+      '</td><td>'+protoBadge(c.kind, null)+(c.probe? ' '+badge("无载荷探测","warn"):'')+
+      '</td><td class="mono-s">'+esc(c.ja4||"")+'</td><td>'+
+      esc(c.tls_ver||"")+'</td><td class="mono-s">'+esc(c.cipher||"")+'</td><td class="mono-s">'+esc(c.alpn||"")+'</td><td class="num">'+
+      nfmt(c.in_bytes+c.out_bytes)+'</td><td class="num">'+(c.duration_ms||0)+'ms</td><td class="num">'+
+      (c.rtt_ms!=null? c.rtt_ms+'ms':'—')+'</td>'+
+      '<td class="num">'+(c.q_est||0)+(c.req_rec? ' <span class="muted small">('+c.req_rec+'/'+c.resp_rec+')</span>':'')+'</td>'+
+      '<td class="num">'+(c.q_rtt_ms!=null? c.q_rtt_ms+'ms':'—')+'</td>'+
+      '<td class="mono-s">'+esc(c.tcp_sig||"")+'</td></tr>';
+  }).join("");
+  html += '<div class="pane" data-p="conns" style="display:none">'+
+    '<p class="hint">「估算查询」= 该连接里客户端方向的应用数据记录条数（DoT/DoH 一条 DNS 消息≈一条记录），'+
+    '「查询往返」= 请求记录到应答记录的间隔中位数——这两项<b>按指纹归属</b>，即使多设备共用出口 IP 也算得出来；'+
+    'AGH 的查询日志只能按 IP 归属。</p>'+
+    '<div class="tblwrap" style="max-height:560px"><table>'+
+    '<thead><tr><th>时间</th><th>来源</th><th>类型</th><th>JA4</th><th>版本</th><th>协商套件</th><th>ALPN</th><th class="num">字节</th><th class="num">时长</th><th class="num">握手RTT</th><th class="num">估算查询</th><th class="num">查询往返</th><th>TCP 指纹</th></tr></thead><tbody>'+
+    (conns||'<tr><td colspan="13" class="muted">暂无</td></tr>')+'</tbody></table></div></div>';
+
+  html += '<div class="pane" data-p="raw" style="display:none">'+
+    '<h3 class="sub" style="margin-top:0">TLS / TCP / HTTP 原始 JSON</h3>'+
+    '<pre class="raw">'+esc(JSON.stringify({device:v, infer:inf, tls:tls, tcp:tcp, http:http, ip_info:d.ip_info, variants:v.variants_list}, null, 1))+'</pre></div>';
+
+  html += '</div>';
+  $("#drawer-body").innerHTML = html;
+}
+function kv(k, v){
+  var val = (v===null||v===undefined||v==="")? "—" : v;
+  return '<dt>'+esc(k)+'</dt><dd>'+esc(val)+'</dd>';
+}
+function tab(name){
+  $$("#drawer-body .pane").forEach(function(p){ p.style.display = (p.getAttribute("data-p")===name)?"block":"none"; });
+  $$("#drawer-body .tab").forEach(function(b){ b.className = "tab" + (b.getAttribute("onclick").indexOf("'"+name+"'")>0?" on":""); });
+}
+function saveLabel(id){
+  var body = {label: $("#ed-label").value, note: $("#ed-note").value,
+              tags: $("#ed-tags").value.split(",").map(function(s){return s.trim();}).filter(Boolean)};
+  postJSON("/api/device/label?id="+id, body, function(r){
+    if(r.ok){ showMsg("已保存", "ok"); refresh(); } else { showMsg("保存失败："+(r.error||""), "err"); }
+  });
+}
+function exp(what, fmt){ window.open(API+"/api/export?what="+what+"&fmt="+fmt, "_blank"); }
+function reinfer(id){
+  postJSON("/api/reinfer", {}, function(r){
+    if(r && r.ok){ showMsg("已重新推断 "+(r.devices||0)+" 台设备", "ok"); if(CUR) openDevice(CUR); refresh(); }
+    else { showMsg("推断失败："+((r&&r.error)||""), "err"); }
+  });
+}
+
+/* ==================== 设备自助登记 ==================== */
+/* 被动抓包看不到硬件型号；浏览器主动上报的 Sec-CH-UA-Model 是唯一白拿型号的通道。
+   登记请求与页面加载走同一条 nginx :443，抓包侧会解析出该设备的浏览器 JA4，
+   后端按 (出口 IP, 最近 25s) 反查 conns 即可把"这次登记"和"已有的指纹簇"对上号。 */
+function fpId(){
+  var k = "devfp-fp-id", v = null;
+  try{ v = localStorage.getItem(k); }catch(e){}
+  if(!v){
+    v = "fp-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    try{ localStorage.setItem(k, v); }catch(e){}
+  }
+  return v;
+}
+function fpBase(){
+  var n = navigator, s = screen, fp = {
+    ua: n.userAgent,
+    languages: (n.languages || []).join(","),
+    platform: n.platform,
+    hardwareConcurrency: n.hardwareConcurrency,
+    deviceMemory: n.deviceMemory,
+    maxTouchPoints: n.maxTouchPoints,
+    screen: s.width + "x" + s.height + "@" + (window.devicePixelRatio || 1),
+    availScreen: s.availWidth + "x" + s.availHeight,
+    colorDepth: s.colorDepth,
+    timezone: (function(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone; }catch(e){ return null; } })(),
+    cookieEnabled: n.cookieEnabled,
+    doNotTrack: n.doNotTrack,
+    plugins: n.plugins ? n.plugins.length : 0
+  };
+  try{
+    var c = document.createElement("canvas"); c.width = 240; c.height = 60;
+    var g = c.getContext("2d");
+    g.textBaseline = "top"; g.font = "14px Arial";
+    g.fillStyle = "#f60"; g.fillRect(0, 0, 120, 30);
+    g.fillStyle = "#069"; g.fillText("devfp-fp", 2, 15);
+    var d = c.toDataURL();
+    fp.canvas = d.length + ":" + d.slice(-32);
+  }catch(e){}
+  try{
+    var cv = document.createElement("canvas");
+    var gl = cv.getContext("webgl") || cv.getContext("experimental-webgl");
+    if(gl){
+      var dbg = gl.getExtension("WEBGL_debug_renderer_info");
+      fp.webgl_vendor = dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR);
+      fp.webgl_renderer = dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+      fp.webgl_version = gl.getParameter(gl.VERSION);
+    }
+  }catch(e){}
+  try{
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if(AC){ var ac = new AC(); fp.audio_sampleRate = ac.sampleRate;
+      fp.audio_channels = ac.destination && ac.destination.maxChannelCount; if(ac.close) ac.close(); }
+  }catch(e){}
+  return fp;
+}
+function collectFp(){
+  var fp = fpBase();
+  var uad = navigator.userAgentData;
+  if(uad && uad.getHighEntropyValues){
+    return uad.getHighEntropyValues(["model","platform","platformVersion","architecture","bitness","fullVersionList"])
+      .then(function(h){ fp.uach = h; return fp; })
+      .catch(function(){ return fp; });
+  }
+  return Promise.resolve(fp);
+}
+/* 连打几个轻请求，让抓包侧在"登记这一刻"多看到几次本设备的 TLS 握手，
+   提高 (出口 IP, 时间窗) 反查 JA4 的命中率。 */
+function burstProbe(n){
+  var i;
+  for(i = 0; i < (n || 4); i++){
+    try{ fetch(API + "/api/health?e=" + Date.now() + "-" + i, {cache:"no-store"}); }catch(e){}
+  }
+}
+function doEnroll(){
+  var nameEl = $("#en-name"), res = $("#en-result");
+  var name = (nameEl.value || "").trim();
+  if(!name){ res.innerHTML = '<span style="color:var(--err-text)">请先给这台设备起个名字。</span>'; nameEl.focus(); return; }
+  res.textContent = "采集中…";
+  $("#btn-enroll").disabled = true;
+  burstProbe(4);
+  collectFp().then(function(fp){
+    var uach = fp.uach || {};
+    var body = {
+      name: name, note: ($("#en-note").value || "").trim(), fp_id: fpId(), fp: fp,
+      ua: fp.ua, model: uach.model || "", platform: uach.platform || fp.platform || "",
+      platform_ver: uach.platformVersion || "", arch: uach.architecture || "",
+      window: 25
+    };
+    postJSON("/api/enroll", body, function(r){
+      $("#btn-enroll").disabled = false;
+      if(!r || r.error){ res.innerHTML = '<span style="color:var(--err-text)">登记失败：'+esc((r&&r.error)||"未知错误")+'</span>'; return; }
+      var s = r.suggest_device;
+      var why = (r.suggest_by === "ja4") ? "本次 JA4 命中"
+              : (r.suggest_by && String(r.suggest_by).indexOf("pid") === 0) ? "持久 ID 命中"
+              : "同出口 IP 的 DNS 簇";
+      res.innerHTML = '已登记 <b>'+esc(r.name)+'</b> · 出口 IP <b>'+esc(r.client_ip||"—")+
+        '</b> · 浏览器 JA4 <span class="mono-s">'+esc((r.ja4||"—").slice(0,22))+'</span><br>'+
+        '<span class="muted">登记不会自动绑定 —— 请在下方列表里手动选择关联的设备。</span>'+
+        (s ? '<br>建议关联 <b>#'+s+'</b>（依据：'+esc(why)+'）'
+           : '<br><span class="muted">本次没有可建议的指纹簇（抓包侧可能还没解析到这次握手）。</span>')+
+        '<br><span class="muted">最近 25 秒本 IP 的 JA4：'+((r.recent_ja4||[]).map(function(x){ return esc(x.ja4.slice(0,14)); }).join("、")||"无")+'</span>';
+      nameEl.value = "";
+      renderEnroll();
+      DEV.dev = null; DEV.dot = null; DEV.doh = null;
+    });
+  });
+}
+var ENROLLS = [];   /* 登记列表缓存：供 delEnroll 按 id 查名字，避免把名字拼进内联 onclick */
+/* 持久 ID 通道数：pids 是 {ls,idb,ck,ca} 的 JSON，数一下有几个通道真的写成了（用于展示"这台设备能被多稳地认出来"） */
+function pidChannels(p){
+  if(!p) return 0;
+  try{ var o = (typeof p === "string")? JSON.parse(p) : p; var n = 0;
+       ["ls","idb","ck","ca"].forEach(function(k){ if(o && o[k]) n++; }); return n; }catch(e){ return 0; }
+}
+function renderEnroll(){
+  var box = document.getElementById("enroll-list");
+  if(!box) return;
+  getJSON("/api/enroll", function(d){
+    if(!d || d.error){ box.innerHTML = '<div class="devempty">读取失败：'+esc((d&&d.error)||"")+'</div>'; return; }
+    var es = d.enrollments || [];
+    ENROLLS = es;
+    if(!es.length){ box.innerHTML = '<div class="devempty">还没有任何设备登记。<br>在每台设备上打开 <b>https://dns.example.com/join</b> 即可 —— 打开即登记，无需任何操作；登记后回到这里<b>手动选择</b>关联到哪个指纹簇。</div>'; return; }
+    var h = '<div class="tblwrap"><table><thead><tr><th>设备</th><th>出口 IP / 浏览器 JA4</th>'+
+      '<th>已关联设备</th><th>操作</th></tr></thead><tbody>';
+    es.forEach(function(e){
+      var fp = e.fp || {}, uach = fp.uach || {}, m = e.matched;
+      var model = e.model || uach.model || "";
+      var plat = [e.platform || uach.platform || "", e.platform_ver || uach.platformVersion || ""].filter(Boolean).join(" ");
+      var opts = '<option value="">— 未关联 —</option>';
+      (e.candidates || []).forEach(function(c){
+        opts += '<option value="'+c.id+'"'+((m && m.id === c.id) ? ' selected' : '')+'>#'+c.id+' '+
+          esc((c.label || c.os_guess || "未识别").slice(0, 18))+'</option>';
+      });
+      var chans = pidChannels(e.pids);
+      h += '<tr><td><b>'+esc(e.name)+'</b>'+
+          (model? '<div class="muted small">'+esc(model)+'</div>' : '')+
+          (plat? '<div class="muted small">'+esc(plat)+'</div>' : '')+
+          (e.note? '<div class="muted small">备注：'+esc(e.note)+'</div>' : '')+'</td>'+
+        '<td class="mono-s">'+esc(e.src_ip || "—")+
+          '<div class="muted small">'+esc(e.ja4 || "（未抓到 ja4）")+'</div>'+
+          (e.hash_stable? '<div class="muted small">浏览器指纹 '+esc(String(e.hash_stable).slice(0,12))+'</div>':'')+
+          ((chans || e.fp2_len)? '<div class="muted small">'+(chans? '持久 ID '+chans+' 通道':'')+
+              ((chans && e.fp2_len)? ' · ':'')+(e.fp2_len? '深度指纹 '+e.fp2_len+'B':'')+'</div>':'')+
+          (fp.webgl_renderer? '<div class="muted small">'+esc(String(fp.webgl_renderer).slice(0,30))+'</div>':'')+'</td>'+
+        '<td>'+(m ? '<b>#'+m.id+'</b><div class="muted small">'+esc((m.label||m.os_guess||"").slice(0,18))+'</div>'+
+                    '<div class="muted small">绑定来源：'+(e.matched_by==="manual"? '人工选择' : '（历史自动）'+esc(e.matched_by||""))+'</div>'
+                  : '<span class="dash">未关联</span>')+
+             (e.pinned? ' <span class="badge ok" title="人工确认过的关联：标记后不会再被任何自动逻辑改动">手动</span>' : '')+'</td>'+
+        '<td><div class="stack" style="gap:6px">'+
+          '<select id="lnk-'+e.id+'" style="width:100%;min-width:190px">'+opts+'</select>'+
+          '<div class="row" style="gap:6px">'+
+            '<button class="btn" onclick="linkEnroll('+e.id+')">保存关联</button>'+
+            ((e.pinned && m)? '<button class="btn" onclick="resumeAuto('+e.id+')">解除绑定</button>' : '')+
+            '<button class="btn" onclick="delEnroll('+e.id+')">删除</button>'+
+          '</div>'+
+        '</div></td></tr>';
+    });
+    box.innerHTML = h + '</tbody></table></div>'+
+      '<p class="hint" style="margin-top:var(--s3)">「已关联设备」= 看板里的哪个指纹簇属于这台物理设备。'+
+      '<b>绑定关系完全由你手动选择</b>：选好目标点「保存关联」（或选「未关联」再保存），这条决定就被钉住（显示「手动」），不会再被任何自动逻辑改动；'+
+      '要解除已保存的关联，点「解除绑定」。<br>'+
+      '<b>登记时后端只给「建议」（按 持久 ID（localStorage/IndexedDB/Cookie/Cache）→ 本次抓包的 ja4 → 浏览器稳定指纹 的顺序推断），不会自动生效。</b>'+
+      'Chrome 会对 TLS 扩展做随机化，同一台机的 ja4 每次可能不同，所以持久 ID 才是稳定锚点；'+
+      '每次打开 /join 还会往观测表写一行（含当次 DoT/DoH 判定），可用来查“这台设备什么时候被保护过”。</p>';
+  });
+}
+function linkEnroll(id){
+  var sel = document.getElementById("lnk-"+id);
+  var did = sel ? Number(sel.value || 0) : 0;
+  postJSON("/api/enroll/link", {id: id, device_id: did}, function(r){
+    if(r && r.ok){ showMsg(did? ("已绑定到设备 #"+did+"（已钉住，不会再被自动改动）") : "已设为未关联（已钉住）", "ok"); renderEnroll(); DEV.dev = null; DEV.dot = null; DEV.doh = null; }
+    else { showMsg("保存失败：" + ((r&&r.error)||""), "err"); }
+  });
+}
+/* 解除绑定：清空这条登记与指纹簇的关联（2026-10-15 起没有"自动路径"可交回，人工解除即最终态） */
+function resumeAuto(id){
+  postJSON("/api/enroll/link", {id: id, auto: 1}, function(r){
+    if(r && r.ok){ showMsg("已解除绑定", "ok"); renderEnroll(); DEV.dev = null; DEV.dot = null; DEV.doh = null; }
+    else { showMsg("解除失败", "err"); }
+  });
+}
+function delEnroll(id){
+  /* 只传数字 id，名字从本地缓存查——绝不把用户可控字符串拼进内联 onclick。
+     CWE-79：esc() 若不转义斜杠，设备名里的 script 闭合标签能逃逸内联脚本块。
+     注意：本注释本身也不能出现该闭合标签的字面量，否则会真的截断脚本块（踩过一次）。 */
+  var name = "";
+  for(var i=0;i<ENROLLS.length;i++){ if(ENROLLS[i].id === id){ name = ENROLLS[i].name || ""; break; } }
+  if(!window.confirm("删除登记「" + name + "」？（只删登记记录，不影响设备指纹数据）")) return;
+  postJSON("/api/enroll/delete?id="+id, {}, function(r){
+    if(r && r.ok){ showMsg("已删除登记", "ok"); renderEnroll(); } else { showMsg("删除失败", "err"); }
+  });
+}
+
+/* ==================== 导航 / 刷新 ==================== */
+function currentKind(){
+  return VIEW==="devices"? "dev" : (VIEW==="dot"? "dot" : (VIEW==="doh"? "doh" : null));
+}
+function view(v){
+  VIEW = v;
+  $$("#nav a").forEach(function(a){ a.className = (a.getAttribute("data-v")===v)? "active" : ""; });
+  $$(".content section").forEach(function(s){ s.className = (s.id==="v-"+v)? "on" : ""; });
+  if((location.hash||"").slice(1) !== v) location.hash = v;
+  syncTopbar();
+  if(v === "enroll") renderEnroll();
+  /* 切到某个列表页时，从缓存渲染（列表默认懒渲染，不再每 30 秒重建隐藏页） */
+  var k = currentKind();
+  if(v === "fingerprints"){
+    getJSON("/api/devices?q=&dns=1&limit=300", function(d){
+      if(!d.error) renderFingerprints(d);
+    });
+  } else if(k && !DEV[k]) getJSON(devUrl(k), function(d){ if(!d.error){ DEV[k]=d; renderKind(k); } });
+  else if(k) renderKind(k);
+}
+function devUrl(kind){
+  var dns = kind==="dev" ? (DNSONLY?"1":"0") : "1";   /* DoT/DoH 页只需要 DNS 设备，payload 小一半以上 */
+  var b = (kind==="dev" && BOUNDONLY) ? "&bound=1" : "";   /* 设备页默认只要已绑定设备（后端过滤） */
+  return "/api/devices?q=&dns="+dns+"&limit=300"+b;
+}
+function refresh(){
+  getJSON("/api/summary", function(s){
+    if(!s.error){ renderSummary(s); $("#fresh").className = "fresh"; $("#ts-rel").textContent = "已更新 "+rel(s.ts); }
+    else { $("#fresh").className = "fresh"; $("#ts-rel").textContent = "刷新失败"; }
+  });
+  /* 只拉当前页需要的数据：概览页只拉 summary（原来无条件拉 4 个接口共 3.3MB） */
+  var k = currentKind();
+  if(k){
+    getJSON(devUrl(k), function(d){
+      if(!d.error){
+        DEV[k] = d;
+        renderKind(k);
+        if(k==="dev") renderFingerprints(d);
+      }
+    });
+  }
+  if(VIEW==="fingerprints") getJSON("/api/devices?q=&dns=1&limit=300", function(d){ if(!d.error) renderFingerprints(d); });
+  if(VIEW==="events") getJSON("/api/events", function(d){ if(!d.error) renderEvents(d); });
+  if(VIEW==="enroll") renderEnroll();
+  LEFT = REFRESH;
+}
+
+$$("#nav a").forEach(function(a){ a.onclick = function(){ view(a.getAttribute("data-v")); }; });
+$("#btn-refresh").onclick = refresh;
+$("#btn-theme").onclick = function(){
+  var dark = document.documentElement.getAttribute("data-theme")==="dark";
+  document.documentElement.setAttribute("data-theme", dark? "light":"dark");
+  try{ localStorage.setItem("devfp-theme", dark?"light":"dark"); }catch(e){}
+  this.textContent = dark? "🌙" : "☀️";
+};
+(function(){
+  var t = null;
+  try{ t = localStorage.getItem("devfp-theme"); }catch(e){}
+  if(!t){ try{ t = matchMedia("(prefers-color-scheme: dark)").matches? "dark":"light"; }catch(e){ t="light"; } }
+  document.documentElement.setAttribute("data-theme", t);
+  $("#btn-theme").textContent = (t==="dark")? "☀️":"🌙";
+})();
+
+/* 设备页工具条 */
+$("#dev-q").addEventListener("input", function(){ Q = this.value.trim(); if(currentKind()==="dev") renderKind("dev"); });
+$("#dev-q").addEventListener("keydown", function(e){ if(e.key==="Enter"){ e.preventDefault(); refresh(); } });
+$("#dev-sort").addEventListener("change", function(){
+  SORT = this.value;
+  try{ localStorage.setItem("devfp-sort", SORT); }catch(e){}
+  var k = currentKind(); if(k) renderKind(k);
+});
+/* 只看已绑定设备（默认开）：切换后必须让 DEV.dev 失效重取，因为过滤在后端做 */
+function syncInuseDisabled(){
+  var cb = $("#dev-inuse"); if(!cb) return;
+  cb.disabled = BOUNDONLY;
+  var lab = cb.parentNode; if(!lab) return;
+  lab.style.opacity = BOUNDONLY ? ".45" : "";
+  lab.title = BOUNDONLY
+    ? "已绑定模式下不生效：绑定的设备必须永远可见，不能被「只用设备」启发式藏掉"
+    : "排除公网扫描器，以及「只对 :443 建过连接、从未走本机解析器发过查询」的指纹";
+}
+function setBound(v){
+  BOUNDONLY = !!v;
+  var cb = $("#dev-bound"); if(cb) cb.checked = BOUNDONLY;
+  try{ localStorage.setItem("devfp-bound", BOUNDONLY? "1":"0"); }catch(e){}
+  DEV.dev = null;                 /* 口径是后端过滤，必须重取 */
+  syncInuseDisabled();
+  refresh();
+}
+function toggleBound(){ setBound(!BOUNDONLY); }
+$("#dev-bound").addEventListener("change", function(){ setBound(this.checked); });
+syncInuseDisabled();
+$("#dev-inuse").addEventListener("change", function(){
+  INUSE = this.checked;
+  try{ localStorage.setItem("devfp-inuse", INUSE? "1":"0"); }catch(e){}
+  var k = currentKind(); if(k) renderKind(k);
+});
+/* 登记设备页 */
+$("#btn-enroll").addEventListener("click", doEnroll);
+$("#btn-fpview").addEventListener("click", function(){
+  var pre = $("#en-fp");
+  pre.style.display = "block";
+  pre.textContent = "采集中…";
+  collectFp().then(function(fp){ pre.textContent = JSON.stringify(fp, null, 1); });
+});
+$("#dev-dnsonly").addEventListener("change", function(){
+  DNSONLY = this.checked;
+  DEV.dev = null;
+  refresh();
+});
+$$("#dev-mode button").forEach(function(b){
+  b.addEventListener("click", function(){
+    MODE = b.getAttribute("data-m");
+    try{ localStorage.setItem("devfp-mode", MODE); }catch(e){}
+    $$("#dev-mode button").forEach(function(x){ x.className = (x.getAttribute("data-m")===MODE)? "on":""; });
+    var k = currentKind(); if(k) renderKind(k);
+  });
+});
+/* 顶栏会随内容换行改变高度，而表格吸顶表头/分组头都基于 --topbar-h。
+   实测后回写变量，保证吸顶永远贴合（幂等：写回值只影响 min-height，不会震荡）。 */
+function syncTopbar(){
+  var tb = document.querySelector(".topbar");
+  if(!tb) return;
+  document.documentElement.style.setProperty("--topbar-h", "56px");   // 先归零，让高度可缩回
+  var h = Math.round(tb.getBoundingClientRect().height);
+  document.documentElement.style.setProperty("--topbar-h", Math.max(56, h)+"px");
+}
+var _rzTimer = null;
+window.addEventListener("resize", function(){
+  syncTopbar();
+  /* 状态条文案与 KPI 说明都随宽度切换长短版，重绘要防抖，否则拖窗口时会狂刷 */
+  if(_rzTimer) clearTimeout(_rzTimer);
+  _rzTimer = setTimeout(function(){
+    if(SUMMARY) renderSummary(SUMMARY);
+    var k = currentKind(); if(k) renderKind(k);
+  }, 150);
+});
+$("#drawer").addEventListener("click", function(e){
+  if(e.target === $("#drawer")) closeDrawer();
+});
+
+/* ---------- 启动 ---------- */
+(function(){
+  var h = (location.hash||"#overview").slice(1);
+  if(!$("#v-"+h)) h = "overview";
+  $("#dev-sort").value = SORT;
+  syncInUseUi();
+  $$("#dev-mode button").forEach(function(x){ x.className = (x.getAttribute("data-m")===MODE)? "on":""; });
+  view(h);
+  syncTopbar();
+})();
+refresh();
+TIMER = setInterval(function(){
+  LEFT--;
+  $("#countdown").textContent = LEFT>0? ("自动刷新 "+LEFT+"s") : "刷新中…";
+  if(LEFT<=0) refresh();
+}, 1000);
+</script>
+</body>
+</html>

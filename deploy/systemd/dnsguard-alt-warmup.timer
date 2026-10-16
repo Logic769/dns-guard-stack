@@ -1,0 +1,11 @@
+[Unit]
+Description=Run unbound-alt cache warmup every 60s
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Persistent=false
+
+[Install]
+WantedBy=timers.target

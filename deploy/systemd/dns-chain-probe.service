@@ -1,0 +1,6 @@
+[Unit]
+Description=Layered DNS DoT/DoH stability probe
+After=network-online.target dnsguard.service dotfront.service nginx.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/dns-chain-probe.py

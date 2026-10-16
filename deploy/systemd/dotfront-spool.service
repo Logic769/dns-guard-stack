@@ -1,0 +1,18 @@
+[Unit]
+Description=DoT plaintext front spool (nginx -> adgh 53)
+After=network.target
+[Service]
+Type=simple
+Environment=DOTF_IFACE=auto
+Environment=DOTF_GW=172.18.0.1
+Environment=DOTF_DST=172.18.0.2
+Environment=DOTF_DPORT=53
+ExecStart=/usr/bin/python3 /root/ech-build/fp/dotfront-spool.py
+Restart=always
+RestartSec=5
+Nice=5
+StandardOutput=null
+StandardError=journal
+LimitNOFILE=4096
+[Install]
+WantedBy=multi-user.target

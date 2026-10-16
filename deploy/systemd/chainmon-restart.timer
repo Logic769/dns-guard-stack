@@ -1,0 +1,10 @@
+[Unit]
+Description=每 12 小时重启 chainmon（内存兜底）
+
+[Timer]
+OnBootSec=45min
+OnUnitActiveSec=1h
+AccuracySec=5min
+
+[Install]
+WantedBy=timers.target

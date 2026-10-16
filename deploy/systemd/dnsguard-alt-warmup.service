@@ -1,0 +1,8 @@
+[Unit]
+Description=Warm up unbound-alt cache (root/TLD DS+DNSKEY and bogus sample)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/dnsguard-alt-warmup.py 127.0.0.1 5357

@@ -1,0 +1,11 @@
+[Unit]
+Description=每 5 分钟巡检解析链路容器 IP 漂移（审计 §3.3）
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=dnsguard-ip-reconcile.service
+
+[Install]
+WantedBy=timers.target

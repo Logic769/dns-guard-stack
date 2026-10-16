@@ -1,0 +1,17 @@
+[Unit]
+Description=devfp - DoT/DoH device fingerprint dashboard
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/devfp/devfp.py
+Restart=always
+RestartSec=5
+WorkingDirectory=/opt/devfp
+StandardOutput=append:/var/log/devfp.log
+StandardError=append:/var/log/devfp.log
+User=root
+
+[Install]
+WantedBy=multi-user.target

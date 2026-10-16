@@ -1,0 +1,41 @@
+# 运行时与本地临时产物
+runtimes/
+runtime/
+state/
+verifier-state/
+releases/
+backups/
+_upstream/
+*.tar.gz
+*.tgz
+
+# 配置实例（由 .env.example 生成，可能含密钥）
+.env
+*.env.local
+deploy/containers/*.rendered
+
+# 证书与私钥
+*.pem
+*.key
+!deploy/**/root.key.sample
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 数据库与日志
+*.jsonl
+*.log
+*.db
+*.sqlite
+stats.json
+poisoned.json
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp

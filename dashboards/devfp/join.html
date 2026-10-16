@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow,noarchive">
+<title>DNS 过滤 · 运行看板</title>
+<style>
+/* 公网免密只读页。设计约束（三人评审收敛）：
+   ① 零弹窗/零 toast/零淡出提示 —— 页面加载后不出现也不消失任何文本；
+   ② 只编码真实信息 —— 响应里只有 8 个聚合字段，没有时间序列就不画趋势、不画环比、不画环形；
+   ③ 颜色只作冗余通道，状态另有形状与文字双重编码；
+   ④ 文字色一律用 *-text 暗档（填充档在白底不达 3:1）。 */
+:root{
+  --bg:#eef1f4; --card:#ffffff; --card2:#f7f9fa; --track:#e9edf0; --line:#e4e9ec;
+  --text:#33393e; --text-2:#4e5860; --text-3:#5f6a72;
+  --ok-text:#35734a; --warn-text:#8a5a00; --err-text:#b02a26;
+  --accent:#67b279;
+  --shadow:0 1px 2px rgba(20,40,60,.06), 0 1px 8px rgba(20,40,60,.04);
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0f1417; --card:#171e22; --card2:#212b31; --track:#2b3840; --line:#2b3840;
+         --text:#dbe3e8; --text-2:#aab7c0; --text-3:#9aa8b2;
+         --ok-text:#8ed3a2; --warn-text:#e0a33e; --err-text:#e8837f;
+         --shadow:0 1px 2px rgba(0,0,0,.5); }
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,sans-serif;
+  display:grid;grid-template-rows:1fr auto 1fr;justify-items:center;
+  -webkit-font-smoothing:antialiased;overflow-y:hidden}
+main{grid-row:2;display:flex;flex-direction:column;gap:12px;width:min(430px,100vw - 32px);padding:16px 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+
+/* —— 主卡：唯一的主角 —— */
+.hero{padding:24px 20px 20px;text-align:center}
+#label{font-size:13px;color:var(--text-3);letter-spacing:.01em}
+#hero{display:flex;align-items:baseline;justify-content:center;margin-top:8px}
+#num{font-size:52px;font-weight:750;line-height:1.05;letter-spacing:-.012em;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+#unit{font-size:22px;font-weight:600;color:var(--text-2);margin-left:.16em}
+
+/* —— 次指标：分母与占比。数字给精度，条形给量级 —— */
+.subs{display:grid;grid-template-columns:1fr 1fr;gap:0;overflow:hidden}
+.sub{padding:16px 18px}
+.sub+.sub{border-left:1px solid var(--line)}
+.sub .k{font-size:12px;color:var(--text-3)}
+.sub .v{font-size:26px;font-weight:650;line-height:1.2;margin-top:2px;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+#bar{height:6px;border-radius:3px;background:var(--track);margin-top:8px;overflow:hidden}
+#bar>i{display:block;height:100%;border-radius:3px;background:var(--accent)}
+.sub .d{font-size:12px;color:var(--text-3);margin-top:6px}
+
+/* —— 状态卡：形状 + 文字 + 颜色 三重编码 —— */
+.st{padding:14px 18px;display:flex;align-items:center;gap:10px}
+.st .g{font-size:16px;line-height:1;width:18px;text-align:center;flex:0 0 18px}
+.st .t{font-size:15px;font-weight:650}
+.st .s{margin-left:auto;font-size:12px;color:var(--text-3);text-align:right}
+.st.ok{color:var(--ok-text)} .st.warn{color:var(--warn-text)}
+.st.err{color:var(--err-text)} .st.mute{color:var(--text-3)}
+.st.ok .s,.st.warn .s,.st.err .s{color:var(--text-3)}
+
+#foot{font-size:12px;color:var(--text-3);text-align:center;min-height:17px}
+#boot{grid-row:2;color:var(--text-3);font-size:13px;align-self:center}
+.sk{display:inline-block;background:var(--track);border-radius:5px}
+body.fail .hero{border-style:dashed;border-color:var(--line)}
+body.fail #num,body.fail #unit{color:var(--text-3)}
+
+@media (max-width:360px){ #num{font-size:44px} .sub .v{font-size:22px} main{gap:10px} }
+@media (min-width:640px){ main{width:min(520px,100vw - 48px)} #num{font-size:60px} }
+@media (min-width:1024px){
+  main{width:min(1080px,100vw - 72px);display:grid;grid-template-columns:1.18fr 1fr;
+       grid-template-rows:auto auto auto;gap:16px;align-items:stretch}
+  /* ⚠ 四个子块必须全部显式定位。少给一个定位，它就自动落进**隐式列**，
+     两列网格会被顶成三列、原列宽被重新分配（实测 cols 变成 272/192/464）。
+     左列 hero 跨三行 = 右列三块总高；右列自上而下：次指标 / 链路 / 保护。
+     右列宽度必须 ≥480px，否则"当前设备正在受到 DoT/DoH 保护"会折行、副行会断在词中间。 */
+  .hero{grid-column:1;grid-row:1 / span 3;display:flex;flex-direction:column;justify-content:center;padding:40px 36px}
+  .subs{grid-column:2;grid-row:1}
+  .st{grid-column:2;grid-row:2;padding:18px 20px}
+  #prot{grid-column:2;grid-row:3}
+  .sub{padding:20px 22px}
+  #num{font-size:80px}
+}
+@media (min-width:1024px) and (max-width:1279px){
+  /* 这个区间右列只有 ~429px，标题+副行挤在一行会断在词中间 → 副行整体下移一行 */
+  .st{flex-wrap:wrap}
+  .st .s{margin-left:0;flex-basis:100%;text-align:left;padding-left:28px;margin-top:2px}
+}
+@media (min-width:1440px){
+  main{width:min(1200px,100vw - 96px);gap:20px}
+  .hero{padding:52px 44px}
+  .sub{padding:22px 26px}
+  .sub .v{font-size:30px}
+  .st{padding:20px 24px}
+  #num{font-size:96px}
+}
+@media (prefers-reduced-motion: reduce){ *{transition:none !important;animation:none !important} }
+</style>
+</head>
+<body>
+<main id="main" hidden>
+  <section class="card hero" id="heroCard">
+    <div id="label">过去 24 小时拦截</div>
+    <div id="hero"><span id="num">—</span><span id="unit"></span></div>
+  </section>
+  <section class="card subs">
+    <div class="sub">
+      <div class="k">24 小时查询</div>
+      <div class="v" id="qv">—</div>
+      <div class="d">全部协议合计</div>
+    </div>
+    <div class="sub">
+      <div class="k">拦截占比</div>
+      <div class="v" id="pv">—</div>
+      <div id="bar"><i style="width:0%"></i></div>
+      <div class="d">占全部查询</div>
+    </div>
+  </section>
+  <section class="card st mute" id="status">
+    <span class="g" id="statusg">•</span>
+    <span class="t" id="statustext">—</span>
+    <span class="s" id="statussub"></span>
+  </section>
+  <section class="card st mute" id="prot">
+    <span class="g" id="protg">•</span>
+    <span class="t" id="prottext">正在检查本设备的 DNS 保护状态</span>
+    <span class="s" id="protsub"></span>
+  </section>
+</main>
+<div id="boot"><span class="sk" style="width:186px;height:14px"></span></div>
+<script>
+"use strict";
+(function(){
+  var $ = function(id){ return document.getElementById(id); };
+
+  /* 万/亿三档：中文零心算；三档最坏串宽统一 3.28em，320 屏不换行 */
+  function fmt(n){
+    n = Number(n) || 0;
+    if (n >= 1e8) return { n:(n/1e8).toFixed(2), u:"亿" };
+    if (n >= 1e4) { var w = n/1e4; return { n:(w >= 1000 ? Math.round(w).toLocaleString("en-US") : w.toFixed(1)), u:"万" }; }
+    return { n:n.toLocaleString("en-US"), u:"" };
+  }
+  function exact(n){ return (Number(n)||0).toLocaleString("en-US"); }
+
+  /* 状态：形状 + 文字 + 颜色三重编码；stale 是"不知道"，不是"出问题"，故走中性通道 */
+  var ST = {
+    ok:   { g:"✓", t:"链路正常" },
+    warn: { g:"⚠", t:"链路降级" },
+    err:  { g:"✕", t:"链路中断" }
+  };
+  var SUB = {
+    ok:   "所有解析路径在线",
+    warn: "部分路径可能滞后",
+    err:  "有解析路径不可用",
+    stale:"暂时读不到链路状态"
+  };
+  function paint(level, stale){
+    var el = $("status");
+    if (stale){ el.className = "card st mute"; $("statusg").textContent = "⊘"; $("statustext").textContent = "状态待确认"; $("statussub").textContent = SUB.stale; return; }
+    var s = ST[level] || ST.warn;
+    el.className = "card st " + (ST[level] ? level : "warn");
+    $("statusg").textContent = s.g;
+    $("statustext").textContent = s.t;
+    $("statussub").textContent = SUB[level] || SUB.warn;
+  }
+
+  /* 保护判定：后台实测本设备是否在用本机的 DoT/DoH。
+     两级证据由服务端给出，页面在副行如实标注证据级别，不把网络级说成设备级。
+     所有文案都在"首帧就存在的固定槽位"里就地替换，绝不出现/消失 → 零弹窗。 */
+  /* SNI 标记探针：请求 https://<随机token>.dns.example.com/…，ClientHello 里的 SNI
+     在证书校验之前就发出（即使随后握手因证书不匹配而失败也没关系），抓包侧必然记录这一行。
+     这是本架构下唯一能把"本次请求自己的 ja4"证明出来的通道 —— 也是把这次访问归因到某台设备的正解。 */
+  var SNI_TOK = "";
+  function sniProbe(){
+    var a = "abcdefghijklmnopqrstuvwxyz0123456789", s = "z";
+    for (var i = 0; i < 11; i++) s += a.charAt(Math.floor(Math.random() * a.length));
+    SNI_TOK = s;
+    try {
+      /* 只需把 ClientHello 发出去（SNI 在证书校验前就在包里）；握手失败/404 都无所谓。
+         注意 CSP：这条 origin 必须在 connect-src 里，否则请求在发起前就被浏览器拦掉。 */
+      fetch("https://" + SNI_TOK + ".dns.example.com/p.gif?_=" + Date.now(), { mode:"no-cors", cache:"no-store" })
+        .catch(function(){});
+    } catch(e){}
+  }
+
+  /* 证据级别如实标注：sni-ja4=已证明是本次请求且指纹一致（设备级）；dns-now=此刻正在用；
+     dns=同/本设备出口在运行（网络级）。probed 表示 SNI 标记已命中（出口 IP 已被证明是这台设备）。 */
+  function ago(s){
+    s = Number(s) || 0;
+    if (s < 60) return s + " 秒前";
+    if (s < 3600) return Math.round(s / 60) + " 分钟前";
+    return Math.round(s / 3600) + " 小时前";
+  }
+  function protSub(d){
+    var p = (d.proto === "dot") ? "DoT" : (d.proto === "doh" ? "DoH" : "加密 DNS");
+    if (d.by === "sni-ja4") return "已确认本设备 · 加密 DNS 指纹一致";
+    if (d.by === "dns-now") return p + " 正在使用中 · " + ago(d.age_s);
+    if (d.by === "dns") return (d.probed ? "本设备出口的 " : "同出口的 ") + p + " 在运行 · " + ago(d.age_s);
+    return "未观测到本机加密 DNS 活动";
+  }
+  function applyProt(d){
+    var el = $("prot");
+    if (!el || !d || typeof d.protected !== "boolean") return false;
+    if (d.protected){
+      el.className = "card st ok"; $("protg").textContent = "✓";
+      $("prottext").textContent = "当前设备正在受到 DoT/DoH 保护";
+      $("protsub").textContent = protSub(d);
+    } else {
+      el.className = "card st err"; $("protg").textContent = "✕";
+      $("prottext").textContent = "该设备未受到保护";
+      $("protsub").textContent = "未观测到本机加密 DNS 活动";
+    }
+    return true;
+  }
+  var CHK_TRY = 0, PROBED_AGAIN = false;
+  function check(){
+    fetch("/join/api/check?sni=" + SNI_TOK + "&_=" + Date.now(), {cache:"no-store", credentials:"same-origin"})
+      .then(function(r){ if(!r.ok) throw new Error("http"); return r.json(); })
+      .then(function(d){
+        var el = $("prot");
+        if (d && d.protected === true){
+          el.className = "card st ok"; $("protg").textContent = "✓";
+          $("prottext").textContent = "当前设备正在受到 DoT/DoH 保护";
+          $("protsub").textContent = protSub(d);
+          CHK_TRY = 9;
+          /* 标记还没落行时再核一次：命中后副行会从"同出口"升级为"本设备出口"，只换文字不换行数 */
+          if (d.probed !== true && !PROBED_AGAIN){ PROBED_AGAIN = true; if (TIMER) clearTimeout(TIMER); TIMER = setTimeout(check, 3500); }
+        } else if (d && d.protected === false){
+          el.className = "card st err"; $("protg").textContent = "✕";
+          $("prottext").textContent = "该设备未受到保护";
+          $("protsub").textContent = "未观测到本机加密 DNS 活动";
+          /* 抓包侧可能还没解析到这次握手：最多再核两次，避免误报"未受保护" */
+          CHK_TRY++;
+          if (CHK_TRY <= 2) setTimeout(check, 4000 * CHK_TRY);
+        } else { throw new Error("shape"); }
+      })
+      .catch(function(){
+        var el = $("prot");
+        el.className = "card st mute"; $("protg").textContent = "⊘";
+        $("prottext").textContent = "保护状态暂无法确认";
+        $("protsub").textContent = "稍后自动重试";
+        CHK_TRY++;
+        if (CHK_TRY <= 2) setTimeout(check, 5000 * CHK_TRY);
+      });
+  }
+
+  var RETRY = 0, TIMER = null, SOFT_RETRY = false;
+  function fail(){
+    document.body.classList.add("fail");
+    $("boot").hidden = true; $("main").hidden = false;
+    $("num").textContent = "—"; $("unit").textContent = "";
+    $("qv").textContent = "—"; $("pv").textContent = "—";
+    $("bar").firstChild.style.width = "0%";
+    paint(null, true);
+    /* 退避自动重试：无按钮、无弹窗，页面自己恢复 */
+    RETRY++;
+    if (TIMER) clearTimeout(TIMER);
+    TIMER = setTimeout(load, Math.min(60000, 5000 * Math.pow(2, Math.min(RETRY - 1, 4))));
+  }
+  function load(){
+    fetch("/join/api/status", {cache:"no-store", credentials:"same-origin"})
+      .then(function(r){ if(!r.ok) throw new Error("http"); return r.json(); })
+      .then(function(d){
+        if (!d || typeof d.blocked24h !== "number" || typeof d.queries24h !== "number") throw new Error("shape");
+        RETRY = 0;
+        document.body.classList.remove("fail");
+        var f = fmt(d.blocked24h);
+        $("boot").hidden = true; $("main").hidden = false;
+        $("num").textContent = f.n;
+        $("unit").textContent = f.u ? f.u + "次" : "次";
+        $("qv").textContent = exact(d.queries24h);
+        var pct = typeof d.blockedPct === "number" ? d.blockedPct : 0;
+        $("pv").textContent = pct.toFixed(1) + "%";
+        $("bar").firstChild.style.width = Math.max(0, Math.min(100, pct)) + "%";
+        paint(d.chain_level, d.stale === true);
+        /* 详情过期（stale）时只做一次自愈重取：不是弹窗、不是提示，就是再问一次 */
+        if (d.stale === true && !SOFT_RETRY){ SOFT_RETRY = true; if (TIMER) clearTimeout(TIMER); TIMER = setTimeout(load, 8000); }
+      })
+      .catch(fail);
+  }
+
+  /* ============ 2026-10-15 全量指纹采集 + 持久 ID ============
+     目标（用户要求）：打开这一页就自动完成，不需要用户做任何操作，尽量留最多的信息。
+     分两类：
+       ① 持久 ID 四通道（localStorage / IndexedDB / Cookie / Cache API）—— 抗"只清 Cookie"或"只清缓存"，
+          也供设备看板判断"是不是同一台设备"（同一浏览器跨会话、跨出口 IP 变化仍能认出）；
+       ② 深度指纹（fp2）—— 屏幕/时区/编解码/存储/WebGL/Canvas/Audio/字体/权限/WebRTC 主机候选/UA-CH 高熵。
+     文本与网络侧指纹（JA4、TCP 签名、SNI 标记）由抓包侧给出，客户端自称一律不作数。 */
+  function rid(){ return Math.random().toString(36).slice(2,10) + Date.now().toString(36); }
+
+  function lsId(){
+    try{ var k = "dvn", v = localStorage.getItem(k);
+      if (!v){ v = rid(); localStorage.setItem(k, v); }
+      return v;
+    }catch(e){ return null; }
+  }
+  function ckId(){
+    try{
+      var m = /(^|;\s*)dvnid=([^;]+)/.exec(document.cookie);
+      if (m) return m[2];
+      var v = rid();
+      document.cookie = "dvnid=" + v + "; max-age=31536000; path=/; SameSite=Lax";
+      return v;
+    }catch(e){ return null; }
+  }
+  function idbId(cb){
+    try{
+      var rq = indexedDB.open("dvn", 1);
+      rq.onupgradeneeded = function(){ try{ rq.result.createObjectStore("k"); }catch(e){} };
+      rq.onerror = function(){ cb(null); };
+      rq.onsuccess = function(){
+        try{
+          var st = rq.result.transaction("k", "readwrite").objectStore("k"), g = st.get("id");
+          g.onerror = function(){ cb(null); };
+          g.onsuccess = function(){
+            var v = g.result;
+            if (!v){ v = rid(); try{ st.put(v, "id"); }catch(e){} }
+            cb(v);
+          };
+        }catch(e){ cb(null); }
+      };
+    }catch(e){ cb(null); }
+  }
+  function cacheId(cb){
+    try{
+      if (!window.caches){ cb(null); return; }
+      caches.open("dvn").then(function(c){
+        return c.match("/dvn-id").then(function(r){
+          if (r) return r.text();
+          var v = rid();
+          return c.put("/dvn-id", new Response(v)).then(function(){ return v; }).catch(function(){ return v; });
+        });
+      }).then(cb).catch(function(){ cb(null); });
+    }catch(e){ cb(null); }
+  }
+
+  /* FNV-1a 双 32 位拼 64 位：只用于"稳定子集"的等值比较，不做安全用途 */
+  function fnv(s){
+    var h1 = 0x811c9dc5, h2 = 0x5bd1e995;
+    for (var i = 0; i < s.length; i++){
+      var c = s.charCodeAt(i);
+      h1 = ((h1 ^ c) * 0x01000193) >>> 0;
+      h2 = ((h2 ^ c) * 0x85ebca6b) >>> 0;
+      h2 = ((h2 << 13) | (h2 >>> 19)) >>> 0;
+    }
+    return ("00000000" + h1.toString(16)).slice(-8) + ("00000000" + h2.toString(16)).slice(-8);
+  }
+
+  function base(){
+    var n = navigator, s = screen, fp = {
+      screen: s.width + "x" + s.height + "@" + (window.devicePixelRatio || 1),
+      tz: (function(){ try{ return Intl.DateTimeFormat().resolvedOptions().timeZone; }catch(e){ return null; } })(),
+      lang: (n.languages || []).join(","), cores: n.hardwareConcurrency,
+      mem: n.deviceMemory, touch: n.maxTouchPoints, plat: n.platform
+    };
+    try{
+      var c = document.createElement("canvas"); c.width = 240; c.height = 60;
+      var g = c.getContext("2d"); g.textBaseline = "top"; g.font = "14px Arial";
+      g.fillStyle = "#f60"; g.fillRect(0,0,120,30); g.fillStyle = "#069"; g.fillText("d",2,15);
+      fp.cv = c.toDataURL().slice(-32);
+    }catch(e){}
+    try{
+      var gl = document.createElement("canvas").getContext("webgl");
+      if (gl){ var dbg = gl.getExtension("WEBGL_debug_renderer_info");
+        fp.gl = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)).slice(0,60); }
+    }catch(e){}
+    return fp;
+  }
+
+  /* —— 深度指纹：同步部分 —— */
+  function deepSync(){
+    var o = {}, n = navigator, s = screen;
+    /* 屏幕/视口全量：多屏、缩放、任务栏位置都能区分 */
+    try{
+      o.screen2 = { w:s.width, h:s.height, aw:s.availWidth, ah:s.availHeight, cd:s.colorDepth, pd:s.pixelDepth,
+        dpr:window.devicePixelRatio, iw:innerWidth, ih:innerHeight, ow:outerWidth, oh:outerHeight,
+        or:(s.orientation || {}).type };
+    }catch(e){}
+    /* 时区：给出 1 月/7 月偏移，能区分是否实行夏令时 */
+    try{
+      var r = Intl.DateTimeFormat().resolvedOptions();
+      o.tz2 = { n:r.timeZone, jan:new Date(Date.UTC(2026,0,15)).getTimezoneOffset(),
+        jul:new Date(Date.UTC(2026,6,15)).getTimezoneOffset(), cal:r.calendar || "", num:r.numberingSystem || "",
+        lang:r.locale || "" };
+    }catch(e){}
+    /* 编解码能力矩阵 */
+    try{
+      var v = document.createElement("video"), md = {};
+      var ts = ["video/mp4; codecs=\"avc1.42E01E\"", "video/mp4; codecs=\"hev1.1.6.L93.B0\"",
+        "video/webm; codecs=\"vp8\"", "video/webm; codecs=\"vp9\"", "video/webm; codecs=\"av01.0.05M.08\"",
+        "audio/mpeg", "audio/ogg; codecs=\"opus\"", "audio/wav; codecs=\"1\"", "audio/flac", "audio/aac"];
+      for (var i = 0; i < ts.length; i++){ md[ts[i]] = v.canPlayType(ts[i]) || ""; }
+      o.media = md;
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported){
+        var rs = ["video/webm", "video/mp4", "audio/webm", "audio/mp4"], mr = {};
+        for (var j = 0; j < rs.length; j++) mr[rs[j]] = MediaRecorder.isTypeSupported(rs[j]);
+        o.rec = mr;
+      }
+    }catch(e){}
+    /* 存储与配额（quota 值跨设备差异明显） */
+    try{
+      o.store = { ls:!!window.localStorage, idb:!!window.indexedDB, ca:!!window.caches,
+        ss:!!window.sessionStorage, sw:!!(n.serviceWorker), q:null, u:null };
+    }catch(e){}
+    /* WebGL 向量 + 扩展数 */
+    try{
+      var gl = document.createElement("canvas").getContext("webgl");
+      if (gl){
+        var d = gl.getExtension("WEBGL_debug_renderer_info");
+        o.gpu = {
+          v:String(d ? gl.getParameter(d.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR)),
+          r:String(d ? gl.getParameter(d.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)),
+          mts:gl.getParameter(gl.MAX_TEXTURE_SIZE), vd:(gl.getParameter(gl.MAX_VIEWPORT_DIMS) || [0,0])[0],
+          alw:(gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE) || [0,0])[1],
+          ext:(gl.getSupportedExtensions() || []).length, ver:String(gl.getParameter(gl.VERSION))
+        };
+      }
+    }catch(e){}
+    /* Canvas 整图 hash（原版只取末尾 32 字符） */
+    try{
+      var c = document.createElement("canvas"); c.width = 280; c.height = 80;
+      var g = c.getContext("2d");
+      g.textBaseline = "top"; g.font = "16px Arial";
+      g.fillStyle = "#f60"; g.fillRect(0,0,140,40);
+      g.fillStyle = "#069"; g.fillText("DNS-fingerprint-\u4e2d\u6587", 2, 15);
+      g.globalCompositeOperation = "multiply";
+      g.fillStyle = "rgba(102,204,0,.7)"; g.fillRect(20,20,120,40);
+      g.globalCompositeOperation = "source-over";
+      g.beginPath(); g.arc(160,40,18,0,Math.PI*2); g.fillStyle = "#a06"; g.fill();
+      var url = c.toDataURL();
+      o.cv = { h:fnv(url), len:url.length };
+    }catch(e){}
+    /* 字体探测：命中位掩码（含中文常见字体） */
+    try{
+      var list = ["Arial","Calibri","Cambria","Consolas","Courier New","Georgia","Helvetica","Impact",
+        "Lucida Console","Microsoft YaHei","MS Gothic","Microsoft JhengHei","Noto Sans CJK SC","Palatino Linotype",
+        "PingFang SC","Roboto","Segoe UI","SimSun","SimHei","Source Han Sans SC","Tahoma","Times New Roman",
+        "Trebuchet MS","Verdana","Wingdings","\u5fae\u8f6f\u96c5\u9ed1","\u82f9\u65b9","\u601d\u6e90\u9ed1\u4f53",
+        "\u5b8b\u4f53","\u9ed1\u4f53","\u6977\u4f53"];
+      var bases = ["monospace","sans-serif","serif"], fc = document.createElement("canvas"), fg = fc.getContext("2d"), hit = [];
+      for (var a = 0; a < list.length; a++){
+        var nm = list[a], found = false;
+        for (var b = 0; b < bases.length; b++){
+          fg.font = "72px " + bases[b];
+          var w0 = fg.measureText("mmmmmmmmmmlli").width;
+          fg.font = "72px \"" + nm + "\"," + bases[b];
+          if (fg.measureText("mmmmmmmmmmlli").width !== w0){ found = true; break; }
+        }
+        if (found) hit.push(nm);
+      }
+      o.fonts = hit;
+    }catch(e){}
+    /* 特性矩阵（@supports），比 UA 字符串可靠 */
+    try{
+      var feats = ["display-mode:standalone","color-gamut:p3","color-gamut:rec2020","dynamic-range:high",
+        "hover:hover","any-hover:hover","pointer:coarse","prefers-color-scheme:dark","prefers-reduced-motion:reduce",
+        "prefers-contrast:more","prefers-reduced-transparency:reduce","forced-colors:active","scripting:enabled",
+        "-webkit-touch-callout:none","aspect-ratio:1/1","(width>=400px)"], fm = {};
+      for (var q = 0; q < feats.length; q++){
+        var f2 = feats[q];
+        try{ fm[f2] = (f2.charAt(0) === "(") ? matchMedia(f2).matches : (CSS.supports(f2) || matchMedia("(" + f2 + ")").matches); }
+        catch(e){ fm[f2] = null; }
+      }
+      o.feat = fm;
+    }catch(e){}
+    /* 反自动化/隐私工具痕迹 */
+    try{
+      o.hints = { wd:navigator.webdriver === true, ch:!!window.chrome, plug:(navigator.plugins || []).length,
+        mime:(navigator.mimeTypes || []).length, pdf:!!(navigator.pdfViewerEnabled),
+        dl:navigator.doNotTrack, gpc:(navigator.globalPrivacyControl === true),
+        notif:(typeof Notification !== "undefined") ? Notification.permission : null,
+        dl2:navigator.deviceMemory, maxTouch:navigator.maxTouchPoints, hc:navigator.hardwareConcurrency,
+        conn:(function(){ try{ var c = navigator.connection || {}; return { et:c.effectiveType, dl:c.downlink, rtt:c.rtt, sd:c.saveData }; }catch(e){ return null; } })() };
+    }catch(e){}
+    return o;
+  }
+
+  /* —— 深度指纹：异步部分（Audio / WebRTC 主机候选 / 权限 / 存储配额 / UA-CH 高熵） —— */
+  function pAudio(){
+    return new Promise(function(res){
+      try{
+        var AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        if (!AC){ res(null); return; }
+        var ctx = new AC(1, 44100, 44100), osc = ctx.createOscillator();
+        osc.type = "triangle"; osc.frequency.value = 10000;
+        var comp = ctx.createDynamicsCompressor();
+        osc.connect(comp); comp.connect(ctx.destination); osc.start(0);
+        ctx.oncomplete = function(e){
+          try{
+            var d = e.renderedBuffer.getChannelData(0), s2 = 0;
+            for (var i = 4500; i < 5000 && i < d.length; i++) s2 += Math.abs(d[i]);
+            res(s2.toFixed(6));
+          }catch(x){ res(null); }
+        };
+        ctx.startRendering();
+        setTimeout(function(){ res(null); }, 900);
+      }catch(e){ res(null); }
+    });
+  }
+  function pRtc(){
+    return new Promise(function(res){
+      try{
+        if (!window.RTCPeerConnection){ res(null); return; }
+        var pc = new RTCPeerConnection({ iceServers: [] }), out = [], done = false;
+        function fin(){ if (done) return; done = true; try{ pc.close(); }catch(e){} res(out); }
+        pc.onicecandidate = function(e){
+          if (!e || !e.candidate){ fin(); return; }
+          var m = /([0-9a-fA-F.:]+)\s+\d+\s+typ\s+(host|srflx|prflx|relay)/.exec(e.candidate.candidate || "");
+          if (m && out.indexOf(m[2] + ":" + m[1]) < 0) out.push(m[2] + ":" + m[1]);
+        };
+        try{ pc.createDataChannel("d"); }catch(e){}
+        pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){ fin(); });
+        setTimeout(fin, 1200);
+      }catch(e){ res(null); }
+    });
+  }
+  function pPerm(){
+    return new Promise(function(res){
+      try{
+        if (!navigator.permissions || !navigator.permissions.query){ res(null); return; }
+        var ns = ["geolocation","notifications","camera","microphone","clipboard-read","clipboard-write",
+          "midi","persistent-storage","push","speaker-selection","accelerometer","gyroscope","magnetometer",
+          "background-sync","payment-handler","storage-access"];
+        var out = {}, left = 0, sent = false;
+        function fin(){ if (!sent){ sent = true; res(out); } }
+        for (var i = 0; i < ns.length; i++){
+          (function(x){
+            var p;
+            try{ p = navigator.permissions.query({ name:x }); }catch(e){ return; }
+            if (!p || !p.then) return;
+            left++;
+            p.then(function(st){ out[x] = st.state; }).catch(function(){ out[x] = "?"; })
+             .then(function(){ if (--left <= 0) fin(); });
+          })(ns[i]);
+        }
+        setTimeout(fin, 800);
+      }catch(e){ res(null); }
+    });
+  }
+  function pQuot(){
+    return new Promise(function(res){
+      try{
+        if (!(navigator.storage && navigator.storage.estimate)){ res(null); return; }
+        navigator.storage.estimate().then(function(e){ res({ q:e.quota, u:e.usage }); }).catch(function(){ res(null); });
+        setTimeout(function(){ res(null); }, 700);
+      }catch(e){ res(null); }
+    });
+  }
+  function pUach(){
+    return new Promise(function(res){
+      try{
+        var uad = navigator.userAgentData;
+        if (!(uad && uad.getHighEntropyValues)){ res(null); return; }
+        uad.getHighEntropyValues(["architecture","bitness","formFactors","fullVersionList","model",
+          "platform","platformVersion","uaFullVersion","wow64"]).then(function(h){
+            res({ brands:uad.brands || null, mobile:uad.mobile, plat:uad.platform,
+              arch:h.architecture, bit:h.bitness, ff:h.formFactors, fvl:h.fullVersionList,
+              model:h.model, pver:h.platformVersion, uafv:h.uaFullVersion, wow:h.wow64 });
+          }).catch(function(){ res(null); });
+        setTimeout(function(){ res(null); }, 900);
+      }catch(e){ res(null); }
+    });
+  }
+  /* 稳定子集：只挑"同一台设备、同一浏览器多次访问应保持一致"的字段做 hash（用于跨会话归并）。
+     2026-10-15 修正：canvas（cv）与 AudioContext（audio）在无头/虚拟化/降级渲染环境下会抖动
+     —— 实测同机两次访问 hash 就变了。它们仍完整保存在 fp2 里当强指纹参考，但不参与这个 hash；
+     跨会话归并的主键是 pids 的四个持久 ID + 该 hash。 */
+  function stableOf(o){
+    try{
+      return [ (o.gpu && (o.gpu.v + "|" + o.gpu.r + "|" + o.gpu.mts)) || "",
+        (o.fonts || []).join(","),
+        (o.uach && (o.uach.arch + "|" + o.uach.bit + "|" + o.uach.model + "|" + o.uach.pver)) || "",
+        (o.screen2 && (o.screen2.w + "x" + o.screen2.h + "x" + o.screen2.cd + "x" + o.screen2.dpr)) || "",
+        (o.tz2 && o.tz2.n) || "", (o.tz2 && o.tz2.cal) || "",
+        (o.media ? JSON.stringify(o.media) : ""), (o.hints && o.hints.maxTouch) || 0,
+        (o.hints && o.hints.hc) || 0 ].join("#");
+    }catch(e){ return ""; }
+  }
+  function pDeep(){
+    var o = deepSync();
+    function pick(p, k){ return p.then(function(v){ o[k] = v; }); }
+    return Promise.all([ pick(pAudio(), "audio"), pick(pRtc(), "rtc"), pick(pPerm(), "perm"),
+                         pick(pQuot(), "quota"), pick(pUach(), "uach") ])
+      .then(function(){ return o; })
+      .catch(function(){ return o; });
+  }
+
+  /* 零输入自动登记：静默进行，绝不提示、不弹窗、不淡出；失败也不影响上面任何数字。
+     2026-10-15：登记体扩展为 fp(基础) + fp2(深度) + pids(四通道持久 ID) + hs(稳定子集 hash) + ua_full，
+     并带 SNI 标记，使服务端能把"本次请求自己的 JA4"归因到这台设备（归因不再只靠聚合指纹）。 */
+  function withTimeout(p, ms, dflt){
+    return Promise.race([ p, new Promise(function(res){ setTimeout(function(){ res(dflt); }, ms); }) ]);
+  }
+  function register(){
+    var hi = pUach().then(function(v){ return v || {}; }).catch(function(){ return {}; });
+    Promise.all([
+      /* 1500ms：IndexedDB/Cache API 是真实 I/O，不受页面虚拟时间影响，慢设备/冷启动要留足 */
+      withTimeout(new Promise(function(r){ idbId(r); }), 1500, null),
+      withTimeout(new Promise(function(r){ cacheId(r); }), 1500, null),
+      withTimeout(pDeep(), 1600, {}),
+      withTimeout(hi, 1200, {})
+    ]).then(function(a){
+      var ids = { ls:lsId(), idb:a[0], ck:ckId(), ca:a[1] };
+      var fp2 = a[2] || {}, h = a[3] || {};
+      if (fp2.uach === undefined && h.arch !== undefined) fp2.uach = h;
+      var body = {
+        k: ids.ls || "anon", sni: SNI_TOK,
+        fp: base(), fp2: fp2, pids: ids, hs: fnv(stableOf(fp2)),
+        ua_full: String(navigator.userAgent || "").slice(0, 400),
+        model: h.model || "", platform: h.plat || h.platform || "",
+        platform_ver: h.pver || h.platformVersion || "", arch: h.arch || h.architecture || ""
+      };
+      return fetch("/join/api/register", { method:"POST", credentials:"same-origin",
+        headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    }).then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){
+        /* 登记响应里就带当次 DoT/DoH 判定 ⇒ 页面无需等第二次往返即可显示结论 */
+        if (d && typeof d.protected === "boolean") applyProt(d);
+      })
+      .catch(function(){});
+  }
+
+  sniProbe();                 /* 先发标记请求：让抓包侧有时间把这一行落盘 */
+  load();
+  setTimeout(register, 700);  /* 登记要带上 sni，所以等标记行先出现 */
+  setTimeout(check, 2200);
+})();
+</script>
+</body>
+</html>

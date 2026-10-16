@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# =============================================================================
+# dns-guard-stack 验收自检
+#   ./verify.sh            # 全部检查
+#   ./verify.sh --quick    # 只查容器/服务/指标
+# 退出码：0 全通过 / 1 有失败项
+# =============================================================================
+set -uo pipefail
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$HERE"
+QUICK=0
+[ "${1:-}" = "--quick" ] && QUICK=1
+
+[ -f .env ] && { set -a; . ./.env; set +a; }
+: "${DNS_DOMAIN:=dns.example.com}"
+: "${CODE_DIR:=/opt/dnsguard}"
+: "${LISTS_DIR:=/opt/dnscrypt-proxy}"
+: "${STATE_DIR:=$CODE_DIR}"
+: "${DOT_PORT:=853}"; : "${DOH_PORT:=444}"
+
+C_OK=$'\033[32m'; C_ERR=$'\033[31m'; C_WARN=$'\033[33m'; C_0=$'\033[0m'
+PASS=0; FAIL=0; WARN=0
+ok()   { PASS=$((PASS+1)); printf '  %s✓%s %s\n' "$C_OK" "$C_0" "$*"; }
+bad()  { FAIL=$((FAIL+1)); printf '  %s✗%s %s\n' "$C_ERR" "$C_0" "$*"; }
+warn() { WARN=$((WARN+1)); printf '  %s!%s %s\n' "$C_WARN" "$C_0" "$*"; }
+sec()  { printf '\n%s\n' "$*"; }
+
+# ---------------------------------------------------------------- 1 容器与服务
+sec "1. 容器"
+for c in adgh aghdq unbound unbound-b unbound-alt; do
+  st=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)
+  [ "$st" = running ] && ok "$c running" || bad "$c 状态=$st"
+done
+for c in alt-replica-unb dnscrypt-proxy; do
+  st=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)
+  [ "$st" = "missing" ] && warn "$c 未部署（可选组件）" || ok "$c $st"
+done
+
+sec "2. 服务单元"
+for u in dnsguard dnsguard-verifier; do
+  st=$(systemctl is-active "$u" 2>/dev/null || true)
+  [ "$st" = active ] && ok "$u active" || bad "$u 状态=$st"
+done
+for u in chainmon devfp; do
+  st=$(systemctl is-active "$u" 2>/dev/null || true)
+  [ "$st" = active ] && ok "$u active" || warn "$u 未运行（可选看板）"
+done
+if compgen -G "$CODE_DIR/*.log" >/dev/null 2>&1; then :; fi
+tb=$(grep -c 'Traceback' /var/log/dnsguard.log 2>/dev/null || echo 0)
+[ "$tb" = 0 ] && ok "dnsguard.log 无 Traceback" || bad "dnsguard.log 有 $tb 处 Traceback"
+
+# ---------------------------------------------------------------------- 3 指标
+sec "3. 运行指标（$STATE_DIR/stats.json）"
+if [ -s "$STATE_DIR/stats.json" ]; then
+  python3 - "$STATE_DIR/stats.json" <<'PY' || true
+import json,sys
+st=json.load(open(sys.argv[1]))
+keys=["cn_typed_total","cn_typed_full","cn_typed_domain","cn_typed_suffix","cn_typed_active",
+      "cn_veto_entries","cn_ip_nets","cn_trust_allow_entries","cn_trust_exc_entries",
+      "cn_trust_bypass","cn_trust_witness","cn_dom_exception","adm_cache_gen_mismatch",
+      "dnssec_bogus","stale_out","hot_skip_stale","fc_unbound_servfail"]
+for k in keys:
+    if k in st: print("  %-28s %s" % (k, st[k]))
+PY
+  PUB=$(python3 -c "import json;print(json.load(open('$STATE_DIR/stats.json')).get('cn_typed_total',0))" 2>/dev/null || echo 0)
+  [ "${PUB:-0}" -gt 0 ] 2>/dev/null && ok "类型化名单已载入（$PUB 条）" || warn "类型化名单为空（骨架名单；guard 会按未知不信任运行）"
+else
+  bad "读不到 $STATE_DIR/stats.json（guard 未启动或路径不符）"
+fi
+
+[ "$QUICK" = 1 ] && { printf '\nPASS=%d FAIL=%d WARN=%d\n' "$PASS" "$FAIL" "$WARN"; exit $((FAIL>0)); }
+
+# --------------------------------------------------------------------- 4 解析
+sec "4. 解析行为"
+python3 - "$DNS_DOMAIN" "$DOT_PORT" "$DOH_PORT" <<'PY'
+import socket, ssl, struct, sys, binascii, time
+DOMAIN, DOT_PORT, DOH_PORT = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+GW = None
+try:
+    import subprocess
+    out = subprocess.check_output(["ip","-4","-o","addr","show","docker0"]).decode()
+    GW = out.split()[3].split('/')[0]
+except Exception:
+    GW = "172.18.0.1"
+
+def build(name, qtype=1, do=True):
+    q = b''.join(bytes([len(p)]) + p.encode() for p in name.split('.')) + b'\x00'
+    add = b''
+    if do:
+        add = b'\x00' + struct.pack('!HHIH', 41, 1232, 0x8000, 0)
+    return struct.pack('!HHHHHH', 0x1234, 0x0100, 1, 0, 0, (1 if do else 0)) + q + struct.pack('!HH', qtype, 1) + add
+
+def parse(r):
+    if len(r) < 12: return None
+    _id, flags, qd, an, ns, ar = struct.unpack('!HHHHHH', r[:12])
+    return {'rcode': flags & 0xF, 'ad': bool(flags & 0x20), 'an': an, 'flags': flags}
+
+def udp(host, port, name, timeout=4.0):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(timeout)
+    try:
+        s.sendto(build(name), (host, port))
+        r, _ = s.recvfrom(4096)
+        return parse(r)
+    except Exception as e:
+        return {'error': type(e).__name__}
+    finally:
+        s.close()
+
+def dot(host, port, name, sni, timeout=5.0):
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            with ctx.wrap_socket(raw, server_hostname=sni) as tls:
+                q = build(name)
+                tls.sendall(struct.pack('!H', len(q)) + q)
+                hdr = tls.recv(2)
+                if len(hdr) < 2: return {'error': 'short-header'}
+                n = struct.unpack('!H', hdr)[0]
+                buf = b''
+                while len(buf) < n:
+                    c = tls.recv(n - len(buf))
+                    if not c: break
+                    buf += c
+                return parse(buf)
+    except Exception as e:
+        return {'error': type(e).__name__}
+
+def show(tag, r):
+    if not r: print("  %-34s %s" % (tag, "无响应")); return None
+    if 'error' in r: print("  %-34s %s" % (tag, "错误：" + r['error'])); return None
+    print("  %-34s rcode=%d an=%d ad=%s" % (tag, r['rcode'], r['an'], int(r['ad'])))
+    return r
+
+fails = []
+r = show("guard(%s:5355) cloudflare.com" % GW, udp(GW, 5355, "cloudflare.com"))
+if not (r and r.get('rcode') == 0 and r.get('an', 0) >= 1): fails.append("guard 查询 cloudflare.com 失败")
+r = show("guard(%s:5355) dnssec-failed.org" % GW, udp(GW, 5355, "dnssec-failed.org"))
+if not (r and r.get('rcode') == 2): fails.append("dnssec-failed.org 未返回 SERVFAIL（验签未生效？）")
+r = show("DoT(%s:%d) cloudflare.com" % (DOMAIN, DOT_PORT), dot("127.0.0.1", DOT_PORT, "cloudflare.com", DOMAIN))
+if not (r and r.get('rcode') == 0): fails.append("DoT 入口查询失败")
+r = show("DoH(%s:%d) cloudflare.com" % (DOMAIN, DOH_PORT), None) if False else None
+try:
+    import http.client
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+    q = build("cloudflare.com")
+    b64 = binascii.b2a_base64(q).decode().strip().replace('+','-').replace('/','_').replace('=','')
+    c = http.client.HTTPSConnection("127.0.0.1", DOH_PORT, context=ctx, timeout=6)
+    c.request("GET", "/dns-query?dns=" + b64, headers={"Host": DOMAIN, "Accept": "application/dns-message"})
+    resp = c.getresponse()
+    body = resp.read()
+    print("  %-34s http=%d len=%d" % ("DoH(%s:%d) cloudflare.com" % (DOMAIN, DOH_PORT), resp.status, len(body)))
+    if resp.status != 200: fails.append("DoH 入口返回 HTTP %d" % resp.status)
+except Exception as e:
+    print("  %-34s 错误：%s" % ("DoH 入口", type(e).__name__)); fails.append("DoH 入口异常：" + type(e).__name__)
+
+print("\nRESULT: " + ("ALL OK" if not fails else "FAILED -> " + "; ".join(fails)))
+sys.exit(1 if fails else 0)
+PY
+[ $? = 0 ] && ok "解析行为通过" || bad "解析行为未通过（见上）"
+
+# -------------------------------------------------------------------- 5 防火墙
+sec "5. 纵深防御（iptables）"
+if command -v iptables >/dev/null 2>&1; then
+  if iptables -S UNBOUNDB_53 >/dev/null 2>&1; then
+    n=$(iptables -S UNBOUNDB_53 | grep -c DROP || true)
+    [ "$n" -ge 2 ] && ok "UNBOUNDB_53 已封国内上游明文 53（$n 条）" || warn "UNBOUNDB_53 规则偏少（$n 条）"
+  else
+    warn "未找到 UNBOUNDB_53 链（--skip-firewall 部署？）"
+  fi
+else
+  warn "无 iptables"
+fi
+
+# --------------------------------------------------------------------- 6 汇总
+sec "汇总"
+printf '  PASS=%d  FAIL=%d  WARN=%d\n' "$PASS" "$FAIL" "$WARN"
+[ "$FAIL" = 0 ] && { printf '  %s验收通过%s\n' "$C_OK" "$C_0"; exit 0; }
+printf '  %s存在失败项，请按上面提示排查%s\n' "$C_ERR" "$C_0"
+exit 1

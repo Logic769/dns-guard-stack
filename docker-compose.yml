@@ -1,0 +1,131 @@
+# =============================================================================
+# dns-guard-stack —— 上游解析层（容器）
+# -----------------------------------------------------------------------------
+# 本文件只负责「解析上游」：
+#   unbound-a    境外路径上游（转发 → aghdq → NextDNS DoQ；本机验 DNSSEC）
+#   unbound-b    国内路径上游（转发 → 6 家国内 DoT；不验签，答案须经 guard 见证）
+#   unbound-alt  认证备用上游（独立第三方 DoT；用于交叉见证）
+#   alt-replica  alt 的副本实例（独立网络，供预热门禁使用）
+#   adgh         主 AdGuard Home：过滤 + 缓存，唯一上游指向 guard
+#   aghdq        境外 DoQ 出口 AdGuard Home
+#   dnscrypt     加密中继（本机 shadow 通道，给 guard 做影子对比）
+# guard / verifier / 看板跑在宿主 systemd 上（需要 docker0 网关与 AF_UNIX）。
+#
+# 用法：cp .env.example .env && ./install.sh
+# =============================================================================
+name: dns-guard-stack
+
+networks:
+  dnsnet:
+    name: dnsnet
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${DOCKER_SUBNET:-172.18.0.0/16}
+  altreplica0:
+    name: altreplica0
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${ALTREPLICA_SUBNET:-10.99.0.0/24}
+
+services:
+  # ---------------------------------------------------------------- 境外上游
+  unbound-a:
+    image: mvance/unbound:latest
+    container_name: unbound
+    restart: unless-stopped
+    volumes:
+      - ${RUNTIME_DIR}/unbound-a:/opt/unbound/etc/unbound
+    ports:
+      - "127.0.0.1:5353:53/tcp"
+      - "127.0.0.1:5353:53/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${UNBOUND_A_IP:-172.18.0.4}
+
+  # ---------------------------------------------------------------- 国内上游
+  unbound-b:
+    image: mvance/unbound:latest
+    container_name: unbound-b
+    restart: unless-stopped
+    volumes:
+      - ${RUNTIME_DIR}/unbound-b:/opt/unbound/etc/unbound
+    ports:
+      - "127.0.0.1:5354:53/tcp"
+      - "127.0.0.1:5354:53/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${UNBOUND_B_IP:-172.18.0.5}
+
+  # ---------------------------------------------------------------- 认证备用
+  unbound-alt:
+    image: mvance/unbound:latest
+    container_name: unbound-alt
+    restart: unless-stopped
+    volumes:
+      - ${RUNTIME_DIR}/unbound-alt:/opt/unbound/etc/unbound
+    ports:
+      - "127.0.0.1:5357:53/tcp"
+      - "127.0.0.1:5357:53/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${UNBOUND_ALT_IP:-172.18.0.8}
+
+  alt-replica-unb:
+    image: mvance/unbound:latest
+    container_name: alt-replica-unb
+    restart: "no"
+    volumes:
+      - ${RUNTIME_DIR}/unbound-alt-replica:/opt/unbound/etc/unbound
+    ports:
+      - "127.0.0.1:15353:53/tcp"
+      - "127.0.0.1:15353:53/udp"
+    networks:
+      altreplica0:
+        ipv4_address: ${ALTREPLICA_IP:-10.99.0.2}
+
+  # ------------------------------------------------- 主 AdGuard Home（入口）
+  adgh:
+    image: adguard/adguardhome:v0.107.73
+    container_name: adgh
+    restart: always
+    volumes:
+      - ${RUNTIME_DIR}/adgh/conf:/opt/adguardhome/conf
+      - ${RUNTIME_DIR}/adgh/work:/opt/adguardhome/work
+    ports:
+      - "127.0.0.1:${AGH_UI_PORT:-3000}:3000"
+      - "127.0.0.1:${AGH_HTTPS_PORT:-4443}:443"
+      - "127.0.0.1:${AGH_DOT_PORT:-8854}:853"
+    networks:
+      dnsnet:
+        ipv4_address: ${AGH_IP:-172.18.0.2}
+
+  # ------------------------------------------- 境外 DoQ 出口 AdGuard Home
+  aghdq:
+    image: adguard/adguardhome:v0.107.73
+    container_name: aghdq
+    restart: always
+    volumes:
+      - ${RUNTIME_DIR}/aghdq:/opt/adguardhome/conf
+    ports:
+      - "127.0.0.1:${AGHDQ_UI_PORT:-13000}:13000"
+      - "127.0.0.1:${AGHDQ_DNS_PORT:-5533}:53/tcp"
+      - "127.0.0.1:${AGHDQ_DNS_PORT:-5533}:53/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${AGHDQ_IP:-172.18.0.6}
+
+  # ------------------------------------------------------ 加密中继（shadow）
+  dnscrypt:
+    image: klutchell/dnscrypt-proxy:latest
+    container_name: dnscrypt-proxy
+    restart: unless-stopped
+    volumes:
+      - ${RUNTIME_DIR}/dnscrypt-proxy/dnscrypt-proxy.toml:/config/dnscrypt-proxy.toml:ro
+    ports:
+      - "127.0.0.1:5399:5353/tcp"
+      - "127.0.0.1:5399:5353/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${DNSCRYPT_IP:-172.18.0.9}

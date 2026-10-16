@@ -1,0 +1,46 @@
+# CN 国内信任白名单（免「存在性见证」直接采纳国内 B 的答案）
+#
+# 背景：第三份审计 F1 —— 社区名单（cn-domains-typed.txt）原本同时决定
+#       「走哪条路由」与「信任谁的回答」，一次分类错误就会被升级成错误答案下发。
+#       本清单是拆分后的「信任」侧：只有在此列出的域名才免见证直采国内答案。
+#
+# 语义：
+#   · 免见证 = 不向境外认证源（unbound A / alt）核对存在性，直接采纳国内 B 的答案
+#   · 未列入者仍走国内路由，但每次与境外源核对存在性（结果进 corroboration 缓存，约 300s）
+#   · 国别后缀（.cn / .com.cn / .net.cn / .中国 …，见 guard 的 CN_SUFFIX）自动免见证，无需在此重复
+#   · 例外清单 cn-trust-exceptions.txt 优先级最高：命中者既不走国内路由，也不被信任
+#
+# 匹配：父域边界（host.sub.example 命中 sub.example；evil-sub.example 不命中 sub.example）
+# 生效：mtime 变化即热重载（≤60s）；白名单变化会让准入缓存按代次失效（无需重启）
+#
+# —— 加入原则 ——
+#   1. 该域名必须确实走国内路由（不在国内名单里的域名，列入本表没有意义）
+#   2. 域名本身（apex）在境外认证源 A 与国内源 B **都能解析**（rc=0 且有答案）
+#      ⇒ 存在性可被境外证实 ⇒ 免见证不会掩盖污染
+#   3. 一次一项，写明取证日期与理由，便于回溯与撤销
+#
+# —— 取证记录（2026-10-15 20:09，服务器本地三方对照 /tmp/probe-allow.py）——
+#   方法：对每个候选域名的 apex 与一个随机子标签，分别查
+#         A=127.0.0.1:5353（境外认证源）/ B=127.0.0.1:5354（国内源）/ guard=172.18.0.1:5355
+#   结果：以下 19 个域名的 apex 均为 A=rc0/an≥1 且 B=rc0/an≥1（答案条数可不同，属 CDN 就近差异）
+#   未加入：sohu.com —— 其 apex 在 A 侧 rc=2（SERVFAIL）而 B 侧 rc0/an6，
+#          存在性无法被境外源证实；保留其走见证路径（宁可慢一次，也不免检）。
+qq.com
+baidu.com
+taobao.com
+tmall.com
+alipay.com
+jd.com
+163.com
+weibo.com
+bilibili.com
+zhihu.com
+douyin.com
+xiaomi.com
+huawei.com
+meituan.com
+pinduoduo.com
+tencent.com
+aliyun.com
+toutiao.com
+kuaishou.com

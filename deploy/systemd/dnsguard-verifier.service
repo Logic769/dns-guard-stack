@@ -1,0 +1,22 @@
+[Unit]
+Description=dnsguard isolated verifier sidecar
+After=network-online.target dnsguard.service
+Wants=network-online.target
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/dnsguard/verifier.py
+WorkingDirectory=/opt/dnsguard
+User=root
+Restart=always
+RestartSec=3
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+# (Task8 §5) 本条 Environment 已迁入 zzzzzz-consolidated-20261010.conf
+MemoryMax=128M
+TasksMax=128
+[Install]
+WantedBy=multi-user.target

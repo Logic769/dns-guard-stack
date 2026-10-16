@@ -1,0 +1,15 @@
+[Unit]
+Description=Probe source address on docker0 (172.18.0.98/16) for chainmon/load-test separation
+Documentation=file:/tmp/dnstest/plan_probe_separation.md
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ip addr replace 172.18.0.99/16 dev docker0
+ExecStop=/usr/sbin/ip addr del 172.18.0.99/16 dev docker0
+
+[Install]
+WantedBy=multi-user.target

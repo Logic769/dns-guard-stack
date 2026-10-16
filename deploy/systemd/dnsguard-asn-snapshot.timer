@@ -1,0 +1,8 @@
+[Unit]
+Description=Daily ASN snapshot refresh
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=24h
+AccuracySec=5min
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,5 @@
+[Unit]
+Description=Export offline ASN snapshot for dnsguard R8 gating
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/dnsguard/asn_snapshot.py

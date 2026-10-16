@@ -1,0 +1,24 @@
+# CN 国内信任例外清单（第三份审计 F1 的域名单）
+#
+# 语义：命中本清单的域名**不做国内信任** —— 即不因命中 CN 分流名单就采纳国内
+#       unbound B 的答案，而是回落到境外认证路径 + 见证核对。
+# 匹配：父域边界（host.sub 命中 sub；evil-x.com 不命中 x.com）。
+# 生效：guard 载入 CN 名单时一并载入；文件 mtime 变化即热重载（≤60s）。
+# 来源：第三份审计报告 F1（dns-system-review-20261015-1735）实证 + 本轮只读抽查复现。
+#
+# —— 实证（随机标签 + EDNS0+DO；B = 本机国内 unbound 127.0.0.1:5354）——
+# analytics.tiktok.com : A 源 NXDOMAIN / B 给出 69.171.235.22  （Facebook 网段，污染特征）
+# tiktokcdn.com        : A 源 NXDOMAIN / B 给出 31.13.70.13   （Facebook 网段）
+# tiktokcdn-us.com     : A 源 NXDOMAIN / B 给出 199.59.149.136（Facebook 网段）；审计报告记为公开复现
+# tiktokminis.us       : guard 直接返回 an=4（23.56.227.68）—— 未经见证即采纳国内上游结果
+#
+# 说明：这些是 TikTok（字节跳动海外）的 CDN 资产，属境外；国内上游对其解析返回
+#       Facebook 网段 IP，属典型污染/串味，不能作为可信的国内答案来源。
+#       同族但本轮未观察到异常的域名（tiktokv.com / tiktokd.net / tiktokd.org /
+#       tiktokeu-cdn.com / tiktokrow-cdn.com / tiktokglobalshopv.com / byteoversea.com 等）
+#       暂不列入；如需扩充，先用 server-ops/probe-cand.py 复核 B 侧答案后再加。
+tiktokcdn.com
+tiktokcdn-us.com
+tiktokcdn-eu.com
+tiktokminis.us
+analytics.tiktok.com

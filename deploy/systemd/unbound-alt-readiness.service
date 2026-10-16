@@ -1,0 +1,26 @@
+[Unit]
+Description=Unbound alt readiness
+After=docker.service
+Requires=docker.service
+# alt 容器重启由 `dnsguard-alt-restart.sh` 负责清 ready；本单元只做**周期性**兜底 ✓
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/unbound-alt-readiness.py
+# ★ 方案 §4 第 1 项：脚本必须从**当前发布的 release** 里 import `alt_adapter` ✓ ——
+#   否则读侧常量（`ALT_READY_MAX_AGE` / `ALT_CONFIG_HASH`）会与 guard 不一致 ✗。
+Environment=ALT_READY_RELEASE_DIR=/opt/dnsguard/current
+Environment=ALT_READY_STATE=/run/unbound-alt-ready.json
+Environment=ALT_READY_CONFIG_DIRS=/opt/unbound-alt
+# 单次检查的总超时（5 项检查 × 2s + 开销；正常 < 1.5s ✓）
+TimeoutStartSec=20
+# ★ 现场血案护栏（2026-10-10）：首次真机运行曾因读设备节点被 OOM 干掉 ✗ ——
+#   加内存上限 ⇒ 即便将来又引入无界读，也只会**被杀并留下证据**，不会拖垮整机 ✓。
+MemoryMax=64M
+MemoryHigh=48M
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

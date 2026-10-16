@@ -1,0 +1,17 @@
+[Unit]
+Description=dnsguard - DNS poisoning guard in front of unbound (AGH upstream)
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/dnsguard/guard.py
+Restart=always
+RestartSec=3
+User=root
+WorkingDirectory=/opt/dnsguard
+StandardOutput=append:/var/log/dnsguard.log
+StandardError=append:/var/log/dnsguard.log
+
+[Install]
+WantedBy=multi-user.target

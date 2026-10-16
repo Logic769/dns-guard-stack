@@ -1,0 +1,8 @@
+[Unit]
+Description=dnsguard firewall reconcile (container IP drift / rebuilt-container re-apply)
+After=docker.service
+Wants=docker.service
+[Service]
+Type=oneshot
+Environment=DNSGW_FW_TRIGGER=reconcile
+ExecStart=/usr/local/sbin/dnsguard-fw.sh

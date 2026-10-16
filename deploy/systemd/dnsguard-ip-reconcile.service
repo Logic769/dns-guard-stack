@@ -1,0 +1,12 @@
+[Unit]
+Description=dnsguard 解析链路容器 IP / docker0 网关 漂移收敛（审计 §3.3）
+Documentation=file:/opt/dnsguard/NOTES-20261015.md
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+# 无差异时零副作用（只读比对后退出 0）；有差异才备份→改写→校验→热重载
+ExecStart=/usr/local/sbin/dnsguard-ip-reconcile.sh --apply
+Nice=5
+TimeoutStartSec=180

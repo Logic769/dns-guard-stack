@@ -1,0 +1,55 @@
+{
+ "version": "2026-10-10.1",
+ "note": "统一运营方清单：guard 与 verifier 共同读同一版本 ✓。**身份独立于 IP** —— 同一运营方的多个 IP 只算一家 ✓；DNSCrypt 只标注为 shadow（其 CN 规则会转发给 unbound B ✗，不能作为独立见证 ✓）。",
+ "operators": [
+  {
+   "id": "nextdns",
+   "role": "primary-authenticated",
+   "transport": "doq",
+   "endpoint": "quic://dns.nextdns.io",
+   "reachable_via": "aghdq(172.18.0.6:53) -> DoQ",
+   "allowed_uses": [
+    "primary",
+    "witness-w1"
+   ]
+  },
+  {
+   "id": "digitale-gesellschaft",
+   "role": "authenticated-backup",
+   "transport": "dot",
+   "tls_hostname": "dns.digitale-gesellschaft.ch",
+   "addr": "185.95.218.42@853",
+   "allowed_uses": [
+    "alt",
+    "witness-w2"
+   ]
+  },
+  {
+   "id": "uncensoreddns",
+   "role": "authenticated-backup",
+   "transport": "dot",
+   "tls_hostname": "unicast.censurfridns.dk",
+   "addr": "89.233.43.71@853",
+   "allowed_uses": [
+    "alt",
+    "witness-w2"
+   ]
+  },
+  {
+   "id": "mullvad",
+   "role": "retired",
+   "note": "官方公告 2026-11-02 停止公共加密 DNS；已被两家替代取代，**不在批准列表内** ✓",
+   "allowed_uses": []
+  },
+  {
+   "id": "dnscrypt-local",
+   "role": "shadow",
+   "transport": "dnscrypt",
+   "addr": "127.0.0.2:5353",
+   "note": "CN forwarding-rules 指向 unbound B ⇒ **与 B 同源** ✗，只作 shadow ✓，不作独立见证 ✓",
+   "allowed_uses": [
+    "shadow"
+   ]
+  }
+ ]
+}
