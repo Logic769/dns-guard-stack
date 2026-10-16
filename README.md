@@ -1,6 +1,6 @@
 # dns-guard-stack
 
-**面向自建场景的 DNS 解析与防护系统：加密上游、本机 DNSSEC 验证、国内外分流、答案准入和运行监控。**
+**面向自建场景的 DNS 解析与防护系统：加密上游、本机 DNSSEC 验证、国内外分流、答案准入和运行监控**。
 
 本项目把 AdGuard Home、Unbound、DNSCrypt 与自研的 guard / verifier 组合在一台 Linux 服务器上。AdGuard Home 负责入口过滤和缓存，Unbound 负责解析及验证，guard 决定哪些候选答案可以交给客户端，verifier 提供独立进程核验。
 
@@ -50,35 +50,39 @@ guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
 ```
 
 | 组件 | 具体作用 | 运行方式 / 代码 |
-|---|---|---|
-| Nginx | 提供 DoT / DoH 入口；DoH 精确转发 `/dns-query` | `deploy/nginx/` |
-| 主 AdGuard Home：`adgh` | 客户端入口、过滤和缓存；没有配置绕过 guard 的备用 DNS | Docker；`deploy/containers/adgh.AdGuardHome.yaml.tpl` |
-| guard | 分流、候选检查、见证、缓存和最终答案选择 | 宿主 systemd；`core/guard.py`、`core/answer_policy.py` |
-| verifier | 独立进程核验，握手检查代码版本；并非另一台独立服务器 | 宿主 systemd；`core/verifier.py` |
-| Unbound A：容器名 `unbound` | 本机验证 DNSSEC；经 aghdq 转发到加密上游 | Docker；`deploy/containers/unbound-a.conf.tpl` |
-| `aghdq` | 第二个 AdGuard Home，专门充当 A 侧 DoQ 出口 | Docker；默认上游 `quic://dns.nextdns.io` |
-| Unbound B | 国内 DoT 解析候选；其答案仍受 guard 策略约束 | Docker；`deploy/containers/unbound-b.conf.tpl` |
-| Unbound alt | 独立第三方 DoT 路径，参与核对和受门禁约束的备用解析 | Docker；`core/alt_adapter.py`、readiness 检查 |
-| DNSCrypt | 加密候选与影子采样，不能把它的应答直接当作 DNSSEC 证据 | Docker；`deploy/containers/dnscrypt-proxy.toml.tpl` |
-| Chainmon | 展示服务器链路、统计和健康信息 | `dashboards/chainmon/` |
-| devfp / dotfront-spool | 根据服务端可见的请求特征辅助归类来源；采集 DoT 解密后的本机内腿 | `dashboards/devfp/`、`tools/dotfront-spool.py` |
+| --- | --- | --- |
+| Nginx | 提供 DoT / DoH 入口；DoH 精确转发 `/dns-query` | [Nginx 配置](deploy/nginx/) |
+| 主 AdGuard Home：`adgh` | 客户端入口、过滤和缓存；没有配置绕过 guard 的备用 DNS | Docker · [配置模板](deploy/containers/adgh.AdGuardHome.yaml.tpl) |
+| guard | 分流、候选检查、见证、缓存和最终答案选择 | systemd · [guard](core/guard.py) / [策略](core/answer_policy.py) |
+| verifier | 独立进程核验，握手检查代码版本；并非另一台独立服务器 | systemd · [verifier](core/verifier.py) |
+| Unbound A：容器名 `unbound` | 本机验证 DNSSEC；经 aghdq 转发到加密上游 | Docker · [A 配置](deploy/containers/unbound-a.conf.tpl) |
+| `aghdq` | 第二个 AdGuard Home，专门充当 A 侧 DoQ 出口 | Docker · [出口配置](deploy/containers/aghdq.AdGuardHome.yaml.tpl) |
+| Unbound B | 国内 DoT 解析候选；其答案仍受 guard 策略约束 | Docker · [B 配置](deploy/containers/unbound-b.conf.tpl) |
+| Unbound alt | 独立第三方 DoT 路径，参与核对和受门禁约束的备用解析 | Docker · [alt 适配](core/alt_adapter.py) |
+| DNSCrypt | 加密候选与影子采样，不能把它的应答直接当作 DNSSEC 证据 | Docker · [配置模板](deploy/containers/dnscrypt-proxy.toml.tpl) |
+| Chainmon | 展示服务器链路、统计和健康信息 | [Chainmon 源码](dashboards/chainmon/) |
+| devfp / dotfront-spool | 根据服务端可见的请求特征辅助归类来源；采集 DoT 解密后的本机内腿 | [devfp](dashboards/devfp/) / [采集器](tools/dotfront-spool.py) |
 
 A、B、alt 是不同解析路径；`aghdq` 是 A 的出口，不是第四个独立验证器。图中的旁路采集与统计也不意味着每次查询都要等待所有组件。
 
 ## 一次查询如何完成
 
-1. **接入。** 客户端经 DoT 或 DoH 到达 Nginx，再进入主 AdGuard Home。过滤规则或有效缓存可以直接给出结果，其余查询进入 guard。
-2. **决定路由。** guard 根据类型化域名名单、例外规则等判断是否属于国内路径。命中国内路由只说明“可以向 B 查询”，不代表 B 的答案自动可信。
-3. **获取候选。** 国内域名可优先尝试 B；其他域名主要使用 A。核对、备用和并发行为取决于当前策略、缓存及上游健康状况。
-4. **判断能否采纳。** 检查报文是否对应原问题、地址是否可疑、证据是否过期，以及是否需要独立见证。本机 DNSSEC 验证和上游自报的 AD 位按不同证据强度处理。
-5. **返回或拒绝。** 候选满足条件才返回；不满足时尝试策略允许的其他路径，仍无合格答案则失败。主 AdGuard Home 不设置绕过 guard 的 fallback。
+1. **接入**。 客户端经 DoT 或 DoH 到达 Nginx，再进入主 AdGuard Home。过滤规则或有效缓存可以直接给出结果，其余查询进入 guard。
+
+2. **决定路由**。 guard 根据类型化域名名单、例外规则等判断是否属于国内路径。命中国内路由只说明“可以向 B 查询”，不代表 B 的答案自动可信。
+
+3. **获取候选**。 国内域名可优先尝试 B；其他域名主要使用 A。核对、备用和并发行为取决于当前策略、缓存及上游健康状况。
+
+4. **判断能否采纳**。 检查报文是否对应原问题、地址是否可疑、证据是否过期，以及是否需要独立见证。本机 DNSSEC 验证和上游自报的 AD 位按不同证据强度处理。
+
+5. **返回或拒绝**。 候选满足条件才返回；不满足时尝试策略允许的其他路径，仍无合格答案则失败。主 AdGuard Home 不设置绕过 guard 的 fallback。
 
 “见证”是再向其他来源核对。它既可能用于确认答案，也可能专门核对域名是否存在；**存在性见证不等于要求所有解析器返回完全相同的 CDN 地址**。
 
 ## 防护机制与信任边界
 
 | 机制 | 解决的问题 | 需要理解的边界 |
-|---|---|---|
+| --- | --- | --- |
 | DoT / DoQ / DNSCrypt | 降低公网传输过程中被伪造应答的风险 | 加密证明通道身份，不保证运营方的数据一定正确；默认 aghdq bootstrap 仍使用明文 DNS |
 | 本机 DNSSEC 验证 | 对签名域名验证数据完整性 | 未签名域名无法获得同等保证；不能只看第三方返回 `AD=1` 就认定本机验签通过 |
 | 路由与信任分离 | 防止社区名单误分类直接扩大信任范围 | `is_cn_domain()` 管路由；`is_cn_trusted()` 管免见证资格 |
@@ -91,7 +95,7 @@ A、B、alt 是不同解析路径；`aghdq` 是 A 的出口，不是第四个独
 ### 国内信任档位
 
 | `CN_TRUST_MODE` | 含义 |
-|---|---|
+| --- | --- |
 | `none` | 国内候选也要求见证，信任范围最保守 |
 | `known`（默认） | 指定国别 / 品牌后缀和人工白名单可免见证，其余国内候选要求见证 |
 | `all` | 扩大到全部国内路由域名，通常不建议使用 |
@@ -100,16 +104,20 @@ A、B、alt 是不同解析路径；`aghdq` 是 A 的出口，不是第四个独
 
 ### 项目能力的边界
 
-- **单机系统。** 多个解析组件不能消除宿主、网络、Nginx 和证书的单点故障。
-- **默认没有用户级 DNS 鉴权。** 对外提供入口前，应决定服务范围、访问控制与容量限制。
-- **多来源一致不等于密码学证明。** 多个来源也可能依赖相同数据或返回相同错误。
-- **名单归档验签不证明上游名单正确。** 哈希与可选 GPG 签名用于落盘完整性和追溯。
-- **监控只能描述服务器可见现象。** NAT、代理和客户端实现会影响来源识别；devfp 不能保证精确识别每台设备，也不能证明客户端应用实际使用了某个答案。
+- **单机系统**。 多个解析组件不能消除宿主、网络、Nginx 和证书的单点故障。
+
+- **默认没有用户级 DNS 鉴权**。 对外提供入口前，应决定服务范围、访问控制与容量限制。
+
+- **多来源一致不等于密码学证明**。 多个来源也可能依赖相同数据或返回相同错误。
+
+- **名单归档验签不证明上游名单正确**。 哈希与可选 GPG 签名用于落盘完整性和追溯。
+
+- **监控只能描述服务器可见现象**。 NAT、代理和客户端实现会影响来源识别；devfp 不能保证精确识别每台设备，也不能证明客户端应用实际使用了某个答案。
 
 ## 部署前准备
 
 | 项目 | 要求 |
-|---|---|
+| --- | --- |
 | 操作系统 | Linux，具备 systemd 和 root 权限；当前安装脚本要求 systemd |
 | 容器运行时 | Docker 与 Compose 插件，支持脚本使用的 `up --wait` |
 | Python | 安装脚本最低检查为 Python 3.6；目标环境仍应运行回归验证 |
@@ -123,15 +131,15 @@ A、B、alt 是不同解析路径；`aghdq` 是 A 的出口，不是第四个独
 ### 默认端口
 
 | 端口 / 地址 | 用途 | 暴露范围 |
-|---|---|---|
+| --- | --- | --- |
 | TCP `853` | Nginx DoT 入口 | 按需对客户端开放 |
 | TCP `444` | Nginx DoH，路径 `/dns-query` | 按需对客户端开放 |
 | TCP `443` | 可在现有 HTTPS 站点接 DoH | 需额外配置；不是 Compose 自动提供 |
 | `172.18.0.1:5355` | guard DNS | Docker 桥接网关上的内部接口 |
-| `127.0.0.1:5353 / 5354 / 5357` | A / B / alt 的 DNS 映射 | 本机 |
-| `127.0.0.1:5533 / 5399` | aghdq / DNSCrypt 的 DNS 映射 | 本机 |
-| `127.0.0.1:3000 / 13000` | 两个 AdGuard Home 管理接口 | 本机，建议通过 SSH 隧道访问 |
-| `127.0.0.1:4443 / 8854` | 主 AdGuard Home 的 HTTPS / DoT 映射 | 本机 |
+| `127.0.0.1:5353`<br>`127.0.0.1:5354`<br>`127.0.0.1:5357` | A / B / alt 的 DNS 映射 | 本机 |
+| `127.0.0.1:5533`<br>`127.0.0.1:5399` | aghdq / DNSCrypt 的 DNS 映射 | 本机 |
+| `127.0.0.1:3000`<br>`127.0.0.1:13000` | 两个 AdGuard Home 管理接口 | 本机，建议通过 SSH 隧道访问 |
+| `127.0.0.1:4443`<br>`127.0.0.1:8854` | 主 AdGuard Home 的 HTTPS / DoT 映射 | 本机 |
 | `8787 / 8789` | Chainmon / devfp 默认服务端口 | 启用前核对监听地址和鉴权 |
 
 guard 默认使用的是 **dnsnet 自定义网络的网关**，不要把它误认为 `docker0` 的地址。公网入口与本机、容器内部的明文 DNS 跳转也应分别理解。
@@ -148,7 +156,7 @@ cp .env.example .env
 
 编辑 `.env`，至少核对以下配置：
 
-```dotenv
+```ini
 DNS_DOMAIN=dns.example.com
 TLS_CERT=/absolute/path/to/fullchain.pem
 TLS_KEY=/absolute/path/to/privkey.pem
@@ -171,23 +179,28 @@ sudo bash install.sh --fetch-lists
 `--dry-run` 仍要求存在可加载的 `.env` 和前置工具；应先完成上面的复制与编辑。
 
 | 参数 | 作用 |
-|---|---|
+| --- | --- |
 | `--dry-run` | 预览安装动作 |
 | `--fetch-lists` | 安装时拉取真实名单 |
 | `--skip-firewall` | 跳过安装阶段的规则应用；使用后需自行补齐并验收 |
 
-安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装，以及 Nginx 片段生成。**脚本运行结束不代表服务已经可对外使用。**
+安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装，以及 Nginx 片段生成。**脚本运行结束不代表服务已经可对外使用**。
 
 ### 3. 核对当前安装脚本的限制
 
 以下是按当前实现整理的接入检查项；旧说明或配置注释与代码冲突时，以实现和生成文件为准：
 
-- **真实名单必须可用。** `.env.example` 默认 `LISTS_PROFILE=fetch`；`minimal` 只生成骨架。启用国内信任时，如果缺少有效否决策略，guard 可能拒绝启动，不能把骨架模式当作完整解析服务。
-- **证书需要实际接入。** 模板不包含证书或私钥；脚本从本机文件读取并写入两份 AGH 配置，生成文件权限为 `0600`。Nginx 模板路径仍需单独核对，确保两处证书与域名一致。当前脚本未实现 `.env` 注释提到的 ACME 签发 / 续期流程。
-- **部分上游变量没有接入渲染。** `UPSTREAM_B` 有专门替换逻辑；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 不能仅靠修改 `.env` 就认定生效。调整对应模板并检查运行时文件。
-- **Nginx 默认只生成片段。** 文件位于 `/opt/dns-guard-stack/runtime/nginx/`。需按 HTTP / stream 上下文分别接入，补齐 `dohfrag` 日志格式、`perip` 限流区、证书路径和发行版 CA 路径。校验通过后再重载。
-- **看板需要单独启用。** 安装会复制看板文件，但不会自动启动 Chainmon / devfp；鉴权和日志来源也需自行配置。不要仅凭 `.env` 中有 `DASH_PASSWORD` 就认为鉴权已启用。
-- **自动化需要核对实际启用状态。** 仓库包含多个 timer 和名单刷新工具，不能仅因文件存在就假定已定时运行。用 `systemctl list-timers` 和本机任务配置确认。
+- **真实名单必须可用**。 `.env.example` 默认 `LISTS_PROFILE=fetch`；`minimal` 只生成骨架。启用国内信任时，如果缺少有效否决策略，guard 可能拒绝启动，不能把骨架模式当作完整解析服务。
+
+- **证书需要实际接入**。 模板不包含证书或私钥；脚本从本机文件读取并写入两份 AGH 配置，生成文件权限为 `0600`。Nginx 模板路径仍需单独核对，确保两处证书与域名一致。当前脚本未实现 `.env` 注释提到的 ACME 签发 / 续期流程。
+
+- **部分上游变量没有接入渲染**。 `UPSTREAM_B` 有专门替换逻辑；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 不能仅靠修改 `.env` 就认定生效。调整对应模板并检查运行时文件。
+
+- **Nginx 默认只生成片段**。 文件位于 `/opt/dns-guard-stack/runtime/nginx/`。需按 HTTP / stream 上下文分别接入，补齐 `dohfrag` 日志格式、`perip` 限流区、证书路径和发行版 CA 路径。校验通过后再重载。
+
+- **看板需要单独启用**。 安装会复制看板文件，但不会自动启动 Chainmon / devfp；鉴权和日志来源也需自行配置。不要仅凭 `.env` 中有 `DASH_PASSWORD` 就认为鉴权已启用。
+
+- **自动化需要核对实际启用状态**。 仓库包含多个 timer 和名单刷新工具，不能仅因文件存在就假定已定时运行。用 `systemctl list-timers` 和本机任务配置确认。
 
 ### 4. 接入 Nginx
 
@@ -211,12 +224,12 @@ sudo bash verify.sh --quick
 sudo bash verify.sh
 ```
 
-快速检查用于查看容器、服务和指标；完整检查会进一步发起 DNS 查询、检查入口和部分防火墙状态。**必须阅读 WARN：入口未接入等情况可能只告警，而不令整体返回失败。** 当前脚本的 DoH 检查也不能替代客户端侧的证书验证与 DNS 报文验收。
+快速检查用于查看容器、服务和指标；完整检查会进一步发起 DNS 查询、检查入口和部分防火墙状态。**必须阅读 WARN：入口未接入等情况可能只告警，而不令整体返回失败**。 当前脚本的 DoH 检查也不能替代客户端侧的证书验证与 DNS 报文验收。
 
 建议逐项确认：
 
 | 检查 | 预期 |
-|---|---|
+| --- | --- |
 | guard / verifier | 服务正常，握手和发布一致性检查通过 |
 | 签名域名，如 `cloudflare.com` | 正常解析；本机验证路径应给出可核实的 DNSSEC 结果 |
 | 已知错误签名域名 `dnssec-failed.org` | 返回 `SERVFAIL`；需结合正例及日志排除单纯断网 |
@@ -239,7 +252,7 @@ dig @172.18.0.1 -p 5355 www.qq.com
 假设你的域名是 `dns.example.com`，且相应入口已完成配置：
 
 | 客户端设置 | 填写示例 |
-|---|---|
+| --- | --- |
 | Android「私人 DNS」提供商主机名 | `dns.example.com`（使用标准 DoT 853） |
 | 支持 DoT URI 的客户端 | `tls://dns.example.com:853`，具体格式以客户端为准 |
 | DoH 地址（默认独立入口） | `https://dns.example.com:444/dns-query` |
@@ -264,11 +277,11 @@ guard 的单元将主要输出写入 `/var/log/dnsguard.log`，所以仅看 jour
 ### 名单维护
 
 | 文件 | 用途 |
-|---|---|
-| `cn-domains-typed.txt` / `forwarding-rules.txt` | 国内路由分类及转发规则 |
+| --- | --- |
+| `cn-domains-typed.txt`<br>`forwarding-rules.txt` | 国内路由分类及转发规则 |
 | `cn-trust-allow.txt` | 人工信任授权 |
 | `cn-trust-exceptions.txt` | 国内分流例外 |
-| `cn_veto.txt` / `cn_ip.txt` | 否决与国内 IP 判断 |
+| `cn_veto.txt`<br>`cn_ip.txt` | 否决与国内 IP 判断 |
 
 ```bash
 # 会更新本地名单；更新前保留可回滚副本
@@ -280,12 +293,12 @@ python3 /opt/dnsguard/tools/verify-cn-lists.py
 
 ### 发布与回滚
 
-`tools/deploy_release.sh` 面向已有 `releases/<id>`、`RELEASE.sha256` 和 `current` 布局的环境，可做校验、切换及失败回滚。**基础安装使用的平铺布局不等于已经完成这套发布目录迁移。** 使用前先按 [迁移说明](docs/MIGRATION.md) 核对两个服务的实际启动路径。
+`tools/deploy_release.sh` 面向已有 `releases/<id>`、`RELEASE.sha256` 和 `current` 布局的环境，可做校验、切换及失败回滚。**基础安装使用的平铺布局不等于已经完成这套发布目录迁移**。 使用前先按 [迁移说明](docs/MIGRATION.md) 核对两个服务的实际启动路径。
 
 ### 常见现象
 
 | 现象 | 优先检查 |
-|---|---|
+| --- | --- |
 | 安装结束但 guard 反复重启 | `/var/log/dnsguard.log`、真实否决名单、状态目录和权限 |
 | 容器 running，但查询超时 | 容器内部解析是否可用、dnsnet 网关、AGH 上游、防火墙与上游连通性 |
 | DoT 连接失败 | 公网 853、stream include、TLS 证书与服务监听 |
@@ -318,7 +331,7 @@ PYTHON=python3.6 bash tests/run.sh
 测试入口把模块复制到临时目录，按发布布局执行 `test_*.py`；具体测试数随版本变化。离线回归不能代替真实证书、Docker 网络、公网入口和上游故障场景验收。
 
 | 文档 | 适合解决的问题 |
-|---|---|
+| --- | --- |
 | [系统通俗详解](docs/DNS-SYSTEM-GUIDE.md) | 想了解各模块、脚本和判断方式 |
 | [架构说明](docs/ARCHITECTURE.md) | 想查分层、接口、状态文件和查询流程 |
 | [部署说明](docs/DEPLOY.md) | 准备部署，需结合本文的脚本限制核对 |
