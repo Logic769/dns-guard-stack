@@ -15,7 +15,7 @@
 
 ![dns-guard-stack 解析链路架构：家庭客户端经 nginx 的 DoT 853 / DoH 444 入口进入 AdGuard Home 主，再由 guard 策略引擎分流至境外（unbound-a 本机 DNSSEC → aghdq DoQ 出口 → NextDNS）、国内（unbound-b 六家国内 DoT，不验签）、第三方（unbound-alt 交叉见证 / dnscrypt-proxy 影子采样）三条解析链与一个 DoQ 出口；旁路部分是 dotfront-spool 采集 DoT 明文内腿、verifier 独立进程经 AF_UNIX 交叉验证、chainmon 与 devfp 只读 stats、名单目录与名单刷新器、防火墙原子收敛](docs/assets/architecture-light.png)
 
-实线是主解析路径，虚线是旁路、只读与异步关系。四条方框标出了真实的隔离边界（宿主 systemd、境外解析链、国内解析链、第三方解析链），每个节点都对应仓库里的真实文件与 systemd 单元。深色底版本见 [`docs/assets/architecture-dark.png`](docs/assets/architecture-dark.png)。
+实线是主解析路径，虚线是旁路、只读与异步关系。四条方框标出了真实的隔离边界（宿主 systemd、境外解析链、国内解析链、第三方解析链），每个节点都对应仓库里的真实文件与 systemd 单元。深色底版本见 [`docs/assets/architecture-dark.png`](docs/assets/architecture-dark.png)；可缩放、切主题、点开节点直达源码的交互版见 [`docs/assets/architecture.html`](docs/assets/architecture.html)（下载后用浏览器打开）。
 
 ## 它解决什么问题
 
