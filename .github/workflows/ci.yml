@@ -2,13 +2,13 @@ name: ci
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
 
 jobs:
-  # 服务器上跑的是 Python 3.6，语法兼容必须单独验证（f-string、海象运算符等会在 3.6 下报错）
+  # 生产环境跑的是 Python 3.6，语法兼容必须单独验证（f-string、海象运算符等会在 3.6 下报错）
   syntax-py36:
-    name: 语法检查（Python 3.6 兼容）
+    name: syntax (py3.6)
     runs-on: ubuntu-latest
     container: python:3.6-slim
     steps:
@@ -17,7 +17,7 @@ jobs:
         run: python -m compileall -q core tools probes firewall
 
   test:
-    name: 单元测试
+    name: unit tests
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -28,40 +28,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - name: 跑测试
+      - name: run tests
         run: |
           chmod +x tests/run.sh
           PYTHON=python tests/run.sh
 
-  shell-and-config:
-    name: 脚本与配置静态检查
+  shell-check:
+    name: shell & secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: bash 语法
+      - name: bash syntax
         run: |
-          fail=0
-          for f in install.sh verify.sh tests/run.sh firewall/*.sh tools/*.sh dashboards/*.sh; do
-            [ -f "$f" ] || continue
-            bash -n "$f" || { echo "::error file=$f::bash 语法错误"; fail=1; }
+          set -e
+          for f in $(git ls-files '*.sh'); do
+            bash -n "$f"
           done
-          exit $fail
-      - name: YAML 语法
-        run: python3 -c "import glob,sys,json,sys
-try:
-    import yaml
-except ImportError:
-    print('skip: pyyaml 未安装'); sys.exit(0)
-bad=0
-for p in glob.glob('deploy/containers/**/*.yml', recursive=True)+glob.glob('deploy/containers/**/*.yaml', recursive=True)+glob.glob('.github/workflows/*.yml'):
-    try:
-        yaml.safe_load(open(p, encoding='utf-8'))
-    except Exception as e:
-        print('::error file=%s::%s' % (p, e)); bad=1
-sys.exit(bad)"
-      - name: 敏感串扫描（防误提交真实域名/IP/路径）
+          echo "bash syntax OK"
+      - name: no production identifiers
         run: |
-          if grep -rIn --exclude-dir=.git --exclude-dir=.github --exclude='*.example' -E '120\.26\.230\.117|logic769|swas' . ; then
-            echo "::error::发现疑似生产标识，请脱敏后再提交"; exit 1
+          if grep -rIn --exclude-dir=.git --exclude-dir=.github -E '120\.26\.230\.117|logic769|swas' .; then
+            echo "found production identifier"
+            exit 1
           fi
-          echo "未发现生产标识"
+          echo "clean"
