@@ -41,7 +41,10 @@ need() { command -v "$1" >/dev/null 2>&1; }
 
 # ------------------------------------------------------------------ 载入配置
 cd "$HERE"
-[ -f .env ] || { warn ".env 不存在，从 .env.example 复制一份（请按需修改后重跑）"; cp .env.example .env; }
+if [ ! -f .env ]; then
+  warn ".env 不存在，从 .env.example 复制一份（请按需修改后重跑）"
+  [ "$DRY" = 1 ] || cp -n .env.example .env
+fi
 set -a; . ./.env; set +a
 
 : "${DNS_DOMAIN:=dns.example.com}"
