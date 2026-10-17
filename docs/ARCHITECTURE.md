@@ -4,7 +4,7 @@
 
 | 层 | 组件 | 监听 | 作用 |
 |---|---|---|---|
-| 入口 | nginx（宿主） | DoT `853/tcp`、DoH `443`、`444/tcp` | TLS 终结；DoT 内腿明文转 `adgh:53`，DoH 反代 `127.0.0.1:4443`（AGH 的 443）；按源限流 |
+| 入口 | nginx（宿主） | DoT `853/tcp`、DoH `443`、`444/tcp` | TLS 终结；DoT 内腿明文转 `adgh:53`，DoH 反代 `agh_doh`（直连 adgh 容器 443，keepalive 池）；按源限流 |
 | 过滤/缓存 | AdGuard Home 容器 `adgh` | `53`（融合）、宿主 `127.0.0.1:3000`(UI) / `4443`(HTTPS) / `8854`(DoT) | 规则过滤、缓存、唯一上游 = guard |
 | 策略 | `guard`（宿主 systemd） | `docker0 网关:5355`(udp+tcp) + `:5356`(udp，探针通道) | 准入、共识、见证、否决、缓存代次、失败语义 |
 | 策略 | `verifier`（宿主 systemd） | `/run/dnsguard/verifier.sock`（AF_UNIX） | 独立进程做交叉验证，隔离慢查询 |
@@ -22,7 +22,7 @@
 
 ### 境外域名（例如 `www.google.com`）
 
-1. 客户端 DoT/DoH → nginx 终结 TLS（限流：每源 32 并发 / DoT 全端口 512；DoH 每源 50 r/s，burst 100）
+1. 客户端 DoT/DoH → nginx 终结 TLS（限流：每源 32 并发 / DoT 全端口 512；DoH 每源 200 r/s，burst 200）
 2. nginx → `adgh:53`：先查 AGH 本地缓存；命中即返回（此处**不**做 DNSSEC 判断）
 3. 未命中 → AGH 唯一上游 → guard `5355`
 4. guard 并行/对冲地问 A（境外，验签）与 alt；必要时用 verifier 做隔离验证

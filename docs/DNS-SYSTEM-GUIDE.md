@@ -237,9 +237,9 @@ server {
 ```
 location = /dns-query {
     limit_conn perip 32;                    # 每源 32 并发
-    limit_req  zone=doh_req burst=100 nodelay;   # 每源 50 r/s，突发 100
+    limit_req  zone=doh_req burst=200 nodelay;   # 每源 200 r/s，突发 200
     add_header Accept-CH "Sec-CH-UA-Model, ..." always;   # UA-CH 高熵请求（/join 用）
-    proxy_pass https://127.0.0.1:4443;      # 反代到 adgh 容器自己的 DoH
+    proxy_pass https://agh_doh;             # 反代 adgh:443（keepalive 池，直连绕 docker-proxy）
     proxy_ssl_server_name on;
 }
 ```
@@ -372,9 +372,9 @@ guard 收到的是 AGH 转来的 DNS 查询（UDP/TCP 到 `172.18.0.1:5355`）�
 
 **干什么**：
 1. **DoT :853**（stream 模块）：TLS 终结后把 TCP 流原样转给 `172.18.0.2:53`（AGH）；
-2. **DoH :443**：443 上同时有宝塔面板、看板、`/dns-query`；`location = /dns-query` 精确匹配，反代到 `https://127.0.0.1:4443`（AGH 自己的 DoH）；
+2. **DoH :443**：443 上同时有宝塔面板、看板、`/dns-query`；`location = /dns-query` 精确匹配，反代到 `https://agh_doh`（直连 adgh:443，keepalive 池）；
 3. **DoH :444**：专用端口，只有 `/dns-query` 一个 location，其余走 `location / { return 404; }`；
-4. **限流**：DoT 每源 32 并发 / 全端口 512 并发；DoH 每源 32 并发 + 50 r/s（突发 100）；
+4. **限流**：DoT 每源 32 并发 / 全端口 512 并发；DoH 每源 32 并发 + 200 r/s（突发 200）；
 5. **SNI 白名单**：`00.reject-unknown-sni.conf` 把"SNI 不是已知域名"的连接拒掉；
 6. **站点反代**：`/chain/` → 127.0.0.1:8787（Basic Auth）、`/devices/` → 127.0.0.1:8789（Basic Auth）、`/join` → 127.0.0.1:8789（公开，仅 5 并发）。
 
@@ -419,7 +419,7 @@ guard 收到的是 AGH 转来的 DNS 查询（UDP/TCP 到 `172.18.0.1:5355`）�
 
 **它也是**：AGH 自身监听 443（DoH）、853（DoT）、853/UDP（DoQ）——但这些是**容器内**，对外只通过 nginx（宿主 4443 → 容器 443；853 的 DoT 走的是容器 53，不是 8854）。
 
-**坏了会怎样**：容器停止 ⇒ DoT 入口（853 → 172.18.0.2:53）立刻失败、DoH（→ 127.0.0.1:4443）失败。恢复命令：`docker restart adgh`（IP 若变化，对账脚本会修 nginx/AGH 配置）。
+**坏了会怎样**：容器停止 ⇒ DoT 入口（853 → 172.18.0.2:53）立刻失败、DoH（→ agh_doh）失败。恢复命令：`docker restart adgh`（IP 若变化，对账脚本会修 nginx/AGH 配置）。
 
 ---
 
@@ -1115,7 +1115,7 @@ bash $CODE_DIR/tools/make-snapshot.sh   # → /root/dns-snapshot-<日期>/（+ t
 ### 7.2 公网入口没有客户端认证（审计 F3，用户决定不动）
 
 - AGH `allowed_clients: []`、`disallowed_clients: []` ⇒ 任何能连上 853/443/444 的人都能用这套解析；
-- 限流有：DoT 每源 32 并发/全端口 512；DoH 每源 32 并发 + 50 r/s；AGH `ratelimit 200`（每 /24）——但这些都是**防滥用**，不是**身份认证**；
+- 限流有：DoT 每源 32 并发/全端口 512；DoH 每源 32 并发 + 200 r/s；AGH `ratelimit 200`（每 /24）——但这些都是**防滥用**，不是**身份认证**；
 - nginx→AGH 没有 PROXY protocol ⇒ AGH 看到的是网关地址（DoT 侧）⇒"按客户端计量"能力有限；
 - guard 的准入池是**共享**的（96 在途 + 96 排队）⇒ 一个客户端刷查询会影响所有人。
 
