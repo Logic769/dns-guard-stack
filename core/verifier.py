@@ -163,6 +163,34 @@ def run(c):
 guard.log("VERIFIER release=%s sha256=%s proto=%s" % (_MY_REL,_MY_SHA,_MY_PROTO))
 _write_meta()   # F5：启动即自证（否则部署门禁会在 60s 空窗里读到旧 pid/旧发布 ⇒ 假红灯）✓
 threading.Thread(target=_stats_writer).start()
+# 2026-10-17 R8 压测：verifier 侧通道预热 + 保活（原先 _pool 无保活，
+# 闲置后连接被回收 => 每次核对付约 600ms 的 TCP+TLS 冷启动）。
+# 复用 guard 既有实现，不改任何判定逻辑 => 投毒防护强度不变。
+threading.Thread(target=guard.prewarm, daemon=True).start()
+threading.Thread(target=guard.keepalive, daemon=True).start()
+# 2026-10-18 verifier concurrent keepalive: guard.keepalive walks 5 channels serially
+# (cycle >2s) while CLEAN_DOT peers drop idle connections in ~1.5-2s => cold starts.
+# One short thread per CLEAN_DOT channel, reusing guard.prewarm calls only;
+# no change to verdict logic or channel set => poisoning resistance unchanged.
+def _vk_touch(ip, port, sni):
+    try:
+        q = guard.mk_query("%s.com" % "".join(guard.random.choice("abcdefghijklmnopqrstuvwxyz") for _ in range(12)), qid=0x5A5A)
+        guard._upstream_call(ip, port, sni, q, 3.0)
+    except Exception:
+        pass
+
+
+def _vk_keepalive():
+    while True:
+        for _ip, _port, _sni in guard.CLEAN_DOT:
+            try:
+                threading.Thread(target=_vk_touch, args=(_ip, _port, _sni), daemon=True).start()
+            except Exception:
+                pass
+        time.sleep(0.5)
+
+
+threading.Thread(target=_vk_keepalive, daemon=True).start()
 s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);s.bind(path);os.chmod(path,0o600);s.listen(64)
 while True:
  c,_=s.accept()
