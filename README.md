@@ -293,7 +293,17 @@ python3 /opt/dnsguard/tools/verify-cn-lists.py
 
 ### 发布与回滚
 
-`tools/deploy_release.sh` 面向已有 `releases/<id>`、`RELEASE.sha256` 和 `current` 布局的环境，可做校验、切换及失败回滚。**基础安装使用的平铺布局不等于已经完成这套发布目录迁移**。 使用前先按 [迁移说明](docs/MIGRATION.md) 核对两个服务的实际启动路径。
+`tools/deploy_release.sh` 面向已有 `releases/<id>`、`RELEASE.sha256` 和 `current` 布局的环境，可做校验、切换及失败回滚。**基础安装使用的平铺布局不等于已经完成这套发布目录迁移**。
+
+`tools/make-release.sh` 用来把平铺安装转成发布布局（也可用于后续每次发版）：
+
+```bash
+sudo $CODE_DIR/tools/make-release.sh --migrate-units   # 建发布 + 改写 unit + 切换 current
+$CODE_DIR/deploy_release.sh --list                     # 查看已有发布
+sudo $CODE_DIR/deploy_release.sh --rollback <id>       # 回滚（门禁不过会自动退回）
+```
+
+`install.sh` 在名单就绪时会自动执行这一步；未自动执行（例如无外网导致名单为骨架）时，上面的命令可补齐。细节与边界见 [迁移说明](docs/MIGRATION.md#7-发布布局平铺--releasesid--current)。
 
 ### 常见现象
 

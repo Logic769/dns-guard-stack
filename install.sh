@@ -423,6 +423,41 @@ run "sed -i -e 's|172\.18\.0\.6|$AGHDQ_IP|g' \
 rewrite_paths "'$CODE_DIR'/tools/* '$CODE_DIR'/probes/* /opt/chainmon/* /opt/devfp/*"
 run "systemctl daemon-reload"
 run "systemctl enable --now dnsguard.service dnsguard-verifier.service"
+
+# ------------------------------------------------------------------ 首次发布
+# 为什么必须做：deploy_release.sh 与两道门禁（release_consistency.py /
+# verify-release-data.py）都要求 releases/<id>/ + current 软链布局，而上面的
+# 部署是**平铺**的。不做这一步，「回滚：deploy_release.sh --rollback」必然报
+# 发布目录不存在，发布机制等于没有落地。
+# 幂等：已存在 current 软链则跳过，重复执行 install.sh 不会堆叠发布。
+step "建立首个发布（releases/<id> + current）"
+if [ "$DRY" = 1 ]; then
+  info "将运行：$CODE_DIR/tools/make-release.sh --migrate-units <首个 release-id>"
+elif [ -e "$CODE_DIR/current" ] || [ -L "$CODE_DIR/current" ]; then
+  info "current 已存在 → $(readlink -f "$CODE_DIR/current" 2>/dev/null || echo '?')（跳过）"
+else
+  # cn-veto.snapshot.txt 是 F7 的硬要求：由上面的名单初始化步骤生成；
+  # 若名单仍是骨架（无外网），快照可能缺失，此时不阻断安装，只告警并跳过发布。
+  if [ -s "$CODE_DIR/cn-veto.snapshot.txt" ]; then
+    # 注意：不能写成「... | sed ...; then」——管道退出码是 sed 的，
+    # 在 pipefail 下也只会拿到 sed 的 0，make-release 失败会被吞掉。
+    # set -e 下命令替换失败会直接中止整个安装 —— 这里必须吞掉非零，交给下面的分支处理。
+    _rel_rc=0
+    _rel_out="$(bash "$CODE_DIR/tools/make-release.sh" --migrate-units "$(date +%Y%m%d)-initial" 2>&1)" || _rel_rc=$?
+    printf '%s\n' "$_rel_out" | sed 's/^/    /'
+    if [ "$_rel_rc" = 0 ]; then
+      info "首个发布已建立，current -> $(readlink -f "$CODE_DIR/current" 2>/dev/null)"
+      # make-release 已改写 unit 并 daemon-reload；切换后必须重启才会真正加载新路径
+      run "systemctl restart dnsguard.service dnsguard-verifier.service" || warn "重启失败，请手动 systemctl restart dnsguard dnsguard-verifier"
+    else
+      warn "首个发布建立失败（多为名单未就绪）；DNS 主链路不受影响"
+      warn "  名单就绪后手动执行：sudo bash $CODE_DIR/tools/make-release.sh --migrate-units"
+    fi
+  else
+    warn "缺少 cn-veto.snapshot.txt（名单未拉取），跳过首个发布"
+    warn "  名单就绪后手动执行：sudo bash $CODE_DIR/tools/make-release.sh --migrate-units"
+  fi
+fi
 run "systemctl enable --now dotfront-spool.service" || warn "dotfront-spool 未启动（需 DoT 明文内腿 + CAP_NET_RAW）；不影响 DNS 解析"
 if [ "$DRY" != 1 ]; then sleep 3; systemctl --no-pager --lines=0 status dnsguard.service dnsguard-verifier.service 2>&1 | sed -n '1,12p' || true; fi
 

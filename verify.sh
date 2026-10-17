@@ -214,7 +214,62 @@ else
   warn "无 iptables"
 fi
 
-# --------------------------------------------------------------------- 6 汇总
+# ----------------------------------------------------------------- 6 发布布局
+# 为什么查这个：install.sh 的平铺布局与发布机制（releases/<id> + current）不是一回事。
+# 没有 current 时，deploy_release.sh 的回滚与两道门禁全部不可用，但服务照样在跑 ——
+# 这种"看起来正常、回滚却无处可回"的状态必须在验收时暴露，而不是等出事才发现。
+sec "6. 发布布局（releases/<id> + current）"
+if [ -L "$CODE_DIR/current" ]; then
+  cur_t="$(readlink -f "$CODE_DIR/current" 2>/dev/null || true)"
+  if [ -n "$cur_t" ] && [ -d "$cur_t" ]; then ok "current -> $cur_t"
+  else bad "current 软链指向不存在的目录: $cur_t"; fi
+  # RELEASE.sha256 自洽（文件被改过则会失败）
+  if [ -f "$cur_t/RELEASE.sha256" ]; then
+    if ( cd "$cur_t" && sha256sum -c RELEASE.sha256 >/dev/null 2>&1 ); then
+      ok "发布清单自校验通过（$(wc -l < "$cur_t/RELEASE.sha256" 2>/dev/null || echo 0) 项）"
+    else
+      bad "发布清单自校验失败：$cur_t/RELEASE.sha256（文件被改动或清单过期）"
+    fi
+  else
+    warn "当前发布缺 RELEASE.sha256（非 make-release.sh 生成？）"
+  fi
+  # 两道门禁
+  if [ -f "$CODE_DIR/release_consistency.py" ]; then
+    if python3 "$CODE_DIR/release_consistency.py" --quiet >/dev/null 2>&1; then
+      ok "release_consistency.py 通过（两进程同发布）"
+    else
+      bad "release_consistency.py 未通过：两进程可能分属不同发布（见该脚本输出）"
+    fi
+  else
+    warn "缺 release_consistency.py，跳过一致性门禁"
+  fi
+  if [ -f "$CODE_DIR/verify-release-data.py" ]; then
+    if python3 "$CODE_DIR/verify-release-data.py" "$cur_t" --quiet >/dev/null 2>&1; then
+      ok "verify-release-data.py 通过（F7 清单覆盖 + veto 快照）"
+    else
+      bad "verify-release-data.py 未通过（见该脚本输出）"
+    fi
+  else
+    warn "缺 verify-release-data.py，跳过发布数据门禁"
+  fi
+elif [ -e "$CODE_DIR/current" ]; then
+  bad "$CODE_DIR/current 存在但不是软链（发布布局被破坏）"
+else
+  warn "无 current 软链：当前是平铺布局，deploy_release.sh 的回滚/切换不可用"
+  warn "  建立发布：sudo bash $CODE_DIR/tools/make-release.sh --migrate-units"
+fi
+# 发布脚本与门禁脚本是否就位。
+# 注意两种布局：install.sh 会把 tools/* 同时铺到 $CODE_DIR/tools/ 与 $CODE_DIR/ 根，
+# 而手工迁移的机器往往只有根目录那份 —— 两处都要认，否则会误报「缺少」。
+for x in make-release.sh deploy_release.sh release_consistency.py verify-release-data.py; do
+  if [ -f "$CODE_DIR/$x" ] || [ -f "$CODE_DIR/tools/$x" ]; then
+    ok "存在 $x"
+  else
+    warn "缺少 $x（发布/回滚能力不完整）"
+  fi
+done
+
+# --------------------------------------------------------------------- 7 汇总
 sec "汇总"
 printf '  PASS=%d  FAIL=%d  WARN=%d\n' "$PASS" "$FAIL" "$WARN"
 [ "$FAIL" = 0 ] && { printf '  %s验收通过%s\n' "$C_OK" "$C_0"; exit 0; }

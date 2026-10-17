@@ -105,3 +105,69 @@ sudo $CODE_DIR/tools/deploy_release.sh --rollback <上一个 release-id>
 | 看板历史 | 不迁移则从零开始（数据在 SQLite 与 jsonl 里） |
 | 证书 | 自签模式每次重建都会生成新证书，客户端需重新信任；用 ACME 则复用 |
 | 名单 | 默认 `LISTS_PROFILE=fetch` 会在安装时生成真实名单；若没外网则退回骨架（只保证 `.cn`），此时 guard 按"未知即不信任"运行，稍后跑 `tools/refresh-all-cn-lists.sh` 补齐 |
+
+## 7. 发布布局：平铺 → releases/<id> + current
+
+### 7.1 为什么需要这一步
+
+`install.sh` 部署出来的是**平铺布局**（`$CODE_DIR/guard.py`），而发布机制
+（`deploy_release.sh`、`release_consistency.py`、`verify-release-data.py`）
+要求 **`releases/<id>/` + `current` 软链**。两者不是一回事：
+
+- 平铺布局下，`deploy_release.sh --rollback` 会报「发布目录不存在」；
+- `release_consistency.py` 会报「current 软链缺失」；
+- 也就是说：**服务在跑，但回滚无处可回**。
+
+`install.sh` 从本版起会自动建立首个发布（若名单已就绪），也可手动执行。
+
+### 7.2 建立发布
+
+```bash
+# 名单就绪后（cn-veto.snapshot.txt 存在），一步到位：建发布 + 迁移 unit + 切换 current
+sudo $CODE_DIR/tools/make-release.sh --migrate-units
+
+# 只建不切换（演练）
+sudo $CODE_DIR/tools/make-release.sh --no-switch --dry-run
+```
+
+`--migrate-units` 的作用：把两个 unit 的 `ExecStart`/`WorkingDirectory` 从
+平铺路径改写到 `$CODE_DIR/current/`。**不改写的话 current 软链对服务不生效**。
+判定依据是 `systemctl show <unit> -p ExecStart` 的**生效值**：
+若 drop-in 里已经写了 `ExecStart=.../current/guard.py`，则跳过，不做多余改动。
+改写前会把全部 unit 与 drop-in 备份到 `$CODE_DIR/backups/units-<时间戳>/`。
+
+### 7.3 校验
+
+```bash
+# 两道门禁
+python3 $CODE_DIR/release_consistency.py
+python3 $CODE_DIR/verify-release-data.py $CODE_DIR/current
+
+# 或直接跑验收（第 6 节已包含发布布局检查）
+sudo ./verify.sh
+```
+
+`make-release.sh` 自己也会在构建后跑一遍 `sha256sum -c` 与 `verify-release-data.py`，
+不通过直接失败退出（rc=2），不会留下半成品发布。
+
+### 7.4 回滚
+
+```bash
+$CODE_DIR/deploy_release.sh --list          # 看有哪些发布
+sudo $CODE_DIR/deploy_release.sh --rollback <release-id>
+```
+
+`deploy_release.sh` 会在切换后轮询一致性门禁（默认最多 90 秒），
+门禁不过就**自动切回上一发布**。
+
+### 7.5 边界（如实登记）
+
+- **发布目录不是不可变的**：`make-release.sh` 生成后若有人改了其中的 `guard.py`，
+  `sha256sum -c` 会失败，`verify.sh` 会报「发布清单自校验失败」。这是刻意的检测，不是 bug。
+- **切换软链不会替换已加载模块**：必须 `systemctl restart dnsguard dnsguard-verifier`
+  才会真正加载新发布。`deploy_release.sh` 已内置这一步，手工 `ln -sfn` 时别忘。
+- **`cn-veto.snapshot.txt` 是硬前置**：它由 `refresh-cn-veto-ip.py` 生成，
+  缺失时 `make-release.sh` 直接拒绝构建（防止发布门禁形同虚设）。
+- **名单不在发布内自动更新**：发布固化的是「构建那一刻」的策略快照；
+  日常名单热更新仍走 `tools/refresh-all-cn-lists.sh`，不产生新发布。
+
