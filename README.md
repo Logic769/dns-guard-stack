@@ -23,14 +23,22 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
-  <img alt="DNS 解析架构：客户端经 dnsdist 与主 AdGuard Home 进入 guard，由 A、B、alt 与 aghdq2 / aghcf 提供候选，verifier 核验；监控、名单更新和防火墙位于旁路。" src="docs/assets/architecture-light.png">
+  <img alt="DNS 解析架构：客户端经 dnsdist 与主 AdGuard Home 进入 guard，由 A、B、aghdq、aghdq2、aghcf、alt 与 dnscrypt 提供候选并统一出网到上游；verifier 在旁路交叉验证，探针、看板、名单刷新和防火墙属管理面。" src="docs/assets/architecture-light.png">
 </picture>
 
 **[打开交互架构 HTML](docs/assets/architecture.html)** · [浅色大图](docs/assets/architecture-light.png) · [深色大图](docs/assets/architecture-dark.png)
 
-交互版在 `docs/assets/architecture.html`：自包含单文件（约 58 KB），内嵌与上面两张 PNG **同一份图源**，支持深/浅主题切换和放大/缩小/滚轮缩放。GitHub 文件页面只显示 HTML 源码，克隆后用浏览器打开即可。
+交互版在 `docs/assets/architecture.html`：由 [archify](https://github.com/tt-a1i/archify) 生成的自包含单文件（约 780 KB），与上面两张 PNG **同一份图源**，支持深/浅主题切换、缩放、路径高亮、节点检索，并可用页面右上角的「导出」直接出 PNG / JPEG / WebP / SVG / WebM。GitHub 文件页面只显示 HTML 源码，克隆后用浏览器打开即可。
 
-图源由 `docs/assets/gen-architecture.py` 生成（纯标准库、离线；只有带截图开关时才调用 playwright 导出 PNG）。要改图就改这个脚本再重新生成，**不要手工编辑 SVG / HTML**，否则深浅两版会漂移。
+图源是 `docs/assets/architecture.archify.json`（archify 的 architecture 规格：节点、边界、连线、说明卡片）。要改图就改这份 JSON，再跑：
+
+```bash
+node <archify 包>/bin/archify.mjs finalize architecture \
+  docs/assets/architecture.archify.json docs/assets/architecture.html \
+  --quality showcase --json
+```
+
+两张 PNG 是生成后的 HTML 在浅 / 深主题下各截一张（截图前隐藏页面右下角的缩放控件）。**不要手工编辑 HTML**，否则深浅两版与交互版会漂移。
 
 ```text
 客户端
@@ -345,7 +353,7 @@ firewall/      规则生成、应用与容器地址对账
 dashboards/    Chainmon 和 devfp
 deploy/        容器模板、dnsdist 配置、systemd 单元、宿主辅助脚本（bin/）、Nginx 片段（legacy）和名单样例
 tests/         回归测试及在线验证工具
-docs/          详细说明；assets/ 中保存静态与交互架构图
+docs/          详细说明；assets/ 中保存架构图的 archify 规格、交互 HTML 与浅 / 深两张 PNG
 ```
 
 离线回归入口：

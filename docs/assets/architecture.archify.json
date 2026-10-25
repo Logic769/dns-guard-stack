@@ -1,0 +1,442 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dns-guard-stack 解析链架构",
+    "subtitle": "公网客户端 → dnsdist 入口层 → 主 AdGuard Home → guard 决策层 → 候选源 → 上游互联网",
+    "locale": "zh-CN",
+    "output": "docs/assets/architecture.html",
+    "visual_preset": "signal-flow",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "client",
+      "type": "external",
+      "label": "公网客户端",
+      "sublabel": "外部查询入口 · DoT / DoH",
+      "pos": [
+        30,
+        392
+      ],
+      "size": [
+        136,
+        64
+      ]
+    },
+    {
+      "id": "dnsdist",
+      "type": "security",
+      "label": "dnsdist 入口层",
+      "sublabel": "宿主服务 · 853 / 444 · TLS 终结",
+      "pos": [
+        274,
+        368
+      ],
+      "size": [
+        164,
+        112
+      ],
+      "tag": "PacketCache · 限流"
+    },
+    {
+      "id": "adgh",
+      "type": "backend",
+      "label": "adgh 主 AdGuard Home",
+      "sublabel": "容器 · 过滤 + 缓存",
+      "pos": [
+        517,
+        382
+      ],
+      "size": [
+        158,
+        84
+      ],
+      "tag": "上游只指向 guard"
+    },
+    {
+      "id": "guard",
+      "type": "security",
+      "label": "guard 决策层",
+      "sublabel": "宿主网关 · 5355 / 5356",
+      "pos": [
+        740,
+        356
+      ],
+      "size": [
+        176,
+        136
+      ],
+      "tag": "准入 · 共识 · 见证 · 否决"
+    },
+    {
+      "id": "unbound",
+      "type": "backend",
+      "label": "unbound · A 侧",
+      "sublabel": "本机 DNSSEC 验证",
+      "pos": [
+        1000,
+        84
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "unbound-b",
+      "type": "backend",
+      "label": "unbound-b · B 侧",
+      "sublabel": "国内 6 家加密 DoT",
+      "pos": [
+        1000,
+        150
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "aghdq",
+      "type": "cloud",
+      "label": "aghdq · DoQ 主",
+      "sublabel": "NextDNS DoQ",
+      "pos": [
+        1000,
+        216
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "aghdq2",
+      "type": "cloud",
+      "label": "aghdq2 · DoQ 次",
+      "sublabel": "Quad9 DoQ · slow 列表",
+      "pos": [
+        1000,
+        282
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "aghcf",
+      "type": "cloud",
+      "label": "aghcf · 见证 / 透传",
+      "sublabel": "Cloudflare DoT",
+      "pos": [
+        1000,
+        348
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "unbound-alt",
+      "type": "backend",
+      "label": "unbound-alt · 核对",
+      "sublabel": "第三方 DoT · 独立 TCB",
+      "pos": [
+        1000,
+        414
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "dnscrypt",
+      "type": "backend",
+      "label": "dnscrypt-proxy · 影子",
+      "sublabel": "加密候选 + 采样",
+      "pos": [
+        1000,
+        480
+      ],
+      "size": [
+        196,
+        50
+      ]
+    },
+    {
+      "id": "upstream",
+      "type": "external",
+      "label": "上游互联网",
+      "sublabel": "NextDNS · Quad9 · Cloudflare · 国内 DoT",
+      "pos": [
+        1270,
+        180
+      ],
+      "size": [
+        228,
+        300
+      ],
+      "tag": "只能经候选源出网"
+    },
+    {
+      "id": "alt-replica",
+      "type": "backend",
+      "label": "alt-replica-unb",
+      "sublabel": "alt 副本 · 演练 / 灰度",
+      "pos": [
+        1270,
+        560
+      ],
+      "size": [
+        228,
+        60
+      ],
+      "tag": "10.99.0.2 · 不参与主链路"
+    },
+    {
+      "id": "verifier",
+      "type": "security",
+      "label": "verifier",
+      "sublabel": "AF_UNIX · 独立进程交叉验证",
+      "pos": [
+        740,
+        560
+      ],
+      "size": [
+        176,
+        56
+      ]
+    },
+    {
+      "id": "probes",
+      "type": "external",
+      "label": "探针",
+      "sublabel": "入口 / 链路 / 外部三路",
+      "pos": [
+        36,
+        800
+      ],
+      "size": [
+        232,
+        108
+      ]
+    },
+    {
+      "id": "ops",
+      "type": "external",
+      "label": "采集与看板",
+      "sublabel": "Chainmon · devfp · dotfront-spool",
+      "pos": [
+        292,
+        800
+      ],
+      "size": [
+        260,
+        108
+      ]
+    },
+    {
+      "id": "refresh",
+      "type": "external",
+      "label": "名单刷新",
+      "sublabel": "cn 名单归档 + 验签",
+      "pos": [
+        576,
+        800
+      ],
+      "size": [
+        232,
+        108
+      ]
+    },
+    {
+      "id": "firewall",
+      "type": "security",
+      "label": "防火墙与地址对账",
+      "sublabel": "iptables 收口 + 容器 IP 一致性",
+      "pos": [
+        832,
+        800
+      ],
+      "size": [
+        300,
+        108
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "容器网络 dnsnet 172.18.0.0/16 · 固定 IP",
+      "wraps": [
+        "unbound",
+        "unbound-b",
+        "aghdq",
+        "aghdq2",
+        "aghcf",
+        "unbound-alt",
+        "dnscrypt"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "altreplica0 10.99.0.0/24",
+      "wraps": [
+        "alt-replica"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "client",
+      "to": "dnsdist",
+      "label": "853 DoT · 444 DoH",
+      "variant": "emphasis"
+    },
+    {
+      "from": "dnsdist",
+      "to": "adgh",
+      "label": "内腿 53",
+      "variant": "emphasis"
+    },
+    {
+      "from": "adgh",
+      "to": "guard",
+      "label": "唯一上游",
+      "variant": "emphasis"
+    },
+    {
+      "from": "guard",
+      "to": "unbound",
+      "variant": "emphasis"
+    },
+    {
+      "from": "guard",
+      "to": "unbound-b",
+      "variant": "emphasis"
+    },
+    {
+      "from": "guard",
+      "to": "aghdq",
+      "variant": "emphasis"
+    },
+    {
+      "from": "guard",
+      "to": "aghdq2",
+      "label": "hedge",
+      "variant": "dashed"
+    },
+    {
+      "from": "guard",
+      "to": "aghcf",
+      "label": "见证",
+      "variant": "dashed"
+    },
+    {
+      "from": "guard",
+      "to": "unbound-alt",
+      "variant": "emphasis"
+    },
+    {
+      "from": "guard",
+      "to": "dnscrypt",
+      "label": "影子",
+      "variant": "dashed"
+    },
+    {
+      "from": "unbound",
+      "to": "upstream"
+    },
+    {
+      "from": "unbound-b",
+      "to": "upstream"
+    },
+    {
+      "from": "aghdq",
+      "to": "upstream"
+    },
+    {
+      "from": "aghdq2",
+      "to": "upstream"
+    },
+    {
+      "from": "aghcf",
+      "to": "upstream"
+    },
+    {
+      "from": "unbound-alt",
+      "to": "upstream"
+    },
+    {
+      "from": "unbound-alt",
+      "to": "alt-replica",
+      "label": "副本对照",
+      "variant": "dashed"
+    },
+    {
+      "from": "guard",
+      "to": "verifier",
+      "label": "AF_UNIX",
+      "variant": "dashed"
+    },
+    {
+      "from": "probes",
+      "to": "dnsdist",
+      "label": "探活",
+      "variant": "dashed"
+    },
+    {
+      "from": "ops",
+      "to": "dnsdist",
+      "label": "统计 18083",
+      "variant": "dashed"
+    },
+    {
+      "from": "refresh",
+      "to": "guard",
+      "label": "名单热加载",
+      "variant": "dashed"
+    },
+    {
+      "from": "firewall",
+      "to": "guard",
+      "label": "地址对账",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "必经链（实线）",
+      "items": [
+        "客户端 → dnsdist → 主 AdGuard Home → guard 单一入口",
+        "guard 是唯一策略实现，AdGuard 没有绕过它的 fallback",
+        "候选源出网前都要经 guard 的准入判定"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "条件通道（虚线）",
+      "items": [
+        "aghdq2 仅在 hedge 之后并发，不和主通道抢首答",
+        "aghcf 提供国内域名存在性见证与 SERVFAIL 快速透传",
+        "dnscrypt 只做影子采样，应答不能当作 DNSSEC 证据"
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "部署口径",
+      "items": [
+        "容器全部在 Compose 网络 dnsnet 里用固定 IP，guard 位于宿主网关侧",
+        "alt-replica-unb 在 altreplica0（10.99.0.0/24），用于演练与灰度",
+        "dnsdist 是宿主 systemd 服务，不是容器；legacy 部署改由 Nginx 承接 853 / 444"
+      ]
+    }
+  ]
+}
