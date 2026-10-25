@@ -27,7 +27,7 @@ sec()  { printf '\n%s\n' "$*"; }
 
 # ---------------------------------------------------------------- 1 容器与服务
 sec "1. 容器"
-for c in adgh aghdq unbound unbound-b unbound-alt; do
+for c in adgh aghdq aghdq2 aghcf unbound unbound-b unbound-alt; do
   st=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || echo missing)
   [ "$st" = running ] && ok "$c running" || bad "$c 状态=$st"
 done

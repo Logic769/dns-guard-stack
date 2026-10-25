@@ -97,6 +97,11 @@
 | `alt-replica-unb` | mvance/unbound:latest | 10.99.0.2（altreplica0） | alt 的副本，用于演练/灰度 | Up 5 days (healthy) |
 | `openlist` | openlistteam/openlist | 172.19.0.2（baota_net） | 与本 DNS 链路**无关**（文件列表服务） | Up 9 days |
 
+> **IP 口径说明**：本文所有 IP 都是**生产实盘**取值（aghdq2=172.18.0.9、aghcf=172.18.0.10）。
+> 仓库 `docker-compose.yml` 的一键部署把 dnscrypt 容器放在 `.9`，所以新栈默认是
+> **aghdq2=172.18.0.11、aghcf=172.18.0.12**（见 `.env.example` 的 `AGHDQ2_IP`/`AGHCF_IP`）。
+> 两套值不通用：拿本表的 .9/.10 去套仓库默认栈会和 dnscrypt 撞车。
+
 > 全部容器都在 Docker **默认 bridge `172.18.0.0/16`**（不是自定义网络）⇒ **容器名不能互相解析**，所以所有容器间通信都靠**写死的 IP**，并由对账脚本守着（见 6.3）。
 
 ### 1.4 内存与资源限额（systemd cgroup，实测）

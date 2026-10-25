@@ -65,6 +65,8 @@ set -a; . "$env_file"; set +a
 : "${BACKUP_DIR:=$CODE_DIR/backups}"
 : "${DOCKER_SUBNET:=172.18.0.0/16}"
 : "${AGH_IP:=172.18.0.2}"; : "${AGHDQ_IP:=172.18.0.6}"
+# 另两个 AGH 出口（DoQ slow 通道 aghdq2 / CN 见证+fastpass aghcf，2026-10-25 补回）
+: "${AGHDQ2_IP:=172.18.0.11}"; : "${AGHCF_IP:=172.18.0.12}"
 : "${UNBOUND_A_IP:=172.18.0.4}"; : "${UNBOUND_B_IP:=172.18.0.5}"; : "${UNBOUND_ALT_IP:=172.18.0.8}"
 : "${DOT_PORT:=853}"; : "${DOH_PORT:=444}"; : "${AGH_UI_PORT:=3000}"
 : "${AGH_HTTPS_PORT:=4443}"; : "${AGHDQ_DNS_PORT:=5533}"
@@ -455,6 +457,10 @@ rewrite_paths() { # rewrite_paths <file...>
         -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g' $* 2>/dev/null || true"
 }
 run "sed -i 's|/opt/dnsguard/current|$CODE_DIR|g' /etc/systemd/system/dnsguard.service /etc/systemd/system/dnsguard-verifier.service /etc/systemd/system/dnsguard.service.d/*.conf /etc/systemd/system/dnsguard-verifier.service.d/*.conf 2>/dev/null || true"
+# 看板同理：base 单元与 drop-in 的 ExecStart 都写死 /opt/chainmon、/opt/devfp，
+# 而看板文件本身装到 ${CHAINMON_DIR:-/opt/chainmon}（见「看板」段）。
+# 不一起改写就会出现「文件装在新目录、systemd 去旧目录启动」的错位。
+run "sed -i -e 's|/opt/chainmon|${CHAINMON_DIR:-/opt/chainmon}|g' -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g'       /etc/systemd/system/chainmon.service /etc/systemd/system/devfp.service       /etc/systemd/system/chainmon.service.d/*.conf /etc/systemd/system/devfp.service.d/*.conf 2>/dev/null || true"
 # drop-in 里的「端口」也要跟 .env 对齐：仓库原件按生产默认写死
 #   5533 = aghdq 宿主映射（DoQ 主通道）
 #   5534 = aghdq2（Quad9）
@@ -467,6 +473,7 @@ run "sed -i -e 's|^\(Environment=GUARD_CN_VETO_WITNESS=127\.0\.0\.1:\)[0-9]\+|\1
       -e 's|^\(Environment=GUARD_DOQ_PORT=\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
       -e 's|^\(Environment=GUARD_DOQ2_PORT=\)[0-9]\+|\1${AGHDQ2_DNS_PORT:-5534}|' \
       -e 's|^\(Environment=GUARD_DOQ3_PORT=\)[0-9]\+|\1${AGHCF_DNS_PORT:-5535}|' \
+      -e 's|^\(Environment=GUARD_ALT_ADDR=127\.0\.0\.1:\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
       /etc/systemd/system/dnsguard.service.d/*.conf 2>/dev/null || true"
 # drop-in 里的「容器网段 IP」同样要跟 .env 对齐（DOCKER_SUBNET / *_IP 都可配）。
 # 仓库原件按默认 172.18.0.0/16 写死；改网段后 GUARD_LISTEN_HOST / 见证 / 上游池
@@ -478,7 +485,9 @@ run "sed -i -e 's|172\.18\.0\.6|$AGHDQ_IP|g' \
       -e 's|172\.18\.0\.2|$AGH_IP|g' \
       -e 's|172\.18\.0\.1|$GW_IP|g' \
       /etc/systemd/system/dnsguard.service.d/*.conf /etc/systemd/system/dnsguard-verifier.service.d/*.conf 2>/dev/null || true"
-rewrite_paths "'$CODE_DIR'/tools/* '$CODE_DIR'/probes/* /opt/chainmon/* /opt/devfp/*"
+# ⚠ 看板目录这里也必须用变量：写死 /opt/chainmon 会在 CHAINMON_DIR 可配时
+#   把**另一套**（默认路径下真实存在的那套）看板文件也 sed 一遍。
+rewrite_paths "'$CODE_DIR'/tools/* '$CODE_DIR'/probes/* '${CHAINMON_DIR:-/opt/chainmon}'/* '${DEVFP_DIR:-/opt/devfp}'/*"
 run "systemctl daemon-reload"
 run "systemctl enable --now dnsguard.service dnsguard-verifier.service"
 
@@ -521,9 +530,13 @@ if [ "$DRY" != 1 ]; then sleep 3; systemctl --no-pager --lines=0 status dnsguard
 
 step "看板（可选）"
 if [ -d "$HERE/dashboards/chainmon" ]; then
-  run "install -d -m 0755 /opt/chainmon /opt/devfp"
-  run "find '$HERE/dashboards/chainmon' -maxdepth 1 -type f -exec cp -f -t /opt/chainmon/ {} + && find '$HERE/dashboards/devfp' -maxdepth 1 -type f -exec cp -f -t /opt/devfp/ {} +"
-  info "看板文件已放入 /opt/chainmon 与 /opt/devfp（启动前请在 nginx 里加 Basic Auth）"
+  # ⚠ 目标目录必须跟 rewrite_paths() 改写 drop-in 时用的是同一组变量：
+  #   写死 /opt/chainmon 而 drop-in 的 ExecStart 已被改成 $CHAINMON_DIR 时，
+  #   systemd 会去一个空目录启动看板（DEVFP_DIR 同理）。
+  _cm="${CHAINMON_DIR:-/opt/chainmon}"; _df="${DEVFP_DIR:-/opt/devfp}"
+  run "install -d -m 0755 '$_cm' '$_df'"
+  run "find '$HERE/dashboards/chainmon' -maxdepth 1 -type f -exec cp -f -t '$_cm'/ {} + && find '$HERE/dashboards/devfp' -maxdepth 1 -type f -exec cp -f -t '$_df'/ {} +"
+  info "看板文件已放入 $_cm 与 $_df（启动前请在 nginx 里加 Basic Auth）"
   warn "看板未自动启动：需先确认链路上的 nginx 日志路径与容器名与本机一致"
 fi
 
