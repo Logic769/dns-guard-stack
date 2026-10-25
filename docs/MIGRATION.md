@@ -58,18 +58,22 @@ sudo ./verify.sh
 ```bash
 vi .env            # NET_SUBNET、IP_*、GUARD_LISTEN_HOST 会自动跟随 docker0 网关
 sudo ./install.sh
-sudo $CODE_DIR/tools/dnsguard-ip-reconcile.sh --check   # 应报 4~6 项全部一致
+sudo /usr/local/sbin/dnsguard-ip-reconcile.sh --check   # 应报 4~6 项全部一致
 ```
 
 `dnsguard-ip-reconcile.sh` 会把"写死容器 IP"的 6 个位置（nginx stream 的 `proxy_pass`、unbound A 的 `forward-addr`、dotfront drop-in、AGH 上游、guard 监听地址、探针源地址别名）按 `docker inspect` 的**实际分配**对齐，并带漂移巡检 timer。
+
+**注意**：这 6 处不包含 dnsdist。`/etc/dnsdist/dnsdist.conf` 里的 `newServer({address="<AGH_IP>:53"})` 是渲染时写死的，改网段后要重跑 `./install.sh`（或手改该文件）再 `systemctl restart dnsdist`。
 
 ## 4. 换上游
 
 | 想换的东西 | 改哪里 |
 |---|---|
-| 境外主源 | `deploy/containers/aghdq/AdGuardHome.yaml` 的 `upstream_dns`（默认 `quic://dns.nextdns.io`） |
-| 国内上游 | `deploy/containers/unbound-b/unbound.conf` 的 `forward-addr` 列表（DoT + `#hostname`） |
-| 交叉见证源 | `deploy/containers/unbound-alt/unbound.conf` |
+| 境外主源 | `deploy/containers/aghdq.AdGuardHome.yaml.tpl` 的 `upstream_dns`（默认 `quic://dns.nextdns.io`，也可用 `.env` 的 `UPSTREAM_A_QUIC`） |
+| 第二条境外 DoQ | `deploy/containers/aghdq2.AdGuardHome.yaml.tpl`（默认 `quic://dns10.quad9.net`） |
+| 国内上游 | `deploy/containers/unbound-b.conf.tpl` 的 `forward-addr` 列表（DoT + `#hostname`，可用 `.env` 的 `UPSTREAM_B`） |
+| 交叉见证 / fastpass | `deploy/containers/aghcf.AdGuardHome.yaml.tpl`（默认 Cloudflare `tls://1.1.1.1`） |
+| alt 备用源 | `deploy/containers/unbound-alt.conf.tpl`（可用 `.env` 的 `UPSTREAM_ALT`） |
 | 影子对比源 | `.env` 的 `SHADOW_DNSCRYPT`（默认走 dnscrypt-proxy） |
 
 改完 `./install.sh`（会重渲染并重启对应容器），然后用 `probes/dns-chain-probe.py` 验收。

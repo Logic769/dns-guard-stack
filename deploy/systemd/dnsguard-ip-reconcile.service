@@ -1,6 +1,6 @@
 [Unit]
 Description=dnsguard 解析链路容器 IP / docker0 网关 漂移收敛（审计 §3.3）
-Documentation=file:/opt/dnsguard/NOTES-20261015.md
+Documentation=https://github.com/Logic769/dns-guard-stack
 After=docker.service network-online.target
 Wants=docker.service
 

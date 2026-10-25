@@ -73,7 +73,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 
 ### 宿主端口
 
-`AGH_UI_PORT=3000`、`AGH_HTTPS_PORT=4443`（容器 443 → 回环，供 nginx DoH 反代）、`AGH_DOT_PORT=8854`（容器 853 → 回环）、`AGHDQ_UI_PORT=13000`、`AGHDQ_DNS_PORT=5533`（guard 的 DoQ 主通道）、`AGHDQ2_UI_PORT=13001`、`AGHDQ2_DNS_PORT=5534`（DoQ2：Quad9）、`AGHCF_UI_PORT=13003`、`AGHCF_DNS_PORT=5535`（CN 见证 + fastpass）、`DOT_PORT=853`、`DOH_PORT=444`、`CHAINMON_PORT=8787`、`DEVFP_PORT=8789`。
+`AGH_UI_PORT=3000`、`AGH_HTTPS_PORT=4443`（容器 443 → 回环；dnsdist 部署下它是备用路径，只有 legacy nginx 反代时才用到）、`AGH_DOT_PORT=8854`（容器 853 → 回环）、`AGHDQ_UI_PORT=13000`、`AGHDQ_DNS_PORT=5533`（guard 的 DoQ 主通道）、`AGHDQ2_UI_PORT=13001`、`AGHDQ2_DNS_PORT=5534`（DoQ2：Quad9）、`AGHCF_UI_PORT=13003`、`AGHCF_DNS_PORT=5535`（CN 见证 + fastpass）、`DOT_PORT=853`、`DOH_PORT=444`、`CHAINMON_PORT=8787`、`DEVFP_PORT=8789`。
 
 端口冲突时只改这里，`install.sh` 会把 nginx 片段与 AGH 上游一起改掉。
 
@@ -114,13 +114,13 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 
 ## 4. `install.sh` 都做了什么
 
-1. **依赖检查**：`docker`/`nginx`/`python3` 缺失即报错；无 systemd 则跳过服务安装并打印手动启动方式
+1. **依赖检查**：`docker`、`python3` 缺失即报错；`nginx` 只在 legacy 场景需要，`dnsdist` 缺失时只告警并退化到 nginx 入口；无 systemd 则跳过服务安装并打印手动启动方式
 2. **渲染配置**：`deploy/**/*.tpl` 用 `.env` 渲染到 `RUNTIME_DIR`，并把 `/opt/<服务>` 路径统一改写为 `.env` 里的真实路径
 3. **部署代码**：`core/`、`tools/`、`probes/`、`firewall/` → `CODE_DIR`；`dashboards/` → 两块看板目录
 4. **名单**：默认 `LISTS_PROFILE=fetch` —— 立即拉真实名单（域名 → 否决/IP → 完整性校验）；条数不足（多半没外网）会自动退回骨架并告警，不阻断安装
 5. **容器**：`docker compose up -d`；按需等待 AdGuard Home 面板就绪并设置管理员密码、AGH 上游指向 guard
 6. **证书**：自签 / ACME / 复用你给的路径
-7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）
+7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`（该文件由安装脚本按当时的 apiKey 生成，仓库里没有，改口令后需重跑安装或手改）。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）
 8. **systemd**：安装单元与 timer（含 DoT 明文内腿采集器 `dotfront-spool`），`daemon-reload` + `enable --now`；写入内存限额
 9. **防火墙**：`firewall/dnsguard-fw.sh --apply`（先算目标表 → 自检 → 单次 `iptables-restore`，失败回滚）
 10. **验收**：`tools/release_consistency.py` + 回环探针；失败会打印诊断命令（不阻断安装）
@@ -160,7 +160,7 @@ tail -5 /var/log/cn-lists-refresh.log
 
 **宝塔面板**：默认 `NGINX_VHOST_DIR=/www/server/panel/vhost/nginx`。面板重写站点配置时可能覆盖直接写在站点里的 `location`，所以本项目把片段放进 `extension/<站点>/` 子目录。
 
-**Docker 网段冲突**：改 `DOCKER_SUBNET` 与各 `*_IP`，重新 `./install.sh`，然后 `firewall/dnsguard-ip-reconcile.sh --check` 确认 6 处（nginx proxy_pass、unbound A forward-addr、dotfront drop-in、AGH 上游、guard 监听、探针源别名）都与 `docker inspect` 一致。
+**Docker 网段冲突**：改 `DOCKER_SUBNET` 与各 `*_IP`，重新 `./install.sh`（会重渲染 dnsdist 的 `newServer` 地址），然后 `firewall/dnsguard-ip-reconcile.sh --check` 确认 6 处（nginx proxy_pass、unbound A forward-addr、dotfront drop-in、AGH 上游、guard 监听、探针源别名）都与 `docker inspect` 一致。**注意对账脚本不覆盖 dnsdist**：`/etc/dnsdist/dnsdist.conf` 的 `newServer({address="<AGH_IP>:53"})` 需要在改网段后重跑安装或手工同步，否则 dnsdist 会把查询发到旧地址。
 
 **没有 systemd**（容器里跑）：install.sh 会跳过单元安装，打印 `python3 core/guard.py &` 之类的手动启动命令；功能可用，但没有内存限额与自动重启。
 
@@ -193,10 +193,12 @@ docker compose -f "$RUNTIME_DIR/docker-compose.yml" down
 systemctl disable --now dnsdist 2>/dev/null
 rm -f /etc/systemd/system/dnsdist.service
 rm -rf /etc/systemd/system/dnsdist.service.d
-rm -f /etc/logrotate.d/dnsdist-query
+rm -f /etc/logrotate.d/dnsdist-query /var/log/dnsdist-query.log
 rm -f /etc/systemd/system/dnsguard.service /etc/systemd/system/dnsguard-verifier.service
 rm -rf /etc/systemd/system/dnsguard.service.d /etc/systemd/system/dnsguard-verifier.service.d
-rm -f "$NGINX_VHOST_DIR/tcp/dnsguard-dot-853.conf" "$NGINX_VHOST_DIR/extension/dnsguard/"*.conf
+rm -rf /etc/systemd/system/chainmon.service.d /etc/systemd/system/devfp.service.d
+# legacy 场景才存在；dnsdist 部署下这两个片段本就没装
+rm -f "$NGINX_VHOST_DIR/tcp/dnsguard-dot-853.conf" "$NGINX_VHOST_DIR/9.dnsguard-doh444.conf"
 systemctl daemon-reload && nginx -t && nginx -s reload
 
 # 3) 防火墙：从备份恢复，或直接清掉本项目加的链

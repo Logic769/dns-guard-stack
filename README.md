@@ -4,9 +4,9 @@
 
 本项目把 AdGuard Home、Unbound、DNSCrypt 与自研的 guard / verifier 组合在一台 Linux 服务器上。AdGuard Home 负责入口过滤和缓存，Unbound 负责解析及验证，guard 决定哪些候选答案可以交给客户端，verifier 提供独立进程核验。
 
-它适合希望理解并控制整条解析链路的个人和运维人员，也可用于研究 DNS 投毒防护、缓存语义和多上游核对。部署需要 Docker、systemd、Nginx 和证书管理经验；安装脚本用于搭建基础环境，公网入口和安全验收仍需逐项完成。
+它适合希望理解并控制整条解析链路的个人和运维人员，也可用于研究 DNS 投毒防护、缓存语义和多上游核对。部署需要 Docker、systemd、dnsdist（或 legacy 的 Nginx）和证书管理经验；安装脚本用于搭建基础环境，公网入口和安全验收仍需逐项完成。
 
-> 本文按 2026-10-16 获取的仓库代码、配置模板及现有说明整理。端口和路径均指仓库默认布局，不代表任意部署的实时状态。历史运行数据和一次探针通过，不等于长期可靠性保证。
+> 本文按 2026-10-25 的仓库代码、配置模板及现有说明整理（含 dnsdist 入口与 aghdq2 / aghcf 两个出口）。端口和路径均指仓库默认布局，不代表任意部署的实时状态。历史运行数据和一次探针通过，不等于长期可靠性保证。
 
 ## 阅读导航
 
@@ -23,27 +23,29 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
-  <img alt="DNS 解析架构：客户端经 Nginx 和主 AdGuard Home 进入 guard，由 A、B、alt 提供候选，verifier 核验；监控、名单更新和防火墙位于旁路。" src="docs/assets/architecture-light.png">
+  <img alt="DNS 解析架构：客户端经 dnsdist 与主 AdGuard Home 进入 guard，由 A、B、alt 与 aghdq2 / aghcf 提供候选，verifier 核验；监控、名单更新和防火墙位于旁路。" src="docs/assets/architecture-light.png">
 </picture>
 
 **[打开交互架构 HTML](docs/assets/architecture.html)** · [浅色大图](docs/assets/architecture-light.png) · [深色大图](docs/assets/architecture-dark.png)
 
-交互版就是项目配套的 `dns-guard-stack.html`，在仓库中统一保存为 `docs/assets/architecture.html`。它支持缩放、主题切换和节点源码跳转，适合结合下表逐层阅读。
+交互版在 `docs/assets/architecture.html`：自包含单文件（约 58 KB），内嵌与上面两张 PNG **同一份图源**，支持深/浅主题切换和放大/缩小/滚轮缩放。GitHub 文件页面只显示 HTML 源码，克隆后用浏览器打开即可。
 
-GitHub 文件页面通常显示 HTML 源码；克隆仓库后，用浏览器打开该文件即可查看交互效果。图中的源码链接固定到生成图时的提交，便于追溯；后续代码变化以当前仓库为准。
+图源由 `docs/assets/gen-architecture.py` 生成（纯标准库、离线；只有带截图开关时才调用 playwright 导出 PNG）。要改图就改这个脚本再重新生成，**不要手工编辑 SVG / HTML**，否则深浅两版会漂移。
 
 ```text
 客户端
   │ DoT :853 / DoH :444（:443 需另接现有 HTTPS 站点）
   ▼
-dnsdist：TLS 终结、真实客户端 IP、查询缓存与限流
+dnsdist：TLS 终结、真实客户端 IP、PacketCache 与限流
   ▼
 主 AdGuard Home（adgh）：过滤、缓存；DNS 上游只指向 guard
   ▼
 guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
-  ├─ A：Unbound A（本机 DNSSEC）→ aghdq → NextDNS（DoQ）
+  ├─ A：Unbound A（本机 DNSSEC）→ aghdq → NextDNS（DoQ，主通道）
   ├─ B：Unbound B → 国内 DoT 上游（只用于国内路由域名）
   ├─ alt：独立第三方 DoT → 本机 Unbound alt（核对 / 备用）
+  ├─ aghdq2：Quad9 dns10（DoQ，只在 hedge 之后并发，slow 列表）
+  ├─ aghcf：Cloudflare DoT（存在性见证 + SERVFAIL 快速透传）
   └─ verifier：通过本机 Unix socket 协作的独立核验进程
 
 旁路：DNSCrypt 候选与影子对比、名单刷新、防火墙对账、探针、监控看板
@@ -70,7 +72,7 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 
 ## 一次查询如何完成
 
-1. **接入**。 客户端经 DoT 或 DoH 到达 Nginx，再进入主 AdGuard Home。过滤规则或有效缓存可以直接给出结果，其余查询进入 guard。
+1. **接入**。 客户端经 DoT 或 DoH 到达 dnsdist（legacy 部署为 Nginx），再进入主 AdGuard Home。过滤规则或有效缓存可以直接给出结果，其余查询进入 guard。
 
 2. **决定路由**。 guard 根据类型化域名名单、例外规则等判断是否属于国内路径。命中国内路由只说明“可以向 B 查询”，不代表 B 的答案自动可信。
 
@@ -107,7 +109,7 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 
 ### 项目能力的边界
 
-- **单机系统**。 多个解析组件不能消除宿主、网络、Nginx 和证书的单点故障。
+- **单机系统**。 多个解析组件不能消除宿主、网络、dnsdist（或 legacy 的 Nginx）和证书的单点故障。
 
 - **默认没有用户级 DNS 鉴权**。 对外提供入口前，应决定服务范围、访问控制与容量限制。
 
@@ -125,7 +127,8 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 | 容器运行时 | Docker 与 Compose 插件，支持脚本使用的 `up --wait` |
 | Python | 安装脚本最低检查为 Python 3.6；目标环境仍应运行回归验证 |
 | 基础工具 | Bash、OpenSSL、curl、常用 GNU 工具；防火墙部分使用 iptables / iptables-restore |
-| Nginx | 需支持 HTTP TLS 和 stream TLS；模板含 HTTP/2、限流及自定义日志配置依赖 |
+| dnsdist | 公网入口。安装脚本要求机器上有 dnsdist 可执行文件（发行版包或自建），并能通过 `dnsdist --check-config` 校验渲染结果 |
+| Nginx（legacy） | 仅在跑不了 dnsdist 的机器上使用：需支持 HTTP TLS 和 stream TLS；模板含 HTTP/2、限流及自定义日志配置依赖。与 dnsdist 的 853 / 444 端口互斥，二者只能选一 |
 | 域名与证书 | 自有域名及匹配的 TLS 证书；自签证书仅适合已配置客户端信任的验证环境 |
 | 网络 | 能访问镜像仓库、名单源及选定的 DoT / DoQ / DNSCrypt 上游 |
 
@@ -141,9 +144,11 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 | TCP `443` | 可在现有 HTTPS 站点接 DoH | 需额外配置；不是 Compose 自动提供 |
 | `172.18.0.1:5355` | guard DNS | Docker 桥接网关上的内部接口 |
 | `127.0.0.1:5353`<br>`127.0.0.1:5354`<br>`127.0.0.1:5357` | A / B / alt 的 DNS 映射 | 本机 |
-| `127.0.0.1:5533`<br>`127.0.0.1:5399` | aghdq / DNSCrypt 的 DNS 映射 | 本机 |
-| `127.0.0.1:3000`<br>`127.0.0.1:13000` | 两个 AdGuard Home 管理接口 | 本机，建议通过 SSH 隧道访问 |
+| `127.0.0.1:5533`<br>`127.0.0.1:5534`<br>`127.0.0.1:5535`<br>`127.0.0.1:5399` | aghdq / aghdq2 / aghcf / DNSCrypt 的 DNS 映射 | 本机 |
+| `127.0.0.1:15353` | alt 副本（alt-replica-unb）的 DNS 映射 | 本机 |
+| `127.0.0.1:3000`<br>`127.0.0.1:13000`<br>`127.0.0.1:13001`<br>`127.0.0.1:13003` | 四个 AdGuard Home 管理接口（adgh / aghdq / aghdq2 / aghcf） | 本机，建议通过 SSH 隧道访问 |
 | `127.0.0.1:4443`<br>`127.0.0.1:8854` | 主 AdGuard Home 的 HTTPS / DoT 映射 | 本机 |
+| `127.0.0.1:5199` | dnsdist 控制口（`setKey` 授权） | 本机 |
 | `8787 / 8789` | Chainmon / devfp 默认服务端口 | 启用前核对监听地址和鉴权 |
 
 guard 默认使用的是 **dnsnet 自定义网络的网关**，不要把它误认为 `docker0` 的地址。公网入口与本机、容器内部的明文 DNS 跳转也应分别理解。
@@ -173,7 +178,7 @@ INSTALL_NGINX=0
 
 ### 2. 预览并安装
 
-安装会向 `/opt`、`/etc/systemd/system` 和 `/usr/local/sbin` 写入文件，启动容器与服务，并默认应用项目防火墙规则。在已有 DNS 服务器上操作前，应先备份配置、服务单元、名单和现有规则。
+安装会向 `/opt`、`/etc/systemd/system`、`/etc/dnsdist`、`/etc/logrotate.d` 和 `/usr/local/sbin` 写入文件，启动容器与服务，并默认应用项目防火墙规则。在已有 DNS 服务器上操作前，应先备份配置、服务单元、名单和现有规则。
 
 ```bash
 sudo bash install.sh --dry-run
@@ -188,7 +193,7 @@ sudo bash install.sh --fetch-lists
 | `--fetch-lists` | 安装时拉取真实名单 |
 | `--skip-firewall` | 跳过安装阶段的规则应用；使用后需自行补齐并验收 |
 
-安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装，以及 Nginx 片段生成。**脚本运行结束不代表服务已经可对外使用**。
+安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装、dnsdist 配置渲染与启动（以及 legacy 场景下的 Nginx 片段生成）。**脚本运行结束不代表服务已经可对外使用**。
 
 ### 3. 核对当前安装脚本的限制
 
@@ -196,7 +201,7 @@ sudo bash install.sh --fetch-lists
 
 - **真实名单必须可用**。 `.env.example` 默认 `LISTS_PROFILE=fetch`；`minimal` 只生成骨架。启用国内信任时，如果缺少有效否决策略，guard 可能拒绝启动，不能把骨架模式当作完整解析服务。
 
-- **证书需要实际接入**。 模板不包含证书或私钥；脚本从本机文件读取并写入两份 AGH 配置，生成文件权限为 `0600`。Nginx 模板路径仍需单独核对，确保两处证书与域名一致。当前脚本未实现 `.env` 注释提到的 ACME 签发 / 续期流程。
+- **证书需要实际接入**。 模板不包含证书或私钥；脚本从本机文件读取并写入四份 AGH 配置（adgh / aghdq / aghdq2 / aghcf），生成文件权限为 `0600`。dnsdist 的证书路径（以及 legacy 场景的 Nginx 模板路径）仍需单独核对，确保所有入口与域名一致。当前脚本未实现 `.env` 注释提到的 ACME 签发 / 续期流程。
 
 - **部分上游变量没有接入渲染**。 `UPSTREAM_B` 有专门替换逻辑；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 不能仅靠修改 `.env` 就认定生效。调整对应模板并检查运行时文件。
 
@@ -224,7 +229,7 @@ sudo nginx -t
 
 确认校验成功且变更影响可接受后，重载 Nginx。若要使用标准 `443` 端口，在已有 HTTPS 站点中接入 `/dns-query`，同时保留管理接口的访问隔离。
 
-完整部署资料见 [DEPLOY.md](docs/DEPLOY.md)；其中关于 docker0、ACME、骨架名单及自动启动的旧描述，应结合以上实现限制阅读。
+完整部署资料见 [DEPLOY.md](docs/DEPLOY.md)（已按 dnsdist 入口与四个 AGH 实例更新）；`.env` 变量、端口与故障排查都在那里。
 
 ## 验收与客户端配置
 
@@ -337,7 +342,7 @@ tools/         名单刷新、归档校验、发布门禁、快照和采集工�
 probes/        入口、链路、外部与专项探针
 firewall/      规则生成、应用与容器地址对账
 dashboards/    Chainmon 和 devfp
-deploy/        容器模板、systemd 单元、Nginx 片段和名单样例
+deploy/        容器模板、dnsdist 配置、systemd 单元、Nginx 片段（legacy）和名单样例
 tests/         回归测试及在线验证工具
 docs/          详细说明；assets/ 中保存静态与交互架构图
 ```
@@ -360,7 +365,8 @@ PYTHON=python3.6 bash tests/run.sh
 | [运维手册](docs/OPERATIONS.md) | 名单、发布、探针、看板与资源管理 |
 | [安全模型](docs/SECURITY.md) | 威胁假设、信任取舍和防护边界 |
 | [迁移说明](docs/MIGRATION.md) | 从现有部署迁移或重建 |
-| [交互架构图](docs/assets/architecture.html) | 用浏览器查看全景并追溯生成时的源码 |
+| [压测记录](docs/LOADTEST-2026-10-17.md) | 历史容量数据与判读口径；不是当前性能承诺 |
+| [交互架构图](docs/assets/architecture.html) | 用浏览器查看可缩放的全景图（深/浅主题） |
 
 ## 许可证
 

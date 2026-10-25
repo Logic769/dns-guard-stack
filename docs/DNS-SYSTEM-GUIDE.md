@@ -1,7 +1,7 @@
 # DNS 解析系统详解 · dns.example.com
 
-> 编写时间：2026-10-15 23:30（Asia/Shanghai）
-> 对应线上状态：发布 `20261015-audit-fixes-11`（guard 于 22:54:56 启动，PID 1765985）
+> 编写时间：2026-10-15 23:30（Asia/Shanghai）；2026-10-25 按 dnsdist 入口与 aghdq2 / aghcf 两个新出口做了同步（章节结构与判据未变，数值以 8.2 的截止时间为准）
+> 对应线上状态：首次编写时为发布 `20261015-audit-fixes-11`（guard 于 22:54:56 启动，PID 1765985）；当前发布号、PID 与条目数以实际部署为准
 > 依据：对一台已部署实例（`SERVER_IP`）的**只读**勘察结果（systemd/容器/端口/配置/名单/脚本清单），以及历次审计与修复记录。
 >
 > 本文按默认路径叙述（`/opt/dnsguard` = `.env` 的 `CODE_DIR`，`/opt/dnscrypt-proxy` = `LISTS_DIR`，域名写作 `dns.example.com`）。你改了 `.env` 的路径或域名时，把文中对应路径/域名替换即可。
@@ -133,7 +133,8 @@
 | `dotfront-spool.service` | `/usr/bin/python3 $CODE_DIR/tools/dotfront-spool.py` | DoT 明文内腿采集（给 devfp，见 3.2） |
 | `probe-srcaddr.service` | `/usr/sbin/ip addr replace 172.18.0.99/16 dev docker0` | 给探针准备一个独立源地址 |
 | `unbound-b-53-block.service` | iptables 封 unbound-b 的明文 53 出站 | 配合 6.4 防火墙 |
-| `dnsguard-firewall.service` | `/usr/local/sbin/dnsguard-fw.sh --apply` | 一次性应用防火墙（oneshot，exited） |
+| `dnsguard-fw-reconcile.service` | `/usr/local/sbin/dnsguard-fw.sh`（`DNSGW_FW_TRIGGER=reconcile`） | 容器 IP 漂移 / 容器重建后重新收敛防火墙（oneshot） |
+| `dnsguard-ip-reconcile.service` | `/usr/local/sbin/dnsguard-ip-reconcile.sh` | 对账 6 处容器地址引用 |
 | `cgroup-memsw-limits.service` | 设置内存/swap 限额 | 资源治理 |
 
 **定时器（systemd timers）**
@@ -155,7 +156,7 @@
 |---|---|---|
 | `35 4 * * *` | `/bin/bash $CODE_DIR/tools/refresh-all-cn-lists.sh` | **统一名单刷新**（域名名单 → 否决+IP → 校验三步） |
 | `48 8 * * *` | `/root/.acme.sh/acme.sh --cron` | 证书自动续期（含部署钩子，会同步 nginx 与 AGH） |
-| `*/5 * * * *` | `/root/dsh-scripts/adg-stats.py` | AGH 统计采集（与本链路弱相关） |
+| `*/5 * * * *` | 宿主私有的 AGH 统计采集脚本 | AGH 统计采集（与本链路弱相关；该脚本不在本仓库） |
 | `26 22 * * *` | 宝塔面板自身任务 | 与本链路无关 |
 
 **关键脚本（按目录）**
@@ -202,7 +203,6 @@
 | `unbound-alt-readiness.py` | 42160 B | alt 就绪门（含启动验证） |
 | `dnsguard-alt-warmup.py` | 2284 B | alt 缓存预热 |
 | `dns-chain-probe.py` | 10712 B | 分层探针（严格 TLS） |
-| `dnsguard-alt-restart.sh` | 1108 B | 重启 alt 并等就绪 |
 
 `/opt/chainmon/`、`/opt/devfp/`（看板）：`chainmon.py`（采集后端，127.0.0.1:8787）、`qlog_window.py`（AGH 查询日志窗口统计）、`resource_probe.py`（资源探针）、`devfp.py`（指纹后端，127.0.0.1:8789）、`index.html`（两个看板前端）、`join.html`（/join 采集页，**每次请求读盘，改它不用重启**）。
 
@@ -916,7 +916,7 @@ cron 04:35
 ### 4.9 信任白名单（`cn-trust-allow.txt`，46 行 / 19 条）
 
 - **当前 19 条**（apex）：`qq.com`、`baidu.com`、`taobao.com`、`tmall.com`、`alipay.com`、`jd.com`、`163.com`、`weibo.com`、`bilibili.com`、`zhihu.com`、`douyin.com`、`xiaomi.com`、`huawei.com`、`meituan.com`、`pinduoduo.com`、`tencent.com`、`aliyun.com`、`toutiao.com`、`kuaishou.com`；
-- **怎么定的**：探针实测"A 与 B 都能正常回答"（`probe-allow.py`），并**排除**了 `sohu.com`（它的 apex 在 A 上 SERVFAIL，进白名单会掩盖问题）；
+- **怎么定的**：探针实测"A 与 B 都能正常回答"（用 `probes/` 下的探针逐条核对），并**排除**了 `sohu.com`（它的 apex 在 A 上 SERVFAIL，进白名单会掩盖问题）；
 - **作用**：命中的国内域 ⇒ 国内源答案**免见证**直接采用（减少一次往返、降低延迟）；
 - **计数**：`cn_trust_allow_entries`、`cn_trust_allow_missing`、`cn_trust_bypass`。
 
@@ -1143,7 +1143,7 @@ bash $CODE_DIR/tools/make-snapshot.sh   # → /root/dns-snapshot-<日期>/（+ t
 
 ### 7.1 单机单出口（审计 F5，已登记）
 
-所有入口、决策、上游、监控都在**一台 2 GiB 的服务器**上。这台机器挂了，家里和公网的解析全挂。**当前没有第二台入口或异机恢复方案**（文档 `HOST-SPOF-20261015.md` 列出了 11 个共享单点与恢复路径，但没建高可用）。
+所有入口、决策、上游、监控都在**一台 2 GiB 的服务器**上。这台机器挂了，家里和公网的解析全挂。**当前没有第二台入口或异机恢复方案**（内部审计记录列出了 11 个共享单点与恢复路径，但没建高可用；该审计文档未随仓库发布）。
 
 ### 7.2 公网入口没有客户端认证（审计 F3，用户决定不动）
 
@@ -1226,7 +1226,7 @@ python3 /opt/dnsguard/external-probe.py
 bash $CODE_DIR/tools/make-snapshot.sh
 ```
 
-### 8.2 关键数值速查（截至 2026-10-15 23:3x）
+### 8.2 关键数值速查（截至 2026-10-15 23:3x；此后新增的 dnsdist 与 aghdq2 / aghcf 未计入本表）
 
 | 项 | 值 |
 |---|---|
@@ -1292,4 +1292,4 @@ bash $CODE_DIR/tools/make-snapshot.sh
 
 **文档结束。**
 
-> 这份文档描述的是 **2026-10-15 23:3x** 的实际状态。系统每天都在按 timer 自检、按 cron 刷新名单，所以具体数值（条目数、计数、PID）会变；**结构、判据与流程不会变**——它们才是这份文档的重点。
+> 这份文档的结构、判据与流程按 **2026-10-25** 的实盘同步；其中的具体数值（条目数、计数、PID、发布号）截止 **2026-10-15 23:3x**。系统每天都在按 timer 自检、按 cron 刷新名单，所以这些数值会变；**结构、判据与流程才是这份文档的重点**。
