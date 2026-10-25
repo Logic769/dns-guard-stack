@@ -413,6 +413,14 @@ run "install -m 0644 '$RUNTIME_DIR/dotfront-spool.service' /etc/systemd/system/d
 render "$HERE/deploy/systemd/dotfront-spool.service.d/20-ip-reconcile.conf" "$RUNTIME_DIR/dotfront-spool-ip.conf"
 run "install -m 0644 '$RUNTIME_DIR/dotfront-spool-ip.conf' /etc/systemd/system/dotfront-spool.service.d/20-ip-reconcile.conf"
 
+# cgroup v1 内存策略脚本（deploy/bin/cgroup-memsw-limits.sh + 同名 oneshot 单元）：
+# 补齐 systemd v219 不支持的能力（slice 的 MemoryHigh、MemorySwapMax）—— 关键 DNS 服务
+# 禁换出、看板允许有限换出。脚本按 /sys/fs/cgroup/**/memory.* 是否存在逐条 apply，
+# cgroup v2 上全是 no-op，不会因缺文件失败；因此装上即用、也可安全 disabled。
+run "install -d -m 0755 /usr/local/bin"
+run "install -m 0755 '$HERE/deploy/bin/cgroup-memsw-limits.sh' /usr/local/bin/cgroup-memsw-limits.sh"
+run "install -m 0644 '$HERE/deploy/systemd/cgroup-memsw-limits.service' /etc/systemd/system/cgroup-memsw-limits.service"
+
 # 栈内路径与档位：单一 drop-in（渲染后写入，避免污染上面的原件）
 PATHS_CONF=/etc/systemd/system/dnsguard.service.d/zzzzzzzzz-stack-paths.conf
 if [ "$DRY" != 1 ]; then
@@ -525,6 +533,8 @@ run "sed -i -e 's|172\.18\.0\.6|$AGHDQ_IP|g' \
 rewrite_paths "'$CODE_DIR'/tools/* '$CODE_DIR'/probes/* '${CHAINMON_DIR:-/opt/chainmon}'/* '${DEVFP_DIR:-/opt/devfp}'/*"
 run "systemctl daemon-reload"
 run "systemctl enable --now dnsguard.service dnsguard-verifier.service"
+# oneshot：启动时施加一次；失败只告警（多数环境是 cgroup v2，脚本本就是 no-op）
+run "systemctl enable --now cgroup-memsw-limits.service" || warn "cgroup-memsw-limits 未启动（cgroup v2 下无意义，可忽略）"
 
 # ------------------------------------------------------------------ 首次发布
 # 为什么必须做：deploy_release.sh 与两道门禁（release_consistency.py /
