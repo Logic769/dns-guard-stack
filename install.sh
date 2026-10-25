@@ -184,6 +184,11 @@ run "find '$HERE'/probes -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/probes/' 
 run "find '$HERE'/tools -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/' {} +"
 run "find '$HERE'/probes -maxdepth 1 -type f -exec cp -f -t '$CODE_DIR/' {} +"
 run "find '$HERE'/firewall -maxdepth 1 -type f -exec cp -f -t /usr/local/sbin/ {} + 2>/dev/null || true"
+# alt 就绪门禁的探针脚本：单元写死 ExecStart=/usr/local/sbin/unbound-alt-readiness.py
+# ⇒ 必须落在这个位置（与 firewall/ 同属宿主侧工具，不随 release 切换）。
+# 它自己从 ALT_READY_RELEASE_DIR import alt_adapter，所以「适配器」跟发布走、「检查逻辑」
+# 跟安装走：读侧常量（ALT_READY_MAX_AGE / ALT_CONFIG_HASH）永远是当前发布的那份。
+run "install -m 0755 '$HERE/core/unbound-alt-readiness.py' /usr/local/sbin/unbound-alt-readiness.py"
 # 验收脚本随代码落位：安装结束会提示「验收：./verify.sh」，verify.sh 不在 $CODE_DIR
 # 的话用户按提示执行只会得到 No such file。同放一份 .env，让 verify.sh / 运维脚本
 # 读到本次安装的实际路径，而不是模板默认值。
@@ -200,7 +205,7 @@ run "sed -i -e 's|/opt/dnscrypt-proxy|$LISTS_DIR|g' \
       -e 's|/opt/dnsguard/current|$CODE_DIR|g' \
       -e 's|/opt/dnsguard|$CODE_DIR|g' '$CODE_DIR'/tools/* '$CODE_DIR'/probes/* \
       '$CODE_DIR'/*.py '$CODE_DIR'/*.sh 2>/dev/null || true"
-run "python3 -m py_compile '$CODE_DIR'/guard.py '$CODE_DIR'/verifier.py '$CODE_DIR'/alt_adapter.py '$CODE_DIR'/answer_policy.py"
+run "python3 -m py_compile '$CODE_DIR'/guard.py '$CODE_DIR'/verifier.py '$CODE_DIR'/alt_adapter.py '$CODE_DIR'/answer_policy.py '$CODE_DIR'/unbound-alt-readiness.py"
 info "代码就位：$CODE_DIR/（guard.py verifier.py alt_adapter.py answer_policy.py …）"
 
 step "渲染容器配置"
@@ -391,6 +396,14 @@ for _unit in dnsguard dnsguard-verifier chainmon devfp; do
   run "find '$_src' -maxdepth 1 -type f -name '*.conf' -exec install -m 0644 -t /etc/systemd/system/$_unit.service.d/ {} +"
 done
 
+# alt 就绪门禁（unbound-alt-readiness.service + .timer）：guard 的 alt 备用通道是
+# **fail-closed** 的 —— 读不到 /run/unbound-alt-ready.json 就整条关闭。只装代码不装
+# 这个单元，一键部署出来的栈里 alt 永远是关的（此前正是这个缺口，2026-10-25 接上）。
+run "install -m 0644 '$HERE/deploy/systemd/unbound-alt-readiness.service' /etc/systemd/system/unbound-alt-readiness.service"
+run "install -m 0644 '$HERE/deploy/systemd/unbound-alt-readiness.timer' /etc/systemd/system/unbound-alt-readiness.timer"
+run "install -d -m 0755 /etc/systemd/system/unbound-alt-readiness.service.d"
+run "find '$HERE/deploy/systemd/unbound-alt-readiness.service.d' -maxdepth 1 -type f -name '*.conf' -exec install -m 0644 -t /etc/systemd/system/unbound-alt-readiness.service.d/ {} +"
+
 # DoT 明文内腿采集器（dotfront-spool）：给 devfp 提供 EDNS/COOKIE/PADDING/DO/0x20 明文画像。
 # 前置：DoT stream 的内腿必须是明文（deploy/nginx/tcp/dnsguard-dot-853.conf 里 proxy_pass 直连 adgh:53）。
 run "install -d -m 0755 /etc/systemd/system/dotfront-spool.service.d"
@@ -433,6 +446,11 @@ Environment=GUARD_FAST_UDP=127.0.0.1:5399
 # dnscrypt-proxy 是宿主进程、绑在 lo 的别名地址上）；容器化后 dnscrypt-proxy 只监听
 # 宿主 127.0.0.1:5399 ⇒ 不对齐会让影子对比（GUARD_SHADOW_PCT=10）静默全失败。
 Environment=GUARD_SHADOW_DNSCRYPT=127.0.0.1:5399
+# alt 门的 pid 指纹：写侧（unbound-alt-readiness）从被测容器的 bind mount 反查
+# unbound.pid 并把 (inode,mtime_ns) 写进状态文件，读侧（alt_adapter.ALT_PIDFILE）
+# 默认去 /opt/unbound-alt/unbound.pid 比对。两处目录不同名时会出现「写侧有指纹、
+# 读侧 stat 不到 ⇒ pidfile_gone ⇒ 永久假关闭」，所以这里显式对齐实际运行目录。
+Environment=GUARD_ALT_PIDFILE=$RUNTIME_DIR/unbound-alt/unbound.pid
 Environment=GUARD_CN_DOMESTIC_PRIMARY=1
 Environment=GUARD_CN_DOMESTIC_TRUST_B=1
 Environment=GUARD_CN_DOMESTIC_ZERO_TTL_ONESHOT=1
@@ -461,6 +479,18 @@ run "sed -i 's|/opt/dnsguard/current|$CODE_DIR|g' /etc/systemd/system/dnsguard.s
 # 而看板文件本身装到 ${CHAINMON_DIR:-/opt/chainmon}（见「看板」段）。
 # 不一起改写就会出现「文件装在新目录、systemd 去旧目录启动」的错位。
 run "sed -i -e 's|/opt/chainmon|${CHAINMON_DIR:-/opt/chainmon}|g' -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g'       /etc/systemd/system/chainmon.service /etc/systemd/system/devfp.service       /etc/systemd/system/chainmon.service.d/*.conf /etc/systemd/system/devfp.service.d/*.conf 2>/dev/null || true"
+# alt 就绪门禁单元：配置目录与状态文件跟着 .env 走。
+#  · ALT_READY_CONFIG_DIRS 是 config_hash() 的哈希对象，必须是被**实际探测的那个
+#    容器**的配置目录。探的是 aghdq（见 drop-in 里的 ALT_READY_CONTAINER=aghdq），
+#    所以哈希对象是 $RUNTIME_DIR/aghdq；写成 unbound-alt 的目录会让 aghdq 改配置
+#    不失效（假 ready）。注意仓库里 GUARD_ALT_CONFIG_HASH 未设，guard 侧不比对哈希，
+#    因此这条判据只在写侧生效（配置一变 consecutive_ok 归零、ready 变 False）。
+#  · ALT_READY_RELEASE_DIR 先写平铺的 $CODE_DIR（一定存在），首个发布建立后再改到
+#    current —— 顺序见下面「建立首个发布」段之后的一步。
+run "sed -i -e 's|^Environment=ALT_READY_CONFIG_DIRS=.*|Environment=ALT_READY_CONFIG_DIRS=$RUNTIME_DIR/aghdq|' \
+      -e 's|^Environment=ALT_READY_STATE=.*|Environment=ALT_READY_STATE=/run/unbound-alt-ready.json|' \
+      -e 's|^Environment=ALT_READY_RELEASE_DIR=.*|Environment=ALT_READY_RELEASE_DIR=$CODE_DIR|' \
+      /etc/systemd/system/unbound-alt-readiness.service 2>/dev/null || true"
 # drop-in 里的「端口」也要跟 .env 对齐：仓库原件按生产默认写死
 #   5533 = aghdq 宿主映射（DoQ 主通道）
 #   5534 = aghdq2（Quad9）
@@ -475,6 +505,11 @@ run "sed -i -e 's|^\(Environment=GUARD_CN_VETO_WITNESS=127\.0\.0\.1:\)[0-9]\+|\1
       -e 's|^\(Environment=GUARD_DOQ3_PORT=\)[0-9]\+|\1${AGHCF_DNS_PORT:-5535}|' \
       -e 's|^\(Environment=GUARD_ALT_ADDR=127\.0\.0\.1:\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
       /etc/systemd/system/dnsguard.service.d/*.conf 2>/dev/null || true"
+# alt 就绪门禁探的必须是**同一个端口**：GUARD_ALT_ADDR 上一步被改写成了
+# 127.0.0.1:${AGHDQ_DNS_PORT}，探针若还打仓库默认的 5533，改端口后门禁会一直
+# check_failed ⇒ alt 永久关闭（不报错，只是静默不可用）。
+run "sed -i -e 's|^\(Environment=ALT_READY_PORT=\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
+      /etc/systemd/system/unbound-alt-readiness.service.d/*.conf 2>/dev/null || true"
 # drop-in 里的「容器网段 IP」同样要跟 .env 对齐（DOCKER_SUBNET / *_IP 都可配）。
 # 仓库原件按默认 172.18.0.0/16 写死；改网段后 GUARD_LISTEN_HOST / 见证 / 上游池
 # 会指向不存在的地址。先替换 .8/.6/.5/.4/.2 再替换 .1，避免短前缀误伤长地址。
@@ -519,11 +554,35 @@ else
     else
       warn "首个发布建立失败（多为名单未就绪）；DNS 主链路不受影响"
       warn "  名单就绪后手动执行：sudo bash $CODE_DIR/tools/make-release.sh --migrate-units"
+      warn "  建完发布后再跑一次 install.sh（或改 ALT_READY_RELEASE_DIR + daemon-reload）：门禁现在从平铺目录 import"
     fi
   else
     warn "缺少 cn-veto.snapshot.txt（名单未拉取），跳过首个发布"
     warn "  名单就绪后手动执行：sudo bash $CODE_DIR/tools/make-release.sh --migrate-units"
+    warn "  建完发布后再跑一次 install.sh（或改 ALT_READY_RELEASE_DIR + daemon-reload）：门禁现在从平铺目录 import"
   fi
+fi
+# ------------------------------------------------------------ alt 就绪门禁（启用）
+# 必须放在「首个发布」之后：current 软链到这一步才存在，而门禁要 import **当前发布**的
+# alt_adapter（读侧 ALT_READY_MAX_AGE / ALT_CONFIG_HASH 必须与 guard 同版本，否则门开着
+# 而 guard 侧判定为过期）。
+if [ -e "$CODE_DIR/current" ] || [ -L "$CODE_DIR/current" ]; then
+  _alt_rel="$CODE_DIR/current"
+else
+  # 首个发布被跳过（名单没就绪）时退回平铺目录：宁可配对弱一级，也不让门禁直接死掉
+  _alt_rel="$CODE_DIR"
+fi
+run "sed -i 's|^Environment=ALT_READY_RELEASE_DIR=.*|Environment=ALT_READY_RELEASE_DIR=$_alt_rel|' /etc/systemd/system/unbound-alt-readiness.service 2>/dev/null || true"
+run "systemctl daemon-reload"
+if [ "$DRY" = 1 ]; then
+  # run() 在 dry-run 下只 printf 且恒返回 0，直接 if run 会误报"已启用"
+  info "（dry-run）将执行：systemctl enable --now unbound-alt-readiness.timer（import 目录 $_alt_rel）"
+elif run "systemctl enable --now unbound-alt-readiness.timer"; then
+  # 立刻跑一次：否则要等第一个 60 s tick 才有状态文件，验收会误判成"门禁没接"
+  run "systemctl start unbound-alt-readiness.service || true"
+  info "alt 就绪门禁已启用：unbound-alt-readiness.timer（每分钟；import 目录 $_alt_rel；连续两轮成功才 ready，最长约 120 s）"
+else
+  warn "alt 就绪门禁未启用 ⇒ guard 的 alt 备用通道保持关闭（主链路不受影响）"
 fi
 run "systemctl enable --now dotfront-spool.service" || warn "dotfront-spool 未启动（需 DoT 明文内腿 + CAP_NET_RAW）；不影响 DNS 解析"
 if [ "$DRY" != 1 ]; then sleep 3; systemctl --no-pager --lines=0 status dnsguard.service dnsguard-verifier.service 2>&1 | sed -n '1,12p' || true; fi

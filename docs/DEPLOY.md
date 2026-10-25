@@ -121,7 +121,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 5. **容器**：`docker compose up -d`；按需等待 AdGuard Home 面板就绪并设置管理员密码、AGH 上游指向 guard
 6. **证书**：自签 / ACME / 复用你给的路径
 7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`（该文件由安装脚本按当时的 apiKey 生成，仓库里没有，改口令后需重跑安装或手改）。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）
-8. **systemd**：安装单元与 timer（含 DoT 明文内腿采集器 `dotfront-spool`），`daemon-reload` + `enable --now`；写入内存限额
+8. **systemd**：安装单元与 timer（含 DoT 明文内腿采集器 `dotfront-spool`、alt 就绪门禁 `unbound-alt-readiness.timer`），`daemon-reload` + `enable --now`；写入内存限额。就绪门禁每分钟探一次 alt 目标并产出 `/run/unbound-alt-ready.json`（`ALT_READY_PORT` 跟随 `AGHDQ_DNS_PORT`，身份绑定 `ALT_READY_CONTAINER=aghdq`）；没有这个文件 guard 的 alt 通道是 fail-closed 关闭的
 9. **防火墙**：`firewall/dnsguard-fw.sh --apply`（先算目标表 → 自检 → 单次 `iptables-restore`，失败回滚）
 10. **验收**：`tools/release_consistency.py` + 回环探针；失败会打印诊断命令（不阻断安装）
 

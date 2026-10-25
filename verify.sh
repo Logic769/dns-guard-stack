@@ -45,6 +45,45 @@ for u in chainmon devfp; do
   st=$(systemctl is-active "$u" 2>/dev/null || true)
   [ "$st" = active ] && ok "$u active" || warn "$u 未运行（可选看板）"
 done
+# alt 就绪门禁：guard 侧是 fail-closed —— 读不到状态文件就整条关闭 alt 通道。
+# 所以「timer 在跑」不等于「alt 可用」：还要看文件里的 ready 与年龄（>=90s 即过期）。
+if [ -f /etc/systemd/system/unbound-alt-readiness.timer ]; then
+  st=$(systemctl is-active unbound-alt-readiness.timer 2>/dev/null || true)
+  [ "$st" = active ] && ok "unbound-alt-readiness.timer active" \
+                     || bad "就绪门禁定时器状态=$st（alt 通道保持关闭）"
+  _ap=${ALT_READY_STATE:-/run/unbound-alt-ready.json}
+  if [ -s "$_ap" ]; then
+    # age 必须参与判定：门禁进程一旦起不来（import 失败/单元挂掉），状态文件会冻结在
+    # 最后一次 ready=True 上，而 guard 侧按 mtime 判 state_stale ⇒ alt 已关闭。
+    # 只看 ready=True 会把「静默失效」报成 ✓。
+    _as=$(python3 - "$_ap" <<'PY'
+import json,os,sys,time
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except Exception as e:
+    print("parse_error=%r" % (e,)); raise SystemExit(0)
+age = int(time.time() - os.stat(p).st_mtime)
+try:
+    maxage = float(os.environ.get("GUARD_ALT_READY_MAX_AGE", "90"))
+except Exception:
+    maxage = 90.0
+print("ready=%s stale=%s age=%ds max_age=%gs consecutive_ok=%s reason=%s"
+      % (d.get("ready"), age > maxage, age, maxage,
+         d.get("consecutive_ok"), d.get("reason")))
+PY
+)
+    case "$_as" in
+      ready=True*stale=False*) ok "alt 就绪：$_as" ;;
+      ready=True*stale=True*)  warn "alt 状态过期（门禁进程可能已挂）：$_as ⇒ guard 判 state_stale，alt 通道关闭" ;;
+      *)                       warn "alt 未就绪：$_as（alt 通道关闭，属降级不是故障）" ;;
+    esac
+  else
+    warn "无 $_ap（门禁还没跑过，或 alt 通道未启用）"
+  fi
+else
+  warn "未安装 unbound-alt-readiness.timer（alt 通道会保持关闭）"
+fi
 if compgen -G "$CODE_DIR/*.log" >/dev/null 2>&1; then :; fi
 tb=$(grep -c 'Traceback' /var/log/dnsguard.log 2>/dev/null || true); tb=${tb:-0}
 [ "$tb" = 0 ] && ok "dnsguard.log 无 Traceback" || bad "dnsguard.log 有 $tb 处 Traceback"
