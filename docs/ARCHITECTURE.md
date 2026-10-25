@@ -13,10 +13,12 @@
 | 上游 | `unbound-b`（B） | 宿主 `127.0.0.1:5354` | 转发 → 6 家国内 DoT；不验签，答案须经 guard 约束 |
 | 上游 | `unbound-alt` | 宿主 `127.0.0.1:5357` | 独立第三方 DoT，用于交叉见证 |
 | 出口 | AdGuard Home 容器 `aghdq` | 宿主 `127.0.0.1:5533` | 唯一上游 `quic://dns.nextdns.io`，`bootstrap` 走明文 223.5.5.5 |
+| 出口 | AdGuard Home 容器 `aghdq2` | 宿主 `127.0.0.1:5534` | 第二条 DoQ 通道：`quic://dns10.quad9.net`（独立运营方，guard 的 slow 列表） |
+| 出口 | AdGuard Home 容器 `aghcf` | 宿主 `127.0.0.1:5535` | `tls://1.1.1.1`（裸 IP DoT）：国内域名存在性见证源 + SERVFAIL 快速透传源 |
 | 影子 | `dnscrypt-proxy` | 宿主 `127.0.0.1:5399` | 给 guard 做影子对比（`GUARD_SHADOW_*`） |
 | 观测 | `chainmon` / `devfp` | `127.0.0.1:8787` / `:8789` | 链路看板 / 设备指纹看板（Basic Auth 后置于 nginx） |
 
-> 容器都在同一个 bridge 网络里，用**固定 IP**（默认 `172.18.0.0/16`）：`adgh=.2`、`unbound=.4`、`unbound-b=.5`、`aghdq=.6`、`unbound-alt=.8`。guard 用 docker0 网关地址监听，AdGuard Home 通过网关访问 guard。
+> 容器都在同一个 bridge 网络里，用**固定 IP**（默认 `172.18.0.0/16`）：`adgh=.2`、`unbound=.4`、`unbound-b=.5`、`aghdq=.6`、`unbound-alt=.8`、`dnscrypt=.9`、`aghdq2=.11`、`aghcf=.12`。guard 用 docker0 网关地址监听，AdGuard Home 通过网关访问 guard。
 > 修改 `.env` 里的网段/IP 后必须重新 `./install.sh`（并跑 `firewall/dnsguard-ip-reconcile.sh --check`）。
 
 ## 2. 一次查询的旅程

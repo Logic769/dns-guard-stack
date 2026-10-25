@@ -58,13 +58,15 @@ guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
 | verifier | 独立进程核验，握手检查代码版本；并非另一台独立服务器 | systemd · [verifier](core/verifier.py) |
 | Unbound A：容器名 `unbound` | 本机验证 DNSSEC；经 aghdq 转发到加密上游 | Docker · [A 配置](deploy/containers/unbound-a.conf.tpl) |
 | `aghdq` | 第二个 AdGuard Home，专门充当 A 侧 DoQ 出口 | Docker · [出口配置](deploy/containers/aghdq.AdGuardHome.yaml.tpl) |
+| `aghdq2` | 第二条独立 DoQ 出口（Quad9 dns10），guard 的 slow 列表候选，只在 hedge 之后并发 | Docker · [出口配置](deploy/containers/aghdq2.AdGuardHome.yaml.tpl) |
+| `aghcf` | Cloudflare 1.1.1.1（DoT）：国内域名存在性见证源 + SERVFAIL 快速透传源 | Docker · [出口配置](deploy/containers/aghcf.AdGuardHome.yaml.tpl) |
 | Unbound B | 国内 DoT 解析候选；其答案仍受 guard 策略约束 | Docker · [B 配置](deploy/containers/unbound-b.conf.tpl) |
 | Unbound alt | 独立第三方 DoT 路径，参与核对和受门禁约束的备用解析 | Docker · [alt 适配](core/alt_adapter.py) |
 | DNSCrypt | 加密候选与影子采样，不能把它的应答直接当作 DNSSEC 证据 | Docker · [配置模板](deploy/containers/dnscrypt-proxy.toml.tpl) |
 | Chainmon | 展示服务器链路、统计和健康信息 | [Chainmon 源码](dashboards/chainmon/) |
 | devfp / dotfront-spool | 根据服务端可见的请求特征辅助归类来源；采集 DoT 解密后的本机内腿 | [devfp](dashboards/devfp/) / [采集器](tools/dotfront-spool.py) |
 
-A、B、alt 是不同解析路径；`aghdq` 是 A 的出口，不是第四个独立验证器。图中的旁路采集与统计也不意味着每次查询都要等待所有组件。
+A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或见证源，不是新的独立验证器。图中的旁路采集与统计也不意味着每次查询都要等待所有组件。
 
 ## 一次查询如何完成
 

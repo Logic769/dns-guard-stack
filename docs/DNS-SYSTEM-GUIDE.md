@@ -50,7 +50,7 @@
 | ② 过滤缓存层 | 容器 `adgh`（172.18.0.2:53，另映射 127.0.0.1:4443/8854/3000） | AdGuard Home v0.107.73：过滤规则、DNS 缓存、查询日志 | **唯一上游**只有 guard，`fallback_dns: []` |
 | ③ 决策层 | 宿主进程 `guard`（172.18.0.1:5355 udp+tcp；5356 探针通道） | 防投毒核心：分流、判定、缓存、见证 | systemd `dnsguard.service`，发布 13 |
 | ④ 核验层 | 宿主进程 `verifier`（Unix socket `/run/dnsguard/verifier.sock`） | 独立进程做二次核验，隔离资源池 | systemd `dnsguard-verifier.service` |
-| ⑤ 上游层 | 容器 `unbound`(A, 172.18.0.4:5353)、`unbound-b`(B, 172.18.0.5:5354)、`unbound-alt`(alt, 172.18.0.8:5357)、`aghdq`(172.18.0.6:53)、`alt-replica-unb`(15353) | 三个 Unbound 实例 + 一个上游 AGH + 一个副本 | 全部 mvance/unbound:latest 或 adguard/adguardhome:v0.107.73 |
+| ⑤ 上游层 | 容器 `unbound`(A, 172.18.0.4:5353)、`unbound-b`(B, 172.18.0.5:5354)、`unbound-alt`(alt, 172.18.0.8:5357)、`aghdq`(172.18.0.6:53)、`aghdq2`(172.18.0.9:53)、`aghcf`(172.18.0.10:53)、`alt-replica-unb`(15353) | 三个 Unbound 实例 + 三个上游 AGH 出口（NextDNS / Quad9 / Cloudflare）+ 一个副本 | 全部 mvance/unbound:latest 或 adguard/adguardhome:v0.107.73 |
 | ⑥ 独立解析器 | 宿主进程 `dnscrypt-proxy`（127.0.0.2:5353、127.0.0.1:5399） | DNSCrypt/DoH 匿名中继出口 + 国内名单文件搬运 | systemd `dnscrypt-proxy-local.service` |
 | ⑦ 数据层 | `/opt/dnsguard/*.txt`、`/opt/dnscrypt-proxy/*.txt` | 六份名单 + 三份快照 | 见第 5 章 |
 | ⑧ 运维层 | systemd timers + cron + 脚本 | 部署门禁、IP 对账、防火墙对账、探针、看门狗、快照 | 见第 6 章 |
@@ -72,7 +72,9 @@
 | `127.0.0.1:5354` / `172.18.0.1:5354` | docker-proxy → unbound B | 国内分流源 |
 | `127.0.0.1:5357` | docker-proxy → unbound-alt | 认证备用源 |
 | `127.0.0.1:15353` | docker-proxy → alt-replica-unb | alt 的副本/演练用 |
-| `127.0.0.1:5533` | docker-proxy → aghdq | 上游 AGH 的回环映射 |
+| `127.0.0.1:5533` | docker-proxy → aghdq | 上游 AGH 的回环映射（guard 的 DoQ 主通道） |
+| `127.0.0.1:5534` | docker-proxy → aghdq2 | DoQ2（Quad9 dns10）通道 |
+| `127.0.0.1:5535` | docker-proxy → aghcf | CN 见证源 + SERVFAIL 快速透传源（Cloudflare 1.1.1.1 DoT） |
 | `127.0.0.1:4443` | docker-proxy → adgh:443 | AGH 自己的 DoH（nginx 443/444 的 `/dns-query` 反代到它） |
 | `127.0.0.1:8854` | docker-proxy → adgh:853 | AGH 自己的 DoT（**nginx 853 的 DoT 实际走到 172.18.0.2:53，不是这里**） |
 | `127.0.0.1:3000` | docker-proxy → adgh:3000 | AGH 管理面板 |
@@ -87,6 +89,8 @@
 |---|---|---|---|---|
 | `adgh` | adguard/adguardhome:v0.107.73 | 172.18.0.2 | 主入口：过滤 + 缓存 + 查询日志 | Up 2 days |
 | `aghdq` | adguard/adguardhome:v0.107.73 | 172.18.0.6 | 上游 AGH：转发到 `quic://dns.nextdns.io` | Up 4 days |
+| `aghdq2` | adguard/adguardhome:v0.107.73 | 172.18.0.9 | 第二条 DoQ 出口：`quic://dns10.quad9.net`（guard 的 slow 列表 / DoQ2） | Up 4 days |
+| `aghcf` | adguard/adguardhome:v0.107.73 | 172.18.0.10 | Cloudflare 1.1.1.1 DoT：CN 存在性见证 + SERVFAIL 快速透传 | Up 4 days |
 | `unbound` | mvance/unbound:latest | 172.18.0.4 | 境外主源 A（本地 DNSSEC 验证） | Up 5 days (healthy) |
 | `unbound-b` | mvance/unbound:latest | 172.18.0.5 | 国内分流 B（6 条国内加密 DoT） | Up 5 days (healthy) |
 | `unbound-alt` | mvance/unbound:latest | 172.18.0.8 | 认证备用（境外 DoT，独立 TCB） | Up 5 days (healthy) |

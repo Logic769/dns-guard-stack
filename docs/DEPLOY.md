@@ -66,13 +66,14 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 | `DOCKER_SUBNET` | `172.18.0.0/16` | 容器网段；与宿主已有网络冲突时改这里 |
 | `ALTREPLICA_SUBNET` | `10.99.0.0/24` | alt 副本网段 |
 | `GW_IP` | 空 ⇒ 自动探测 docker0 | guard 监听地址；**必须**与 AdGuard Home 里的上游地址一致 |
-| `AGH_IP` / `AGHDQ_IP` | `172.18.0.2` / `172.18.0.6` | 两个 AdGuard Home 容器 |
+| `AGH_IP` / `AGHDQ_IP` | `172.18.0.2` / `172.18.0.6` | 两个 AdGuard Home 容器（主入口 / 境外 DoQ 出口） |
+| `AGHDQ2_IP` / `AGHCF_IP` | `172.18.0.11` / `172.18.0.12` | 第二条 DoQ 出口（Quad9）/ 见证与 fastpass 源（Cloudflare） |
 | `UNBOUND_A_IP` / `UNBOUND_B_IP` / `UNBOUND_ALT_IP` | `.4` / `.5` / `.8` | 三个 Unbound |
 | `ALTREPLICA_IP` / `DNSCRYPT_IP` | `10.99.0.2` / `172.18.0.9` | alt 副本 / dnscrypt-proxy |
 
 ### 宿主端口
 
-`AGH_UI_PORT=3000`、`AGH_HTTPS_PORT=4443`（容器 443 → 回环，供 nginx DoH 反代）、`AGH_DOT_PORT=8854`（容器 853 → 回环）、`AGHDQ_UI_PORT=13000`、`AGHDQ_DNS_PORT=5533`（guard 见证通道）、`DOT_PORT=853`、`DOH_PORT=444`、`CHAINMON_PORT=8787`、`DEVFP_PORT=8789`。
+`AGH_UI_PORT=3000`、`AGH_HTTPS_PORT=4443`（容器 443 → 回环，供 nginx DoH 反代）、`AGH_DOT_PORT=8854`（容器 853 → 回环）、`AGHDQ_UI_PORT=13000`、`AGHDQ_DNS_PORT=5533`（guard 的 DoQ 主通道）、`AGHDQ2_UI_PORT=13001`、`AGHDQ2_DNS_PORT=5534`（DoQ2：Quad9）、`AGHCF_UI_PORT=13003`、`AGHCF_DNS_PORT=5535`（CN 见证 + fastpass）、`DOT_PORT=853`、`DOH_PORT=444`、`CHAINMON_PORT=8787`、`DEVFP_PORT=8789`。
 
 端口冲突时只改这里，`install.sh` 会把 nginx 片段与 AGH 上游一起改掉。
 

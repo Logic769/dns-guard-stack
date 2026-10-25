@@ -114,6 +114,7 @@ step "建立目录"
 for d in "$CODE_DIR" "$LISTS_DIR/backups" "$STATE_DIR" "$VERIFIER_STATE_DIR" "$BACKUP_DIR" \
          "$RUNTIME_DIR"/{unbound-a,unbound-b,unbound-alt,unbound-alt-replica} \
          "$RUNTIME_DIR"/adgh/{conf,work} "$RUNTIME_DIR"/aghdq \
+         "$RUNTIME_DIR"/aghdq2/work "$RUNTIME_DIR"/aghcf/work \
          "$RUNTIME_DIR"/dnscrypt-proxy/cache \
          "$CODE_DIR/cn-list-history" /run/dnsguard /var/log; do
   run "install -d -m 0755 '$d'"
@@ -224,6 +225,14 @@ PY
 fi
 render "$HERE/deploy/containers/aghdq.AdGuardHome.yaml.tpl" "$RUNTIME_DIR/aghdq/AdGuardHome.yaml"
 render "$HERE/deploy/containers/adgh.AdGuardHome.yaml.tpl"  "$RUNTIME_DIR/adgh/conf/AdGuardHome.yaml"
+# 2026-10-25：补回两条 guard 侧的独立来源容器（此前 compose 里没有，但随仓库发布的
+# dnsguard drop-in 已经把它们打开，见 zzzzzz-consolidated-20261010.conf:37/50/63/103）：
+#   aghdq2 → Quad9 dns10（DoQ），guard 的 DoQ2 通道（宿主 5534）
+#   aghcf  → Cloudflare 1.1.1.1（DoT），CN 见证 + SERVFAIL 快速透传源（宿主 5535）
+# 缺这两个容器时 guard 仍能工作（prewarm 失败、fastpass 超时后回退 alt），但会静默降级，
+# 所以这里必须与 compose 一起把它们装到位。
+render "$HERE/deploy/containers/aghdq2.AdGuardHome.yaml.tpl" "$RUNTIME_DIR/aghdq2/AdGuardHome.yaml"
+render "$HERE/deploy/containers/aghcf.AdGuardHome.yaml.tpl"  "$RUNTIME_DIR/aghcf/AdGuardHome.yaml"
 # dnscrypt-proxy：容器内监听 5353
 # `server_names` 必须锚定行首：模板第 87 行是 `disabled_server_names = []`，不锚定会被
 # 这条规则一并改写，把刚填进去的服务器名字全部塞进「禁用名单」⇒ 容器启动即
@@ -243,7 +252,7 @@ fi
 if [ -n "${AGH_ADMIN_PASSWORD:-}" ]; then
   HASH=$(docker run --rm httpd:2-alpine htpasswd -nbB "${AGH_ADMIN_USER:-admin}" "$AGH_ADMIN_PASSWORD" | cut -d: -f2 | tr -d '\n' || true)
   if [ -n "$HASH" ]; then
-    run "sed -i 's|^    password: .*|    password: $HASH|' '$RUNTIME_DIR/adgh/conf/AdGuardHome.yaml' '$RUNTIME_DIR/aghdq/AdGuardHome.yaml'"
+    run "sed -i 's|^    password: .*|    password: $HASH|' '$RUNTIME_DIR/adgh/conf/AdGuardHome.yaml' '$RUNTIME_DIR/aghdq/AdGuardHome.yaml' '$RUNTIME_DIR/aghdq2/AdGuardHome.yaml' '$RUNTIME_DIR/aghcf/AdGuardHome.yaml'"
     info "已写入 AGH 面板密码（用户 ${AGH_ADMIN_USER:-admin}）"
   else
     warn "bcrypt 生成失败，AGH 首次访问时请在 UI 里创建账号"
@@ -368,8 +377,17 @@ run "install -m 0644 '$HERE/deploy/systemd/dnsguard-verifier.service' /etc/syste
 run "install -m 0644 '$HERE/deploy/systemd/chainmon.service' /etc/systemd/system/chainmon.service"
 run "install -m 0644 '$HERE/deploy/systemd/devfp.service' /etc/systemd/system/devfp.service"
 run "install -d -m 0755 /etc/systemd/system/dnsguard.service.d /etc/systemd/system/dnsguard-verifier.service.d"
-run "install -m 0644 '$HERE/deploy/systemd/dnsguard.service.d/zzzzzz-consolidated-20261010.conf' /etc/systemd/system/dnsguard.service.d/"
-run "install -m 0644 '$HERE/deploy/systemd/dnsguard-verifier.service.d/zzzzzz-consolidated-20261010.conf' /etc/systemd/system/dnsguard-verifier.service.d/"
+# drop-in 一律「目录里有什么就装什么」：生产把这些调优拆成了多个 zzzzzzzz* 小文件
+# （pooln / hot-qps / query-deadline / sf-backoff / alt-doq / cn-domestic-trust /
+#  cn-domestic-zero-ttl / 50-hot-latency），只装 consolidated 会让一键部署出来的
+# guard 缺掉这些档位 —— 与仓库里实际发布的 drop-in 不一致（2026-10-25 修正）。
+# 顺序固定：consolidated 之后由 zzzzzzzzz-stack-paths.conf 覆盖路径/端口/内存。
+for _unit in dnsguard dnsguard-verifier chainmon devfp; do
+  _src="$HERE/deploy/systemd/$_unit.service.d"
+  [ -d "$_src" ] || continue
+  run "install -d -m 0755 /etc/systemd/system/$_unit.service.d"
+  run "find '$_src' -maxdepth 1 -type f -name '*.conf' -exec install -m 0644 -t /etc/systemd/system/$_unit.service.d/ {} +"
+done
 
 # DoT 明文内腿采集器（dotfront-spool）：给 devfp 提供 EDNS/COOKIE/PADDING/DO/0x20 明文画像。
 # 前置：DoT stream 的内腿必须是明文（deploy/nginx/tcp/dnsguard-dot-853.conf 里 proxy_pass 直连 adgh:53）。
@@ -395,12 +413,19 @@ Environment=GUARD_CN_TRUST_ALLOW_FILE=$LISTS_DIR/cn-trust-allow.txt
 Environment=GUARD_CN_TRUST_EXC_FILE=$LISTS_DIR/cn-trust-exceptions.txt
 Environment=GUARD_CN_TRUST_MODE=$CN_TRUST_MODE
 Environment=GUARD_CN_EXIST_MODE=$CN_EXIST_MODE
-Environment=GUARD_CN_VETO_WITNESS=127.0.0.1:${AGHDQ_DNS_PORT:-5533}
-# DoQ 中继（aghdq→NextDNS）与见证地址是两个独立变量（guard.py 里 _DOQ1 读
-# GUARD_DOQ/GUARD_DOQ_PORT，_witness_addr 读 GUARD_CN_VETO_WITNESS），
-# 两者都指向 aghdq 的宿主映射端口，必须一起跟着 .env 走。
+# 见证源是 aghcf（Cloudflare 1.1.1.1），不是 aghdq —— 两者是不同容器、不同端口。
+# 2026-10-25 修正：此前这里写成 AGHDQ_DNS_PORT，等于把生产的见证目标从 aghcf
+# 悄悄降级成 aghdq（同一个 NextDNS 出口），三家独立运营方的前提就没了。
+Environment=GUARD_CN_VETO_WITNESS=127.0.0.1:${AGHCF_DNS_PORT:-5535}
+# DoQ 中继与见证地址是三个独立变量（guard.py: _DOQ1/_DOQ2/_DOQ3 分别读
+# GUARD_DOQ(_PORT) / GUARD_DOQ2_PORT / GUARD_DOQ3_PORT，_witness_addr 读
+# GUARD_CN_VETO_WITNESS），全部跟着 .env 的宿主映射端口走。
 Environment=GUARD_DOQ=127.0.0.1
 Environment=GUARD_DOQ_PORT=${AGHDQ_DNS_PORT:-5533}
+Environment=GUARD_DOQ2_PORT=${AGHDQ2_DNS_PORT:-5534}
+Environment=GUARD_DOQ3_PORT=${AGHCF_DNS_PORT:-5535}
+# SERVFAIL 快速透传源同样是 aghcf（consolidated drop-in 里硬编码 5535）
+Environment=GUARD_FASTPASS_ADDR=127.0.0.1:${AGHCF_DNS_PORT:-5535}
 Environment=GUARD_FAST_UDP=127.0.0.1:5399
 # 影子抽样目标：consolidated drop-in 里写的是 127.0.0.2:5353（systemd 部署时
 # dnscrypt-proxy 是宿主进程、绑在 lo 的别名地址上）；容器化后 dnscrypt-proxy 只监听
@@ -430,12 +455,18 @@ rewrite_paths() { # rewrite_paths <file...>
         -e 's|/opt/devfp|${DEVFP_DIR:-/opt/devfp}|g' $* 2>/dev/null || true"
 }
 run "sed -i 's|/opt/dnsguard/current|$CODE_DIR|g' /etc/systemd/system/dnsguard.service /etc/systemd/system/dnsguard-verifier.service /etc/systemd/system/dnsguard.service.d/*.conf /etc/systemd/system/dnsguard-verifier.service.d/*.conf 2>/dev/null || true"
-# drop-in 里的「端口」也要跟 .env 对齐：仓库原件按生产默认写死 5533（aghdq 的宿主映射），
-# 测试/多实例环境把 AGHDQ_DNS_PORT 改成 15533 后若不改写，guard 会一直去 127.0.0.1:5533
-# 找 DoQ 中继与 CN 见证 ⇒ 日志里 `prewarm fail doq(aghdq:5533): 无应答` + 见证退化成不可用。
+# drop-in 里的「端口」也要跟 .env 对齐：仓库原件按生产默认写死
+#   5533 = aghdq 宿主映射（DoQ 主通道）
+#   5534 = aghdq2（Quad9）
+#   5535 = aghcf（见证 + fastpass）
+# 测试/多实例环境改任一端口后若不改写，guard 会一直去默认端口找 ⇒ 日志里
+# `prewarm fail doq(aghdq:5533): 无应答`、见证退化成不可用、fastpass 白等 0.8s 超时。
 # 这里按变量名精确改写端口数字，不动 IP 与协议部分。
-run "sed -i -e 's|^\(Environment=GUARD_CN_VETO_WITNESS=127\.0\.0\.1:\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
+run "sed -i -e 's|^\(Environment=GUARD_CN_VETO_WITNESS=127\.0\.0\.1:\)[0-9]\+|\1${AGHCF_DNS_PORT:-5535}|' \
+      -e 's|^\(Environment=GUARD_FASTPASS_ADDR=127\.0\.0\.1:\)[0-9]\+|\1${AGHCF_DNS_PORT:-5535}|' \
       -e 's|^\(Environment=GUARD_DOQ_PORT=\)[0-9]\+|\1${AGHDQ_DNS_PORT:-5533}|' \
+      -e 's|^\(Environment=GUARD_DOQ2_PORT=\)[0-9]\+|\1${AGHDQ2_DNS_PORT:-5534}|' \
+      -e 's|^\(Environment=GUARD_DOQ3_PORT=\)[0-9]\+|\1${AGHCF_DNS_PORT:-5535}|' \
       /etc/systemd/system/dnsguard.service.d/*.conf 2>/dev/null || true"
 # drop-in 里的「容器网段 IP」同样要跟 .env 对齐（DOCKER_SUBNET / *_IP 都可配）。
 # 仓库原件按默认 172.18.0.0/16 写死；改网段后 GUARD_LISTEN_HOST / 见证 / 上游池

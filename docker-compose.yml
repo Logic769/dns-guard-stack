@@ -116,6 +116,44 @@ services:
       dnsnet:
         ipv4_address: ${AGHDQ_IP:-172.18.0.6}
 
+  # --------------------------------- 第二条 DoQ 通道（Quad9 dns10，独立运营方）
+  # guard 侧 GUARD_DISABLE_DOQ2=0（见 dnsguard.service.d/zzzzzz-consolidated-20261010.conf）
+  # ⇒ 它属于 slow 列表，只在 HEDGE_MS 之后并发启动，不会拖慢首轮。
+  # 不部署它 guard 也能解析，只是少一条与 NextDNS 完全独立的干净通道。
+  aghdq2:
+    image: adguard/adguardhome:v0.107.73
+    container_name: aghdq2
+    restart: always
+    volumes:
+      - ${RUNTIME_DIR}/aghdq2:/opt/adguardhome/conf
+      - ${RUNTIME_DIR}/aghdq2/work:/opt/adguardhome/work
+    ports:
+      - "127.0.0.1:${AGHDQ2_UI_PORT:-13001}:13001"
+      - "127.0.0.1:${AGHDQ2_DNS_PORT:-5534}:53/tcp"
+      - "127.0.0.1:${AGHDQ2_DNS_PORT:-5534}:53/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${AGHDQ2_IP:-172.18.0.11}
+
+  # ------------------ 快速源 / CN 见证（Cloudflare 1.1.1.1 DoT，第三家运营方）
+  # 两个用途（都在 guard 侧，见 consolidated drop-in:63/103）：
+  #   GUARD_CN_VETO_WITNESS = 国内域名的存在性见证源
+  #   GUARD_FASTPASS_ADDR   = local-a 判 transport 时的 SERVFAIL 快速透传源
+  aghcf:
+    image: adguard/adguardhome:v0.107.73
+    container_name: aghcf
+    restart: always
+    volumes:
+      - ${RUNTIME_DIR}/aghcf:/opt/adguardhome/conf
+      - ${RUNTIME_DIR}/aghcf/work:/opt/adguardhome/work
+    ports:
+      - "127.0.0.1:${AGHCF_UI_PORT:-13003}:13003"
+      - "127.0.0.1:${AGHCF_DNS_PORT:-5535}:53/tcp"
+      - "127.0.0.1:${AGHCF_DNS_PORT:-5535}:53/udp"
+    networks:
+      dnsnet:
+        ipv4_address: ${AGHCF_IP:-172.18.0.12}
+
   # ------------------------------------------------------ 加密中继（shadow）
   dnscrypt:
     image: klutchell/dnscrypt-proxy:latest
