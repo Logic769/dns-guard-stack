@@ -7,18 +7,19 @@
 | 入口 | `dnsdist`（宿主 systemd） | DoT `853/tcp`、DoH `444/tcp`（路径 `/dns-query`）、控制台 `127.0.0.1:5199`、统计 `127.0.0.1:18083` | TLS 终结；**保留真实客户端 IP**；内置 PacketCache（32k 条）；`dynBlockRulesGroup` 限速 200 qps/源 |
 | 入口（legacy） | nginx（宿主） | DoT `853/tcp`、DoH `443`、`444/tcp` | 2026-10-22 之前的入口：DoT 内腿明文转 `adgh:53`，DoH 反代 `agh_doh`。现已让位给 dnsdist，仅在跑不了 dnsdist 的机器上使用 |
 | 过滤/缓存 | AdGuard Home 容器 `adgh` | `53`（融合）、宿主 `127.0.0.1:3000`(UI) / `4443`(HTTPS) / `8854`(DoT) | 规则过滤、缓存、唯一上游 = guard |
-| 策略 | `guard`（宿主 systemd） | `docker0 网关:5355`(udp+tcp) + `:5356`(udp，探针通道) | 准入、共识、见证、否决、缓存代次、失败语义 |
+| 策略 | `guard`（宿主 systemd） | `dnsnet` 网关 `:5355`(udp+tcp，默认 `172.18.0.1`) + `:5356`(udp，探针通道) | 准入、共识、见证、否决、缓存代次、失败语义 |
 | 策略 | `verifier`（宿主 systemd） | `/run/dnsguard/verifier.sock`（AF_UNIX） | 独立进程做交叉验证，隔离慢查询 |
 | 上游 | `unbound`（A） | 宿主 `127.0.0.1:5353` | 转发 → `aghdq:53` → NextDNS(DoQ)；**本机验 DNSSEC**，`forward-first: no` |
 | 上游 | `unbound-b`（B） | 宿主 `127.0.0.1:5354` | 转发 → 6 家国内 DoT；不验签，答案须经 guard 约束 |
 | 上游 | `unbound-alt` | 宿主 `127.0.0.1:5357` | 独立第三方 DoT，用于交叉见证 |
+| 备用副本 | `alt-replica-unb` | 宿主 `127.0.0.1:15353` | alt 的独立网络副本（`10.99.0.0/24`），用于演练/灰度，不参与主链路 |
 | 出口 | AdGuard Home 容器 `aghdq` | 宿主 `127.0.0.1:5533` | 唯一上游 `quic://dns.nextdns.io`，`bootstrap` 走明文 223.5.5.5 |
 | 出口 | AdGuard Home 容器 `aghdq2` | 宿主 `127.0.0.1:5534` | 第二条 DoQ 通道：`quic://dns10.quad9.net`（独立运营方，guard 的 slow 列表） |
 | 出口 | AdGuard Home 容器 `aghcf` | 宿主 `127.0.0.1:5535` | `tls://1.1.1.1`（裸 IP DoT）：国内域名存在性见证源 + SERVFAIL 快速透传源 |
 | 影子 | `dnscrypt-proxy` | 宿主 `127.0.0.1:5399` | 给 guard 做影子对比（`GUARD_SHADOW_*`） |
 | 观测 | `chainmon` / `devfp` | `127.0.0.1:8787` / `:8789` | 链路看板 / 设备指纹看板（Basic Auth 后置于 nginx） |
 
-> 容器都在同一个 bridge 网络里，用**固定 IP**（默认 `172.18.0.0/16`）：`adgh=.2`、`unbound=.4`、`unbound-b=.5`、`aghdq=.6`、`unbound-alt=.8`、`dnscrypt=.9`、`aghdq2=.11`、`aghcf=.12`。guard 用 docker0 网关地址监听，AdGuard Home 通过网关访问 guard。
+> 容器都在 Compose 自定义网络 `dnsnet` 里（默认 `172.18.0.0/16`），用**固定 IP**：`adgh=.2`、`unbound=.4`、`unbound-b=.5`、`aghdq=.6`、`unbound-alt=.8`、`dnscrypt=.9`、`aghdq2=.11`、`aghcf=.12`。guard 监听该网络的网关地址（默认 `172.18.0.1`，由 `install.sh` 按 `GW_IP` 注入），AdGuard Home 经网关访问 guard；这个地址来自 `dnsnet` 的 ipam，**不是 `docker0` 的地址**。alt 副本 `alt-replica-unb` 单独在 `altreplica0`（`10.99.0.0/24`，`10.99.0.2`），不参与主链路。
 > 修改 `.env` 里的网段/IP 后必须重新 `./install.sh`（并跑 `firewall/dnsguard-ip-reconcile.sh --check`）。
 
 ## 2. 一次查询的旅程
@@ -67,6 +68,7 @@
 - `core/guard.py`：全部解析策略的唯一实现（准入缓存、共识与见证、名单、失败语义、指标）
 - `core/verifier.py`：从 guard 导入模块但**独立进程**运行，通过 AF_UNIX 收任务、分池并发、有界等待
 - `core/alt_adapter.py`：报文层工具（解析、应答绑定校验、UDP 交换、RRSIG/EDE 判定、逐 RR 老化、AD 位分档）
+- `core/unbound-alt-readiness.py`：alt 就绪门（探 5 项判据，绑定容器身份与配置哈希，写 `/run/unbound-alt-ready.json`；脚本装在 `/usr/local/sbin`，适配器仍从当前发布 import）
 - `core/answer_policy.py`：档位定义（`SECURE`/`ACCEPTED`/`BOGUS`/`TRANSPORT`）与版本号；版本变化即让准入缓存失效
 - `tools/*`：名单刷新与归档验签、发布门禁与回滚、快照、看门狗、缓存撤销、DoT 明文内腿采集（`dotfront-spool.py`）
 - `firewall/*`：把 iptables 收敛变成"单次原子替换"（先算好目标表 → 自检 → 一次 restore，失败自动回滚）
@@ -86,6 +88,7 @@
 | `<LISTS_DIR>/cn-trust-allow.txt` | 人工白名单（免见证） |
 | `<LISTS_DIR>/cn-trust-exceptions.txt` | 强制例外（**不**走国内路径、**不**信任） |
 | `<CODE_DIR>/cn-list-history/` | 每次名单变更的归档 + `MANIFEST.sha256` + GPG 签名 |
+| `/run/unbound-alt-ready.json` | alt 就绪门结果（`unbound-alt-readiness.timer` 每分钟写，90 s 有效；缺失或过期 ⇒ guard 关闭 alt 通道） |
 
 ## 6. 开关速查
 

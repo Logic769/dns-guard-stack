@@ -64,7 +64,7 @@
 | `0.0.0.0:444` (tcp) | dnsdist | DoH 专用端口（`addDOHLocal`，**仅**放行 `/dns-query`） |
 | `127.0.0.1:5199` (tcp) | dnsdist | 控制台（`dnsdist -c` 连接；`setKey` 保护） |
 | `127.0.0.1:18083` (tcp) | dnsdist | 只读 HTTP 统计端点（chainmon 读 `cache-hits` / `cache-misses`） |
-| `172.18.0.1:5355` (udp+tcp) | python3 = guard | AGH 的唯一上游（宿主 docker0 网关地址） |
+| `172.18.0.1:5355` (udp+tcp) | python3 = guard | AGH 的唯一上游（`dnsnet` 网关地址，默认 172.18.0.1） |
 | `172.18.0.1:5356` (udp) | python3 = guard | 探针/自检通道（本机探针走这里，不占 5355 主路径） |
 | `127.0.0.2:5353` (udp+tcp) | dnscrypt-proxy | 匿名中继本地入口（verifier 的"快速 UDP 源"） |
 | `127.0.0.1:5399` (udp+tcp) | dnscrypt-proxy | DNSCrypt 本地入口（供域名名单生成等使用） |
@@ -759,7 +759,7 @@ cron 04:35
 | `chainmon-restart.timer` | 30 min | 重启看板进程（防内存增长） | — |
 | `dnsguard-asn-snapshot.timer` | 每日 03:05 | ASN 归属快照 | — |
 
-**IP 对账修哪些地方（6 处）**：① nginx `proxy_pass`（DoT → adgh）；② unbound A 的 `forward-addr`（→ aghdq）；③ `dotfront-spool` 的 drop-in；④ AGH 上游；⑤ guard 的 `GUARD_LISTEN_HOST`（= docker0 网关）；⑥ `probe-srcaddr` 的别名地址。任何一处与实际容器 IP 不符都会被修正，且**修正前先备份**。
+**IP 对账修哪些地方（6 处）**：① nginx `proxy_pass`（DoT → adgh）；② unbound A 的 `forward-addr`（→ aghdq）；③ `dotfront-spool` 的 drop-in；④ AGH 上游；⑤ guard 的 `GUARD_LISTEN_HOST`（= `dnsnet` 网关）；⑥ `probe-srcaddr` 的别名地址。任何一处与实际容器 IP 不符都会被修正，且**修正前先备份**。
 > ⚠️ **dnsdist 的 `newServer({address="...:53"})` 也是写死的容器 IP，但对账脚本（`firewall/dnsguard-ip-reconcile.sh` 的 6 处）目前**尚未覆盖它**：容器 IP 变化后需要重跑 `./install.sh` 重新渲染 `/etc/dnsdist/dnsdist.conf` 并 `systemctl restart dnsdist`。这是已知缺口。
 
 
@@ -1087,7 +1087,7 @@ bash $CODE_DIR/tools/deploy_release.sh --status
 
 ### 6.3 IP 对账（`dnsguard-ip-reconcile.sh`，每 5 分钟）
 
-**修 6 处**：① nginx DoT `proxy_pass`；② unbound A 的 `forward-addr`（aghdq）；③ `dotfront-spool` 的 drop-in；④ AGH 上游；⑤ guard 的 `GUARD_LISTEN_HOST`（= docker0 网关）；⑥ `probe-srcaddr` 的 `172.18.0.99/16` 别名。
+**修 6 处**：① nginx DoT `proxy_pass`；② unbound A 的 `forward-addr`（aghdq）；③ `dotfront-spool` 的 drop-in；④ AGH 上游；⑤ guard 的 `GUARD_LISTEN_HOST`（= `dnsnet` 网关）；⑥ `probe-srcaddr` 的 `172.18.0.99/16` 别名。
 
 > ⚠️ 同上：`/etc/dnsdist/dnsdist.conf` 的上游地址不在对账范围内，IP 变更后需重跑 `./install.sh`。
 

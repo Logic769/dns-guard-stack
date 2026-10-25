@@ -63,7 +63,8 @@ guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
 | `aghdq2` | 第二条独立 DoQ 出口（Quad9 dns10），guard 的 slow 列表候选，只在 hedge 之后并发 | Docker · [出口配置](deploy/containers/aghdq2.AdGuardHome.yaml.tpl) |
 | `aghcf` | Cloudflare 1.1.1.1（DoT）：国内域名存在性见证源 + SERVFAIL 快速透传源 | Docker · [出口配置](deploy/containers/aghcf.AdGuardHome.yaml.tpl) |
 | Unbound B | 国内 DoT 解析候选；其答案仍受 guard 策略约束 | Docker · [B 配置](deploy/containers/unbound-b.conf.tpl) |
-| Unbound alt | 独立第三方 DoT 路径，参与核对和受门禁约束的备用解析 | Docker · [alt 适配](core/alt_adapter.py) |
+| Unbound alt | 独立第三方 DoT 路径，参与核对和受门禁约束的备用解析 | Docker · [alt 适配](core/alt_adapter.py) · [就绪检查](core/unbound-alt-readiness.py) |
+| alt 副本：`alt-replica-unb` | 独立网络（`10.99.0.0/24`）里的 alt 副本，用于对照与灰度演练，不参与主链路 | Docker · [副本配置](deploy/containers/unbound-alt-replica.conf.tpl) |
 | DNSCrypt | 加密候选与影子采样，不能把它的应答直接当作 DNSSEC 证据 | Docker · [配置模板](deploy/containers/dnscrypt-proxy.toml.tpl) |
 | Chainmon | 展示服务器链路、统计和健康信息 | [Chainmon 源码](dashboards/chainmon/) |
 | devfp / dotfront-spool | 根据服务端可见的请求特征辅助归类来源；采集 DoT 解密后的本机内腿 | [devfp](dashboards/devfp/) / [采集器](tools/dotfront-spool.py) |
@@ -127,7 +128,7 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 | 容器运行时 | Docker 与 Compose 插件，支持脚本使用的 `up --wait` |
 | Python | 安装脚本最低检查为 Python 3.6；目标环境仍应运行回归验证 |
 | 基础工具 | Bash、OpenSSL、curl、常用 GNU 工具；防火墙部分使用 iptables / iptables-restore |
-| dnsdist | 公网入口。安装脚本要求机器上有 dnsdist 可执行文件（发行版包或自建），并能通过 `dnsdist --check-config` 校验渲染结果 |
+| dnsdist | 公网入口。机器上需有 dnsdist 可执行文件（发行版包或自建）；缺失时安装脚本只告警并退化到 legacy 的 Nginx 入口。渲染结果可用 `dnsdist --check-config` 校验 |
 | Nginx（legacy） | 仅在跑不了 dnsdist 的机器上使用：需支持 HTTP TLS 和 stream TLS；模板含 HTTP/2、限流及自定义日志配置依赖。与 dnsdist 的 853 / 444 端口互斥，二者只能选一 |
 | 域名与证书 | 自有域名及匹配的 TLS 证书；自签证书仅适合已配置客户端信任的验证环境 |
 | 网络 | 能访问镜像仓库、名单源及选定的 DoT / DoQ / DNSCrypt 上游 |
@@ -178,7 +179,7 @@ INSTALL_NGINX=0
 
 ### 2. 预览并安装
 
-安装会向 `/opt`、`/etc/systemd/system`、`/etc/dnsdist`、`/etc/logrotate.d` 和 `/usr/local/sbin` 写入文件，启动容器与服务，并默认应用项目防火墙规则。在已有 DNS 服务器上操作前，应先备份配置、服务单元、名单和现有规则。
+安装会向 `/opt`、`/etc/systemd/system`、`/etc/dnsdist`、`/etc/logrotate.d`、`/usr/local/sbin` 和 `/usr/local/bin` 写入文件，启动容器与服务，并默认应用项目防火墙规则。在已有 DNS 服务器上操作前，应先备份配置、服务单元、名单和现有规则。
 
 ```bash
 sudo bash install.sh --dry-run
@@ -193,7 +194,7 @@ sudo bash install.sh --fetch-lists
 | `--fetch-lists` | 安装时拉取真实名单 |
 | `--skip-firewall` | 跳过安装阶段的规则应用；使用后需自行补齐并验收 |
 
-安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装、dnsdist 配置渲染与启动（以及 legacy 场景下的 Nginx 片段生成）。**脚本运行结束不代表服务已经可对外使用**。
+安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装、dnsdist 配置渲染与启动、alt 就绪门禁 timer 的启用、cgroup 内存策略单元的安装（以及 legacy 场景下的 Nginx 片段生成）。**脚本运行结束不代表服务已经可对外使用**。
 
 ### 3. 核对当前安装脚本的限制
 
@@ -203,13 +204,13 @@ sudo bash install.sh --fetch-lists
 
 - **证书需要实际接入**。 模板不包含证书或私钥；脚本从本机文件读取并写入四份 AGH 配置（adgh / aghdq / aghdq2 / aghcf），生成文件权限为 `0600`。dnsdist 的证书路径（以及 legacy 场景的 Nginx 模板路径）仍需单独核对，确保所有入口与域名一致。当前脚本未实现 `.env` 注释提到的 ACME 签发 / 续期流程。
 
-- **部分上游变量没有接入渲染**。 `UPSTREAM_B` 有专门替换逻辑；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 不能仅靠修改 `.env` 就认定生效。调整对应模板并检查运行时文件。
+- **部分上游变量没有接入渲染**。 `install.sh` 只对 `UPSTREAM_B` 做替换；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 完全不读，改 `.env` 不产生任何效果，必须改对应模板再核对生成文件。
 
 - **853 / 444 默认由 dnsdist 承接**。 安装会渲染 `/opt/dns-guard-stack/runtime/dnsdist/dnsdist.conf` 并装成 `/etc/dnsdist/dnsdist.conf`，口令由安装脚本生成。机器上没有 dnsdist 时才退回 Nginx 入口（`INSTALL_NGINX=1`），两者不能同时监听同一端口。
 
 - **看板需要单独启用**。 安装会复制看板文件，但不会自动启动 Chainmon / devfp；鉴权和日志来源也需自行配置。不要仅凭 `.env` 中有 `DASH_PASSWORD` 就认为鉴权已启用。
 
-- **自动化需要核对实际启用状态**。 仓库包含多个 timer 和名单刷新工具，不能仅因文件存在就假定已定时运行。用 `systemctl list-timers` 和本机任务配置确认。
+- **自动化需要核对实际启用状态**。 安装会启用 `unbound-alt-readiness.timer`（alt 就绪门禁）；仓库里还有其它 timer 和名单刷新工具，装完不代表已定时运行。用 `systemctl list-timers` 和本机任务配置确认。
 
 ### 4. 检查 dnsdist（或接入 legacy Nginx）
 
@@ -329,7 +330,7 @@ sudo $CODE_DIR/deploy_release.sh --rollback <id>       # 回滚（门禁不过�
 | 容器 running，但查询超时 | 容器内部解析是否可用、dnsnet 网关、AGH 上游、防火墙与上游连通性 |
 | DoT 连接失败 | 公网 853、`systemctl status dnsdist`（或 legacy 的 stream include）、TLS 证书与监听 |
 | DoH 返回 502 / 证书错误 | dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径；legacy 场景再看 Nginx 上游与 AGH `4443` |
-| Chainmon 缓存命中率恒为 0% | `CHAINMON_DNSDIST_API_KEY` 是否与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 一致、`127.0.0.1:18083` 是否可达 |
+| Chainmon 缓存命中率恒为 0% | `/etc/systemd/system/chainmon.service.d/30-dnsdist-stats.conf` 的 `CHAINMON_DNSDIST_API_KEY` 是否与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 一致、`127.0.0.1:18083` 是否可达（该文件由安装脚本按当时口令生成，改口令需重跑安装或手改） |
 | 全部返回 SERVFAIL | A / alt 连通性、验证器状态、名单和日志；不要先关闭准入策略 |
 | 国内结果异常或慢 | B 的可用性、路由名单、信任档位、见证 / 否决统计 |
 | 看板没有数据 | 是否单独启动、统计文件和日志路径是否匹配，而非只看网页能否打开 |
@@ -342,7 +343,7 @@ tools/         名单刷新、归档校验、发布门禁、快照和采集工�
 probes/        入口、链路、外部与专项探针
 firewall/      规则生成、应用与容器地址对账
 dashboards/    Chainmon 和 devfp
-deploy/        容器模板、dnsdist 配置、systemd 单元、Nginx 片段（legacy）和名单样例
+deploy/        容器模板、dnsdist 配置、systemd 单元、宿主辅助脚本（bin/）、Nginx 片段（legacy）和名单样例
 tests/         回归测试及在线验证工具
 docs/          详细说明；assets/ 中保存静态与交互架构图
 ```

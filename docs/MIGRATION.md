@@ -56,7 +56,7 @@ sudo ./verify.sh
 ## 3. 换网段 / 容器 IP
 
 ```bash
-vi .env            # NET_SUBNET、IP_*、GUARD_LISTEN_HOST 会自动跟随 docker0 网关
+vi .env            # DOCKER_SUBNET、*_IP 会自动生效；GUARD_LISTEN_HOST 跟随 dnsnet 网关（默认 172.18.0.1）
 sudo ./install.sh
 sudo /usr/local/sbin/dnsguard-ip-reconcile.sh --check   # 应报 4~6 项全部一致
 ```
@@ -69,11 +69,11 @@ sudo /usr/local/sbin/dnsguard-ip-reconcile.sh --check   # 应报 4~6 项全部�
 
 | 想换的东西 | 改哪里 |
 |---|---|
-| 境外主源 | `deploy/containers/aghdq.AdGuardHome.yaml.tpl` 的 `upstream_dns`（默认 `quic://dns.nextdns.io`，也可用 `.env` 的 `UPSTREAM_A_QUIC`） |
+| 境外主源 | `deploy/containers/aghdq.AdGuardHome.yaml.tpl` 的 `upstream_dns`（默认 `quic://dns.nextdns.io`；`.env` 的 `UPSTREAM_A_QUIC` **当前未被 install.sh 读取**，要改就改模板） |
 | 第二条境外 DoQ | `deploy/containers/aghdq2.AdGuardHome.yaml.tpl`（默认 `quic://dns10.quad9.net`） |
 | 国内上游 | `deploy/containers/unbound-b.conf.tpl` 的 `forward-addr` 列表（DoT + `#hostname`，可用 `.env` 的 `UPSTREAM_B`） |
 | 交叉见证 / fastpass | `deploy/containers/aghcf.AdGuardHome.yaml.tpl`（默认 Cloudflare `tls://1.1.1.1`） |
-| alt 备用源 | `deploy/containers/unbound-alt.conf.tpl`（可用 `.env` 的 `UPSTREAM_ALT`） |
+| alt 备用源 | `deploy/containers/unbound-alt.conf.tpl`（`.env` 的 `UPSTREAM_ALT` 同样未接入，直接改模板） |
 | 影子对比源 | `.env` 的 `SHADOW_DNSCRYPT`（默认走 dnscrypt-proxy） |
 
 改完 `./install.sh`（会重渲染并重启对应容器），然后用 `probes/dns-chain-probe.py` 验收。
@@ -104,7 +104,7 @@ sudo $CODE_DIR/tools/deploy_release.sh --rollback <上一个 release-id>
 | 项 | 说明 |
 |---|---|
 | 容器 IP | 若宿主已有其它 Docker 网络占用同网段，重建后 IP 会变 —— 用 `dnsguard-ip-reconcile.sh` 收敛 |
-| docker0 网关 | 同上；guard 监听地址跟随网关，不要手工写死 |
+| `dnsnet` 网关 | 同上；guard 监听地址跟随该网关（默认 `172.18.0.1`），不要手工写死；它不是 `docker0` 的地址 |
 | 缓存 | guard/AGH 缓存为空，前几分钟命中率低、上游 QPS 略高，属正常 |
 | 看板历史 | 不迁移则从零开始（数据在 SQLite 与 jsonl 里） |
 | 证书 | 自签模式每次重建都会生成新证书，客户端需重新信任；用 ACME 则复用 |

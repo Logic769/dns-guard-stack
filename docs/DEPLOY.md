@@ -65,8 +65,8 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 |---|---|---|
 | `DOCKER_SUBNET` | `172.18.0.0/16` | 容器网段；与宿主已有网络冲突时改这里 |
 | `ALTREPLICA_SUBNET` | `10.99.0.0/24` | alt 副本网段 |
-| `GW_IP` | 空 ⇒ 自动探测 docker0 | guard 监听地址；**必须**与 AdGuard Home 里的上游地址一致 |
-| `AGH_IP` / `AGHDQ_IP` | `172.18.0.2` / `172.18.0.6` | 两个 AdGuard Home 容器（主入口 / 境外 DoQ 出口） |
+| `GW_IP` | 空 ⇒ 取 `DOCKER_SUBNET` 的首个主机地址 | guard 监听地址（= `dnsnet` 网关，默认 `172.18.0.1`）；**必须**与 AdGuard Home 里的上游地址一致 |
+| `AGH_IP` / `AGHDQ_IP` | `172.18.0.2` / `172.18.0.6` | 主入口 / 境外 DoQ 出口（另两个出口见下行） |
 | `AGHDQ2_IP` / `AGHCF_IP` | `172.18.0.11` / `172.18.0.12` | 第二条 DoQ 出口（Quad9）/ 见证与 fastpass 源（Cloudflare） |
 | `UNBOUND_A_IP` / `UNBOUND_B_IP` / `UNBOUND_ALT_IP` | `.4` / `.5` / `.8` | 三个 Unbound |
 | `ALTREPLICA_IP` / `DNSCRYPT_IP` | `10.99.0.2` / `172.18.0.9` | alt 副本 / dnscrypt-proxy |
@@ -121,7 +121,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 5. **容器**：`docker compose up -d`；按需等待 AdGuard Home 面板就绪并设置管理员密码、AGH 上游指向 guard
 6. **证书**：自签 / ACME / 复用你给的路径
 7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`（该文件由安装脚本按当时的 apiKey 生成，仓库里没有，改口令后需重跑安装或手改）。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）
-8. **systemd**：安装单元与 timer（含 DoT 明文内腿采集器 `dotfront-spool`、alt 就绪门禁 `unbound-alt-readiness.timer`），`daemon-reload` + `enable --now`；写入内存限额。就绪门禁每分钟探一次 alt 目标并产出 `/run/unbound-alt-ready.json`（`ALT_READY_PORT` 跟随 `AGHDQ_DNS_PORT`，身份绑定 `ALT_READY_CONTAINER=aghdq`）；没有这个文件 guard 的 alt 通道是 fail-closed 关闭的
+8. **systemd**：安装单元与 timer（guard / verifier / chainmon / devfp 及其 drop-in、DoT 明文内腿采集器 `dotfront-spool`、alt 就绪门禁 `unbound-alt-readiness.service` + `.timer`、内存策略 `cgroup-memsw-limits.service`），`daemon-reload` + `enable --now`；就绪门禁脚本落 `/usr/local/sbin/unbound-alt-readiness.py`、内存策略脚本落 `/usr/local/bin/cgroup-memsw-limits.sh`。门禁每分钟探一次 alt 目标并产出 `/run/unbound-alt-ready.json`（`ALT_READY_PORT` 跟随 `AGHDQ_DNS_PORT`、身份绑定 `ALT_READY_CONTAINER=aghdq`、`ALT_READY_RELEASE_DIR`/`ALT_READY_CONFIG_DIRS` 跟随 `.env` 路径）；没有这个文件 guard 的 alt 通道是 fail-closed 关闭的，装完最长约 120 s 才会 ready。`cgroup-memsw-limits.service` 用的全是 cgroup v1 路径，在 cgroup v2 宿主上逐条跳过、等同 no-op，启用失败只告警不阻断安装
 9. **防火墙**：`firewall/dnsguard-fw.sh --apply`（先算目标表 → 自检 → 单次 `iptables-restore`，失败回滚）
 10. **验收**：`tools/release_consistency.py` + 回环探针；失败会打印诊断命令（不阻断安装）
 
@@ -171,7 +171,7 @@ tail -5 /var/log/cn-lists-refresh.log
 | 症状 | 排查 |
 |---|---|
 | 容器起来又退出 | `docker logs <容器>`；多是 `.env` 的 IP 与 `DOCKER_SUBNET` 不匹配，或端口被占 |
-| guard 起来但 `5355` 连不上 | `journalctl -u dnsguard -n 50`；确认 `GW_IP` 等于 `ip -4 addr show docker0` 的地址 |
+| guard 起来但 `5355` 连不上 | `journalctl -u dnsguard -n 50`；确认 `GW_IP` 等于 `docker network inspect dnsnet -f '{{(index .IPAM.Config 0).Gateway}}'` 的结果，且 AGH 上游是同一地址 |
 | DoT 连不上 | `openssl s_client -connect <ip>:853 -servername $DNS_DOMAIN`；`systemctl status dnsdist`、`journalctl -u dnsdist -n 50`（端口被 nginx 占 / 证书不可读最常见）；legacy 场景再查 stream include 与 `nginx -t` |
 | DoH 返回 502 / 证书错误 | 先看 dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径；legacy 场景看 `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${AGH_HTTPS_PORT}/` 与 `limit_conn/limit_req` |
 | Chainmon 缓存命中率恒为 0% | `CHAINMON_DNSDIST_API_KEY` 与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 是否一致；`curl -H "X-API-Key: ..." http://127.0.0.1:18083/api/v1/servers/localhost/statistics` |
@@ -191,6 +191,11 @@ docker compose -f "$RUNTIME_DIR/docker-compose.yml" down
 
 # 2) 移走单元（含 dnsdist）与 nginx 片段
 systemctl disable --now dnsdist 2>/dev/null
+systemctl disable --now cgroup-memsw-limits.service unbound-alt-readiness.timer 2>/dev/null
+rm -f /etc/systemd/system/cgroup-memsw-limits.service /usr/local/bin/cgroup-memsw-limits.sh
+rm -f /etc/systemd/system/unbound-alt-readiness.service /etc/systemd/system/unbound-alt-readiness.timer
+rm -rf /etc/systemd/system/unbound-alt-readiness.service.d
+rm -f /usr/local/sbin/unbound-alt-readiness.py /run/unbound-alt-ready.json
 rm -f /etc/systemd/system/dnsdist.service
 rm -rf /etc/systemd/system/dnsdist.service.d
 rm -f /etc/logrotate.d/dnsdist-query /var/log/dnsdist-query.log

@@ -102,6 +102,8 @@ sudo $CODE_DIR/tools/deploy_release.sh --status
 | `dnsguard` | 160 MiB | 192 MiB |
 | `dnsguard-verifier` | 100 MiB | 128 MiB |
 | 看板（各） | 128–192 MiB | 176–256 MiB |
+| `unbound-alt-readiness` | — | 64 MiB（oneshot，每分钟一次） |
+| `cgroup-memsw-limits` | 由脚本统一施加（docker 预算 896/1152/1408 MiB、`system.slice` 软限 1280 MiB） | — |
 
 ```bash
 systemctl show dnsguard -p MemoryHigh -p MemoryMax -p MemoryCurrent
@@ -109,6 +111,8 @@ journalctl -k --since -2h | grep -i 'oom\|killed process'
 ```
 
 出现 OOM 时优先：降低 `GUARD_MAX_INFLIGHT` / `MAX_PENDING`、减少看板采集频率、给宿主加 swap（本项目不依赖 swap，只做兜底）。
+
+`cgroup-memsw-limits.service` 只写 cgroup **v1** 路径（`memory.limit_in_bytes` / `memory.memsw.limit_in_bytes` 等），在 cgroup v2 宿主上逐条跳过、等同 no-op：用 `systemctl status cgroup-memsw-limits` 与 `cat /sys/fs/cgroup/memory/memory.memsw.limit_in_bytes` 确认到底生效了没有，不要只看单元 active。
 
 ## 8. 缓存撤销（重要）
 
