@@ -1,0 +1,12 @@
+[Unit]
+Description=启动后施加 cgroup v1 的 memsw 上限（禁止 DNS 关键进程与 chainmon 被换出）
+After=chainmon.service dnsguard.service dnscrypt-proxy-local.service
+Wants=chainmon.service dnsguard.service dnscrypt-proxy-local.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/cgroup-memsw-limits.sh
+
+[Install]
+WantedBy=multi-user.target

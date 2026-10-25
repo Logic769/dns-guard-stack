@@ -22,7 +22,7 @@ import ssl
 import struct
 import sys
 
-HOST = "SERVER_IP"
+HOST = "198.51.100.10"
 SNI = "dns.example.com"
 TIMEOUT = 12.0
 INSECURE = "--insecure" in sys.argv

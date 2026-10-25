@@ -1,0 +1,12 @@
+[Unit]
+Description=Block unbound-b plaintext :53 egress (B 只允许 DoT/853 出站；明文 53 一律 DROP，见 2026-10-08 第7步)
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -nL UNBOUNDB_53 >/dev/null 2>&1 || iptables -N UNBOUNDB_53; iptables -F UNBOUNDB_53; iptables -A UNBOUNDB_53 -p udp --dport 53 -m comment --comment unbound-b-plain53-udp -j DROP; iptables -A UNBOUNDB_53 -p tcp --dport 53 -m comment --comment unbound-b-plain53-tcp -j DROP; iptables -C DOCKER-USER -s 172.18.0.5 -j UNBOUNDB_53 2>/dev/null || iptables -I DOCKER-USER 1 -s 172.18.0.5 -j UNBOUNDB_53'
+
+[Install]
+WantedBy=multi-user.target

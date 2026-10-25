@@ -47,7 +47,7 @@ sudo cp /root/migrate-extract/dnsguard/agh-api.env /etc/dnsguard/ && sudo chmod 
 
 ```bash
 vi .env            # DOMAIN、CERT_*（ACME 邮箱、证书路径）
-sudo ./install.sh  # 幂等：只重渲染 nginx/证书相关部分
+sudo ./install.sh  # 幂等：只重渲染 dnsdist/nginx/证书相关部分
 sudo ./verify.sh
 ```
 

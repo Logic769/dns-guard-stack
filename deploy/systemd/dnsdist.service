@@ -1,0 +1,16 @@
+[Unit]
+Description=dnsdist DNS frontend (DoT + DoH)
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dnsdist --supervised -C /etc/dnsdist/dnsdist.conf
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/dnsdist.out
+StandardError=append:/var/log/dnsdist.out
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

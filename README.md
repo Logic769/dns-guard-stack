@@ -36,7 +36,7 @@ GitHub 文件页面通常显示 HTML 源码；克隆仓库后，用浏览器打�
 客户端
   │ DoT :853 / DoH :444（:443 需另接现有 HTTPS 站点）
   ▼
-Nginx：TLS 终结、请求入口和限流
+dnsdist：TLS 终结、真实客户端 IP、查询缓存与限流
   ▼
 主 AdGuard Home（adgh）：过滤、缓存；DNS 上游只指向 guard
   ▼
@@ -51,7 +51,8 @@ guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
 
 | 组件 | 具体作用 | 运行方式 / 代码 |
 | --- | --- | --- |
-| Nginx | 提供 DoT / DoH 入口；DoH 精确转发 `/dns-query` | [Nginx 配置](deploy/nginx/) |
+| dnsdist | 提供 DoT / DoH 入口；终结 TLS、保留真实客户端 IP、内置 PacketCache 与限流 | systemd · [dnsdist 配置](deploy/dnsdist/dnsdist.conf.tpl) |
+| Nginx（legacy） | 2026-10-22 之前承接 853/444；现在只在跑不了 dnsdist 的机器上作退路 | [Nginx 配置](deploy/nginx/) |
 | 主 AdGuard Home：`adgh` | 客户端入口、过滤和缓存；没有配置绕过 guard 的备用 DNS | Docker · [配置模板](deploy/containers/adgh.AdGuardHome.yaml.tpl) |
 | guard | 分流、候选检查、见证、缓存和最终答案选择 | systemd · [guard](core/guard.py) / [策略](core/answer_policy.py) |
 | verifier | 独立进程核验，握手检查代码版本；并非另一台独立服务器 | systemd · [verifier](core/verifier.py) |
@@ -132,8 +133,9 @@ A、B、alt 是不同解析路径；`aghdq` 是 A 的出口，不是第四个独
 
 | 端口 / 地址 | 用途 | 暴露范围 |
 | --- | --- | --- |
-| TCP `853` | Nginx DoT 入口 | 按需对客户端开放 |
-| TCP `444` | Nginx DoH，路径 `/dns-query` | 按需对客户端开放 |
+| TCP `853` | dnsdist DoT 入口（legacy：Nginx stream） | 按需对客户端开放 |
+| TCP `444` | dnsdist DoH，路径 `/dns-query`（legacy：Nginx http） | 按需对客户端开放 |
+| `127.0.0.1:18083` | dnsdist 只读统计端点（Chainmon 读缓存命中率） | 本机 |
 | TCP `443` | 可在现有 HTTPS 站点接 DoH | 需额外配置；不是 Compose 自动提供 |
 | `172.18.0.1:5355` | guard DNS | Docker 桥接网关上的内部接口 |
 | `127.0.0.1:5353`<br>`127.0.0.1:5354`<br>`127.0.0.1:5357` | A / B / alt 的 DNS 映射 | 本机 |
@@ -196,15 +198,22 @@ sudo bash install.sh --fetch-lists
 
 - **部分上游变量没有接入渲染**。 `UPSTREAM_B` 有专门替换逻辑；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 不能仅靠修改 `.env` 就认定生效。调整对应模板并检查运行时文件。
 
-- **Nginx 默认只生成片段**。 文件位于 `/opt/dns-guard-stack/runtime/nginx/`。需按 HTTP / stream 上下文分别接入，补齐 `dohfrag` 日志格式、`perip` 限流区、证书路径和发行版 CA 路径。校验通过后再重载。
+- **853 / 444 默认由 dnsdist 承接**。 安装会渲染 `/opt/dns-guard-stack/runtime/dnsdist/dnsdist.conf` 并装成 `/etc/dnsdist/dnsdist.conf`，口令由安装脚本生成。机器上没有 dnsdist 时才退回 Nginx 入口（`INSTALL_NGINX=1`），两者不能同时监听同一端口。
 
 - **看板需要单独启用**。 安装会复制看板文件，但不会自动启动 Chainmon / devfp；鉴权和日志来源也需自行配置。不要仅凭 `.env` 中有 `DASH_PASSWORD` 就认为鉴权已启用。
 
 - **自动化需要核对实际启用状态**。 仓库包含多个 timer 和名单刷新工具，不能仅因文件存在就假定已定时运行。用 `systemctl list-timers` 和本机任务配置确认。
 
-### 4. 接入 Nginx
+### 4. 检查 dnsdist（或接入 legacy Nginx）
 
-DoT 片段放入 Nginx 的 `stream` 配置上下文；DoH 片段放入 `http` 上下文。模板默认采用宝塔目录，其他环境需调整。
+默认路径不需要 Nginx：`install.sh` 渲染 dnsdist 配置、安装 systemd 单元并启动，853/444 由 dnsdist 直接终结 TLS。校验命令如下：
+
+```bash
+sudo dnsdist --check-config -C /etc/dnsdist/dnsdist.conf
+sudo systemctl status dnsdist
+```
+
+只有在跑不了 dnsdist 的机器上才退回 Nginx：把 DoT 片段放进 `stream` 上下文、DoH 片段放进 `http` 上下文（模板默认采用宝塔目录），并先停用 dnsdist 以释放 853/444。
 
 ```bash
 # 完成片段接入及证书配置后，先做语法校验
@@ -311,8 +320,9 @@ sudo $CODE_DIR/deploy_release.sh --rollback <id>       # 回滚（门禁不过�
 | --- | --- |
 | 安装结束但 guard 反复重启 | `/var/log/dnsguard.log`、真实否决名单、状态目录和权限 |
 | 容器 running，但查询超时 | 容器内部解析是否可用、dnsnet 网关、AGH 上游、防火墙与上游连通性 |
-| DoT 连接失败 | 公网 853、stream include、TLS 证书与服务监听 |
-| DoH 返回 502 | AGH `4443`、AGH 证书、Nginx 上游证书校验与错误日志 |
+| DoT 连接失败 | 公网 853、`systemctl status dnsdist`（或 legacy 的 stream include）、TLS 证书与监听 |
+| DoH 返回 502 / 证书错误 | dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径；legacy 场景再看 Nginx 上游与 AGH `4443` |
+| Chainmon 缓存命中率恒为 0% | `CHAINMON_DNSDIST_API_KEY` 是否与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 一致、`127.0.0.1:18083` 是否可达 |
 | 全部返回 SERVFAIL | A / alt 连通性、验证器状态、名单和日志；不要先关闭准入策略 |
 | 国内结果异常或慢 | B 的可用性、路由名单、信任档位、见证 / 否决统计 |
 | 看板没有数据 | 是否单独启动、统计文件和日志路径是否匹配，而非只看网页能否打开 |

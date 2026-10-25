@@ -1,5 +1,5 @@
 [Unit]
-Description=每 12 小时重启 chainmon（内存兜底）
+Description=每 1 小时重启 chainmon（内存兜底，控泄漏）
 
 [Timer]
 OnBootSec=45min

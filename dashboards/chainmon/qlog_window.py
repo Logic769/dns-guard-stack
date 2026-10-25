@@ -227,6 +227,8 @@ class QlogWindow(object):
             "upstreams": {}, "clients": {}, "slow": [], "slow_total": 0, "types": {},
             "hosts": set(),
             "elapsed_all": [], "elapsed_up": [],
+            # ★ 2026-10-22 归因：同一批上游样本按客户端/域名各存一份
+            "el_up_by_client": {}, "el_up_by_host": {},
             "window_start": win_start, "ts_min": None, "ts_max": None,
             "win_ts_min": None, "win_ts_max": None,
             "log_lag_s": max(0, int(now - anchor)),
@@ -289,6 +291,8 @@ class QlogWindow(object):
             else:
                 out["cache_misses"] += 1
                 out["elapsed_up"].append(ms)
+                out["el_up_by_client"].setdefault(ip or "?", []).append(ms)
+                out["el_up_by_host"].setdefault(qh or "?", []).append(ms)
                 if ms > 500:
                     out["slow_total"] += 1
                     out["slow"].append({"host": qh, "ms": round(ms, 1), "type": qt,

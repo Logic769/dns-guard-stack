@@ -6,17 +6,17 @@
 |---|---|
 | 系统 | Linux + systemd（Ubuntu 20.04+/Debian 11+/Alpine 3.18+/CentOS 7+/Rocky 9 均可） |
 | 权限 | root（要写 systemd 单元、容器、iptables、nginx） |
-| 依赖 | `docker`（含 compose 插件）、`nginx`、`python3` ≥ 3.6、`git`、`iptables`、`openssl`、`curl` |
+| 依赖 | `docker`（含 compose 插件）、`dnsdist`（853/444 入口）、`python3` ≥ 3.6、`git`、`iptables`、`openssl`、`curl`；`nginx` 仅在跑不了 dnsdist 的 legacy 场景需要 |
 | 网络 | 能出 443/853 到公网（拉镜像、DoT 上游）；对公网服务还需放行 853/443/444 |
-| 端口 | 853（DoT）、443（DoH）、444（DoH，可选）、80（仅 ACME HTTP-01 用），以及 `.env` 里各回环端口 |
+| 端口 | 853（dnsdist DoT）、444（dnsdist DoH，路径 `/dns-query`）、443（nginx：看板/站点）、80（仅 ACME HTTP-01 用），以及各回环端口（`127.0.0.1:5199` dnsdist 控制台、`127.0.0.1:18083` 统计端点） |
 
 ```bash
 # Debian / Ubuntu
-apt-get update && apt-get install -y docker.io docker-compose-v2 nginx python3 git iptables openssl curl
+apt-get update && apt-get install -y docker.io docker-compose-v2 dnsdist nginx python3 git iptables openssl curl
 # Alpine
-apk add docker docker-cli-compose nginx python3 git iptables openssl curl
-# CentOS / Rocky
-yum install -y docker docker-compose-plugin nginx python3 git iptables openssl curl
+apk add docker docker-cli-compose dnsdist nginx python3 git iptables openssl curl
+# CentOS / Rocky（dnsdist 在 EPEL）
+yum install -y docker docker-compose-plugin epel-release dnsdist nginx python3 git iptables openssl curl
 ```
 
 ## 2. 三步开始
@@ -107,7 +107,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 | `DOTF_SPOOL` | `/var/log/dotfront.jsonl` | DoT 明文内腿 spool：`dotfront-spool` 写、devfp 的 `dotfront_spool` 读，两者必须一致 |
 | `AGH_ADMIN_USER` / `AGH_ADMIN_PASSWORD` | `admin` / 空 | AGH 面板账号；密码留空则安装后首次登录自行设置 |
 | `DASH_USER` / `DASH_PASSWORD` | `admin` / 空 | 看板 Basic Auth；留空则不启用鉴权 |
-| `INSTALL_NGINX` | `0` | 是否让脚本直接写站点配置并 reload（默认只生成片段，由你手动引用） |
+| `INSTALL_NGINX` | `0` | legacy 开关：默认 853/444 交给 dnsdist；设 1 才安装 nginx 的 DoT/DoH 片段（两者端口互斥） |
 | `NGINX_VHOST_DIR` / `NGINX_BIN` | 宝塔默认 | nginx 站点目录与二进制 |
 | `TZ` | `Asia/Shanghai` | 容器与时区 |
 
@@ -119,7 +119,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 4. **名单**：默认 `LISTS_PROFILE=fetch` —— 立即拉真实名单（域名 → 否决/IP → 完整性校验）；条数不足（多半没外网）会自动退回骨架并告警，不阻断安装
 5. **容器**：`docker compose up -d`；按需等待 AdGuard Home 面板就绪并设置管理员密码、AGH 上游指向 guard
 6. **证书**：自签 / ACME / 复用你给的路径
-7. **nginx**：安装站点与 stream 片段（stream 片段需要你 include，脚本会提示），`nginx -t` 通过才 reload，失败自动回滚
+7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）
 8. **systemd**：安装单元与 timer（含 DoT 明文内腿采集器 `dotfront-spool`），`daemon-reload` + `enable --now`；写入内存限额
 9. **防火墙**：`firewall/dnsguard-fw.sh --apply`（先算目标表 → 自检 → 单次 `iptables-restore`，失败回滚）
 10. **验收**：`tools/release_consistency.py` + 回环探针；失败会打印诊断命令（不阻断安装）
@@ -171,8 +171,9 @@ tail -5 /var/log/cn-lists-refresh.log
 |---|---|
 | 容器起来又退出 | `docker logs <容器>`；多是 `.env` 的 IP 与 `DOCKER_SUBNET` 不匹配，或端口被占 |
 | guard 起来但 `5355` 连不上 | `journalctl -u dnsguard -n 50`；确认 `GW_IP` 等于 `ip -4 addr show docker0` 的地址 |
-| DoT 连不上 | `openssl s_client -connect <ip>:853 -servername $DNS_DOMAIN`；检查 stream 片段是否被 include、证书路径、`nginx -t` |
-| DoH 返回 502 | `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${AGH_HTTPS_PORT}/`；再看是不是 `limit_conn/limit_req` 卡住了并发 |
+| DoT 连不上 | `openssl s_client -connect <ip>:853 -servername $DNS_DOMAIN`；`systemctl status dnsdist`、`journalctl -u dnsdist -n 50`（端口被 nginx 占 / 证书不可读最常见）；legacy 场景再查 stream include 与 `nginx -t` |
+| DoH 返回 502 / 证书错误 | 先看 dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径；legacy 场景看 `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${AGH_HTTPS_PORT}/` 与 `limit_conn/limit_req` |
+| Chainmon 缓存命中率恒为 0% | `CHAINMON_DNSDIST_API_KEY` 与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 是否一致；`curl -H "X-API-Key: ..." http://127.0.0.1:18083/api/v1/servers/localhost/statistics` |
 | 国内域名变慢/失败 | `python3 $CODE_DIR/probes/probe-cand.py www.qq.com` 对比 A/B/guard 的答案 |
 | 全部 SERVFAIL | 看 `stats.json` 的 `fc_*`；`dig @127.0.0.1 -p 5353 cloudflare.com` 检查 A 侧 |
 | 门禁红灯 | `python3 $CODE_DIR/tools/release_consistency.py`；两服务重启一次 |
@@ -187,7 +188,11 @@ tail -5 /var/log/cn-lists-refresh.log
 systemctl disable --now dnsguard dnsguard-verifier chainmon devfp 2>/dev/null
 docker compose -f "$RUNTIME_DIR/docker-compose.yml" down
 
-# 2) 移走单元与 nginx 片段
+# 2) 移走单元（含 dnsdist）与 nginx 片段
+systemctl disable --now dnsdist 2>/dev/null
+rm -f /etc/systemd/system/dnsdist.service
+rm -rf /etc/systemd/system/dnsdist.service.d
+rm -f /etc/logrotate.d/dnsdist-query
 rm -f /etc/systemd/system/dnsguard.service /etc/systemd/system/dnsguard-verifier.service
 rm -rf /etc/systemd/system/dnsguard.service.d /etc/systemd/system/dnsguard-verifier.service.d
 rm -f "$NGINX_VHOST_DIR/tcp/dnsguard-dot-853.conf" "$NGINX_VHOST_DIR/extension/dnsguard/"*.conf

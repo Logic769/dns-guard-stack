@@ -116,7 +116,11 @@ def _src_kind(src, default="local-a"):
     return _k
 
 
-def _policy_cn_answer(name, qtype, a_wire, b_wire, deadline=None, query_id=None):
+def _policy_cn_answer(name, qtype, a_wire, b_wire, deadline=None, query_id=None,
+                      _refresh=False, _skip_cache=False):
+    # `_refresh=True` **仅**由 §5 后台 CN 刷新路径（`_hot_refresh_one_cn`）使用 ✓：
+    # 让采纳时那次 `_adm_cache_put` 带 `refresh=True`，否则「答案没变但寿命快到」
+    # 会被 `_adm_same_answer` 闸门拦住 ⇒ 刷新永远不生效 ✗。其余调用点用默认值 ⇒ 行为不变 ✓。
     """启用时返回**可采纳的 `answer_policy.Answer`**（A / alt / 准入缓存）✓，
     或 None（表示"不得采用 B"⇒ 上层必须 SERVFAIL ✓）。
 
@@ -142,10 +146,13 @@ def _policy_cn_answer(name, qtype, a_wire, b_wire, deadline=None, query_id=None)
             return None
     except Exception:
         return None
-    _ans = _adm_cache_answer(name, qtype)
-    if _ans is not None:
-        _tr_flag("adm_hit")            # Step-1 §1：准入缓存命中率
-        return _ans
+    if not _skip_cache:
+        # `_skip_cache=True` 只由后台 CN 刷新用 ✓：让刷新能真正重新裁决，
+        # 同时**不 pop** 缓存 ⇒ 刷新期间在线请求继续命中旧记录 ✓（零穿透）。
+        _ans = _adm_cache_answer(name, qtype)
+        if _ans is not None:
+            _tr_flag("adm_hit")            # Step-1 §1：准入缓存命中率
+            return _ans
     a_ans = None
     try:
         if a_wire:
@@ -322,7 +329,8 @@ def _policy_cn_answer(name, qtype, a_wire, b_wire, deadline=None, query_id=None)
     if _dom_fresh:
         if _dom_ans.verdict.value in ("secure", "accepted"):
             _adm_cache_put(name, qtype, _dom_ans.wire, _dom_ans.verdict.value, _dom_ans.source,
-                           _adm_ttl_from(_dom_ans, _adm_cap_for(_dom_ans.verdict)))
+                           _adm_ttl_from(_dom_ans, _adm_cap_for(_dom_ans.verdict)),
+                           refresh=_refresh)
             with _lock:
                 _stats["policy_adopt_cn"] = _stats.get("policy_adopt_cn", 0) + 1
                 _stats["policy_adopted"] = _stats.get("policy_adopted", 0) + 1
@@ -868,6 +876,11 @@ def _adm_cache_put(name, qtype, wire, verdict, source, ttl, now=None, refresh=Fa
         _stats["adm_cache_put"] = _stats.get("adm_cache_put", 0) + 1
     except Exception:
         pass
+    # P2 挂接点①：拿到可采纳答案 ⇒ 该名字不再是死链 ✓（幂等，只清状态）
+    try:
+        _sf_clear(name, qtype, "adm_put")
+    except Exception:
+        pass
 
 
 # ===== 方案 §2-a：**由可信报文取真实有效期**（取代硬编码 `ttl=300.0`）=====
@@ -1202,6 +1215,11 @@ def _finalize_return(wire, kind, name, qtype, qid, msg):
         _ist, _ede, _mttl = _stale_of(wire)
         if _ist:
             _stale_note(None, name, _ede, _mttl)
+        # P2 挂接点③：终局快路同样产出可出口字节 ⇒ 清退避 ✓
+        try:
+            _sf_clear(name, qtype, "terminal_exit")
+        except Exception:
+            pass
         return rewrite_id(wire, qid)
     try:
         _tr()["src"] = kind           # Step-1 §1：**最终来源**（local-a/local-alt/local-b/…）
@@ -1245,6 +1263,12 @@ def _finalize_return(wire, kind, name, qtype, qid, msg):
         _ist, _ede, _mttl = _stale_of(wire)
         if _ist:
             _stale_note(kind, name, _ede, _mttl)
+            # P2 挂接点②：**拿到了成功答案**（stale 但仍可出口）⇒ 该名字不是死链 ✓
+            #   本快路为"可出口、不可复用"而不写准入缓存 ⇒ 必须在此单独清退避 ✓
+            try:
+                _sf_clear(name, qtype, "stale_exit")
+            except Exception:
+                pass
             return rewrite_id(wire, qid)
         with _lock:
             _k = "fin_ok_" + str(kind)
@@ -1267,6 +1291,15 @@ def _finalize_return(wire, kind, name, qtype, qid, msg):
                 _fc_classify("source_bogus")
             except Exception:
                 pass
+        # ★ C（2026-10-22）：BOGUS 是**确定性**结论（签名验证失败），同样值得负缓存 ✓
+        #   注意：这里只缓存"拒绝结论"，不缓存任何报文 ⇒ 安全性不变。
+        if _SF_BACKOFF_ON:
+            try:
+                _sf_put(name, qtype)
+                with _lock:
+                    _stats["sf_put_bogus"] = _stats.get("sf_put_bogus", 0) + 1
+            except Exception:
+                pass
         log("FIN  %-38s 来源 %s 为 BOGUS（验证失败）⇒ SERVFAIL（不可被 alt/缓存修复 ✓）"
             % ((name or "?")[:38], kind))
         return mk_servfail(msg, qid)
@@ -1279,6 +1312,36 @@ def _finalize_return(wire, kind, name, qtype, qid, msg):
             _k = "fin_cache_" + str(kind)
             _stats[_k] = _stats.get(_k, 0) + 1
         return rewrite_id(_hit, qid)
+    # ★ 快速透传（GUARD_FASTPASS，默认关）：local-a 被判 transport（无 DNSSEC EDE 的裸
+    #   SERVFAIL）时，先问一次快速独立源；它**也**明确回 rc=2 ⇒ 两家独立运营方都拒绝
+    #   ⇒ 直接透传 SERVFAIL，不再空等 alt 的 2.0s ✓。
+    #   其它结果（含超时）⇒ 落到下面的原逻辑，行为与不算本分支时完全一致 ✓。
+    if FASTPASS and str(kind) == "local-a" and a_ans.verdict.value == "transport":
+        _fp_hit = _fastpass_servfail(name, qtype)
+        # ★ 2026-10-22 修复（P2 缺陷）：此处**不**清退避 ✗
+        #   原实现（挂接点④）在 `_fp_hit` 为 False 时调 `_sf_clear("fastpass_denied")`，
+        #   理由是"快速源没确认死链 ⇒ 死链假设不成立"。**这个推理是错的** ✗✗：
+        #   `_fastpass_servfail()` 返回 False 有三种互不相同的情形 ——
+        #     ① 快速源给出非 SERVFAIL（确实不该判死链）；
+        #     ② **超时 / 无应答**（fastpass_timeout=7 —— 只是没查成，不是没死链）；
+        #     ③ 瞬时抖动（fastpass_other=117 的主因）。
+        #   把 ②③ 当成"已恢复"⇒ 每次抖动都清零 ⇒ streak 永远停在 1（15s）
+        #   ⇒ 退避从未递进到 300s ⇒ 死链域名 106 次查询里 74% 仍是 COLD（实测）。
+        #   正确语义：**只有产出真实答案才代表恢复**，那三条路径
+        #   （_adm_cache_put / stale_exit / terminal_exit）已经各自挂了 _sf_clear ✓，
+        #   本处无需也不应再清 ✗。
+        if _fp_hit:
+            with _lock:
+                _stats["fin_fastpass_servfail"] = _stats.get("fin_fastpass_servfail", 0) + 1
+                _stats["fail_closed"] += 1
+                try:
+                    _fc_classify("fastpass_upstream_servfail")
+                except Exception:
+                    pass
+            log("FIN  %-38s local-a 与快速源均明确 SERVFAIL ⇒ 快速透传（跳过 alt）✓"
+                % ((name or "?")[:38]))
+            _sf_put(name, qtype)      # A3：双源均明确拒绝 ⇒ 15s 内同问直接回 SERVFAIL ✓
+            return mk_servfail(msg, qid)
     # 不是可采纳结论 ⇒ 只能用认证备用；否则 SERVFAIL ✓（绝不把 B 的候选放出去 ✗）
     # ★ §3 第 70 行：alt **每请求最多启动一次** ✓ —— `_policy_cn_answer()` 已经可能问过
     #   alt（CN 路径）✗ ⇒ 这里再问一次就是重复付延迟 ✗。超时改成**吃剩余预算** ✓
@@ -1294,6 +1357,12 @@ def _finalize_return(wire, kind, name, qtype, qid, msg):
             _b_alt = _dl_rem(3.0)
             if _b_alt is None:
                 _b_alt = 3.0
+            # P0（2026-10-22）：再与独立硬上限取小 ⇒ 死链域名不再白等满 3s ✓
+            #   只收紧、不放松：硬上限**只可能让等待变短**，不可能变长 ✓
+            if ALT_HARD_CAP > 0:
+                _b_alt = min(_b_alt, ALT_HARD_CAP)
+                with _lock:
+                    _stats["alt_capped"] = _stats.get("alt_capped", 0) + 1
             _alt_ans = _ALT.query_alt(name, qtype, timeout=_b_alt) if _b_alt > 0.05 else None
             _src_mark("alt", "ok" if _alt_ans is not None else "fail")
         except Exception:
@@ -1332,6 +1401,19 @@ def _finalize_return(wire, kind, name, qtype, qid, msg):
         except Exception:
             pass
     log("FIN  %-38s 来源 %s 不可采纳且认证源重试仍无答案 ⇒ SERVFAIL" % (name[:38], kind))
+    # ★ C（2026-10-22）：**所有来源都不可采纳** ⇒ 这是最典型的死链证据 ⇒ 必须进负缓存 ✓
+    #   静态审计：此前 `_sf_put` 只在 FASTPASS 分支（L1326）调用，而该分支要求
+    #     `kind=="local-a" && verdict=="transport"`；实测该域名 57 条 FIN 里只有 27 条
+    #     （47%）满足 ⇒ 另外 53% 的失败**从不建立负缓存** ⇒ 命中率被结构性压到 17% ✗。
+    #   本出口覆盖剩余全部「走到 finalizer 但拿不到任何可采纳答案」的情形 ✓。
+    #   安全边界不变：仍只写 expiry+计数、不写报文；且 require 单独开关以免改默认行为。
+    if _SF_BACKOFF_ON:
+        try:
+            _sf_put(name, qtype)
+            with _lock:
+                _stats["sf_put_inadmissible"] = _stats.get("sf_put_inadmissible", 0) + 1
+        except Exception:
+            pass
     return mk_servfail(msg, qid)
 
 
@@ -1633,6 +1715,12 @@ _HOT_TICK = float(os.environ.get("GUARD_HOT_TICK", "5.0"))       # 扫描周期�
 _HOT_CONC = int(os.environ.get("GUARD_HOT_CONC", "2"))           # 并发初值 2 ✓
 _HOT_QPS = float(os.environ.get("GUARD_HOT_QPS", "1.0"))         # 平均新增 ≤1 QPS ✓
 _HOT_SHARE = float(os.environ.get("GUARD_HOT_SHARE", "0.10"))    # ≤业务上游量 10% ✓
+# 2026-10-24：`GUARD_HOT_BQPS_FLOOR` —— 业务量下限（**规划容量**，不是实测瞬时量）✓
+# 背景：`rate = min(_HOT_QPS, _HOT_SHARE × bqps)`，实测低流量（0.59 QPS）时
+# `_HOT_SHARE × bqps = 0.059/s` 把刷新饿死 ⇒ 改 `_HOT_QPS` 毫无效果 ✗。
+# 设 floor=400 ⇒ 按「400 QPS 规划的 10% = 40/s」算，再由 `_HOT_QPS`(5/s) 封顶 ✓。
+# 默认 0.0 ⇒ 不设该环境变量时行为与改前完全一致 ✓。
+_HOT_BQPS_FLOOR = float(os.environ.get("GUARD_HOT_BQPS_FLOOR", "0.0"))
 _HOT_TIMEOUT = float(os.environ.get("GUARD_HOT_TIMEOUT", "1.5")) # 刷新单次超时 ✓
 _HOT_YIELD_PENDING = int(os.environ.get("GUARD_HOT_YIELD_PENDING", "4"))  # 业务在途则让位 ✓
 # 资源闸门（§5 第 6 项）：available 连续 3 分钟 <300MB / 换页压力持续 1 分钟 ⇒ 暂停刷新 ✓
@@ -1889,13 +1977,18 @@ def _hot_decide(rec, now, is_cn):
     remain = float(rec.get("until") or 0.0) - float(now)
     if remain <= 0:
         return "skip", "stale"
-    if str(rec.get("source") or "") != "local-a":
-        return "skip", "source"
-    if is_cn:
+    _src = str(rec.get("source") or "")
+    if _src != "local-a":
+        # 2026-10-24：`source == "local-cn"`（国内采纳链的记录）也允许后台刷新 ✓ ——
+        # 但**绝不**走 `_hot_refresh_one()` 的 A-only 重取（那会绕过 "B 就近性 + 存在性否决"
+        # ⇒ 正是 ③④ 两条判据存在的理由 ✗）；改派 `_hot_refresh_one_cn()` 重跑**完整** CN 采纳链 ✓。
+        if not (is_cn and _src == "local-cn"):
+            return "skip", "source"
+    if is_cn and _src != "local-cn":
         return "skip", "cn"
     if remain / max(1e-6, ttl) > _HOT_HI:
         return "skip", "out_window"
-    return "refresh", "in_window"
+    return ("refresh-cn" if _src == "local-cn" else "refresh"), "in_window"
 
 
 def _hot_refresh_one(name, qtype, expect_until):
@@ -1937,6 +2030,46 @@ def _hot_refresh_one(name, qtype, expect_until):
         _st_bump("hot_failed")
 
 
+def _hot_refresh_one_cn(name, qtype, expect_until):
+    """后台刷新一条 **CN 采纳链** 记录 ✓（2026-10-24）。
+
+    与 `_hot_refresh_one()` 的根本区别：**不自己实现判据** ✗ ——
+    A-only 重取会绕过 CN 的三条铁律（B 就近性、存在性见证 `cn_exist_veto(deny_probe=True)`、
+    `suspicious()` 的 R1 投毒地址检查）✗。所以这里直接复用**在线请求的同一条链**
+    `_policy_cn_answer()`：取到 B 的字节 ⇒ 原样交给它做准入裁决 ⇒ 它自己写 `_adm_cache` ✓。
+
+    刻意做的事：
+      ① 先 `pop` 掉 adm 记录再调用 ⇒ 否则 `_policy_cn_answer` 开头 `_adm_cache_answer()`
+         会直接命中旧记录返回 ⇒ 刷新变成空转 ✗；
+      ② 用 `_refresh=True` ⇒ 答案未变也能把寿命推回满 ✓；
+      ③ 失败时**恢复旧记录** ⇒ 刷新失败绝不导致在线请求丢缓存 ✓（只会退化成同步见证）。
+    """
+    try:
+        msg = mk_query_do(name, qtype)
+        qid = struct.unpack("!H", msg[:2])[0]
+        b_wire = udp_query(UNBOUND_B, msg, timeout=_HOT_TIMEOUT)
+        if not b_wire:
+            _st_bump("hot_cn_failed")
+            return
+        ans = None
+        try:
+            # 刻意**不 pop** 准入缓存 ✓：pop 到写回之间（最长约 500 ms）在线请求会全部穿透 ⇒
+            # 每次刷新等于制造一个 500 ms 的慢查询窗口 ✗。`_skip_cache=True` 让裁决函数
+            # 跳过开头的 adm 短路 ⇒ 既能重新裁决，旧记录又始终对在线请求生效 ✓。
+            ans = _policy_cn_answer(name, qtype, None, b_wire,
+                                    deadline=_dl_wall(_HOT_TIMEOUT), query_id=qid,
+                                    _refresh=True, _skip_cache=True)
+        except Exception:
+            ans = None
+        if ans is None:
+            _st_bump("hot_cn_failed")
+            return
+        _st_bump("hot_cn_refreshed")
+        _st_bump("hot_refreshed")
+    except Exception:
+        _st_bump("hot_cn_failed")
+
+
 def hot_refresh():
     """§5 的后台刷新循环 ✓（单线程调度 ⇒ 提交速率天然有界 ✓）。
 
@@ -1962,7 +2095,9 @@ def hot_refresh():
             bq = int(_stats.get("base_q", 0) or 0)
             dbq = max(0, bq - _last_bq[0])
             _last_bq[0] = bq
-            bqps = float(dbq) / max(1.0, _HOT_TICK)
+            # 按**规划容量**取大值：低流量时段不让 `_HOT_SHARE × bqps` 把刷新饿死 ✓
+            # （见 `_HOT_BQPS_FLOOR` 注释）；满流量时段 floor 不起作用，仍受 10% 约束 ✓。
+            bqps = max(float(dbq) / max(1.0, _HOT_TICK), _HOT_BQPS_FLOOR)
             rate = min(_HOT_QPS, _HOT_SHARE * bqps)
             cap = max(0.0, _HOT_QPS * _HOT_TICK)
             _HOT_BUCKET[0] = min(cap, _HOT_BUCKET[0] + rate * _HOT_TICK)
@@ -1989,10 +2124,12 @@ def hot_refresh():
                     except Exception:
                         _iscn = True     # 判不了 ⇒ **按 CN 处理**（保守拒绝 ✓，宁可少刷 ✓）
                     _act, _why = _hot_decide(rec, now, _iscn)
-                    if _act != "refresh":
+                    if _act not in ("refresh", "refresh-cn"):
                         _st_bump("hot_skip_" + _why)
                     else:
                         _st_bump("hot_in_window")
+                        if _act == "refresh-cn":
+                            _st_bump("hot_cn_in_window")
                         _frac = (float(rec.get("until") or 0.0) - now) / max(
                             1e-6, float(rec.get("ttl") or 0.0))
                         _stats["hot_frac_sum"] = float(_stats.get("hot_frac_sum", 0.0)) + _frac
@@ -2037,9 +2174,12 @@ def hot_refresh():
                         _st_bump("hot_submitted")
                         _lk_ref = _lk
 
-                        def _run(_n=_nm, _q=_qt, _e=expect, _l=_lk_ref):
+                        def _run(_n=_nm, _q=_qt, _e=expect, _l=_lk_ref, _a=_act):
                             try:
-                                _hot_refresh_one(_n, _q, _e)
+                                if _a == "refresh-cn":
+                                    _hot_refresh_one_cn(_n, _q, _e)
+                                else:
+                                    _hot_refresh_one(_n, _q, _e)
                             finally:
                                 try:
                                     if _l is not None:
@@ -2223,7 +2363,7 @@ for _r in ("0", "1", "2", "3", "4", "5", "none"):
 for _st in ("a", "alt", "b", "veto", "witness", "r8", "clean", "strict", "retry",
             "retry_alt", "retry_witness", "ttl", "negttl",
             "q-alt", "q-b", "q-clean", "queue", "ipc", "domestic", "a_pre", "a_hint",
-            "b_pre", "bget", "dnscrypt", "doq", "doq2", "dot", "tcp"):
+            "b_pre", "bget", "dnscrypt", "doq", "doq2", "doq3", "dot", "tcp"):
     _BS_ALLOW.add("att_" + _st)
     for _ex in ("ok", "fail", "timeout", "skip", "none", "other"):
         _BS_ALLOW.add("attres_%s_%s" % (_st, _ex))
@@ -2260,7 +2400,7 @@ _CLIENT_STAGE_BUCKETS = (
     "a", "alt", "b", "veto", "witness", "r8", "clean", "strict",
     "retry", "retry_alt", "retry_witness", "ttl", "negttl", "q-alt",
     "q-b", "q-clean", "queue", "ipc", "domestic", "a_pre", "a_hint",
-    "b_pre", "bget", "dnscrypt", "doq", "doq2", "dot", "tcp",
+    "b_pre", "bget", "dnscrypt", "doq", "doq2", "doq3", "dot", "tcp",
 )
 for _qt in ("a", "aaaa"):
     _BS_ALLOW.add("client_ms_" + _qt)
@@ -2490,9 +2630,15 @@ if os.environ.get("GUARD_UNBOUND_B_PORT"):
     UNBOUND_B = (UNBOUND_B[0], int(os.environ["GUARD_UNBOUND_B_PORT"]))
 _DOQ1 = (os.environ.get("GUARD_DOQ", "127.0.0.1"), int(os.environ.get("GUARD_DOQ_PORT", "5533")))
 _DOQ2 = (os.environ.get("GUARD_DOQ2", "127.0.0.1"), int(os.environ.get("GUARD_DOQ2_PORT", "5534")))
+# 2026-10-19：第三条本机中继 aghcf → Cloudflare 1.1.1.1（DoT）。默认**不纳入**，
+#   需显式 GUARD_DOQ3_ENABLE=1 才追加；关闭时 LOCAL_DOQ_LIST 与改动前逐字节等价（回滚安全）。
+_DOQ3 = (os.environ.get("GUARD_DOQ3", "127.0.0.1"), int(os.environ.get("GUARD_DOQ3_PORT", "5535")))
 # DoQ2（Quad9 dns10）出现持续 QUIC reset/deadline 时可整条摘除；DoQ1+认证 DoT 仍提供独立干净源。
 LOCAL_DOQ_LIST = [_DOQ1] if _flag("GUARD_DISABLE_DOQ2") else [_DOQ1, _DOQ2]
+if _flag("GUARD_DOQ3_ENABLE"):
+    LOCAL_DOQ_LIST = list(LOCAL_DOQ_LIST) + [_DOQ3]
 # [0]=aghdq→NextDNS over QUIC   [1]=aghdq2→Quad9(dns10,无过滤) over QUIC
+# [2]=aghcf→Cloudflare 1.1.1.1 over DoT（仅 GUARD_DOQ3_ENABLE=1 时存在）
 LOCAL_DOQ = LOCAL_DOQ_LIST[0]
 UNBOUND_CONTAINER = os.environ.get("GUARD_UNBOUND_CONTAINER", "unbound")
 CHURN_ENABLED = not _flag("GUARD_NO_CHURN")            # 抖动检测开关
@@ -3170,6 +3316,10 @@ CORROB_DOT_TIMEOUT = float(os.environ.get("GUARD_CORROB_DOT_TIMEOUT", "2.0"))
 # 2026-10-07：R8 去重锁的**有界**等待上限。原来是无限等 —— 持锁线程一卡，等待者就
 # 一直占着 inflight 名额，最终把执行器名额耗光。超时后返回明确的 TIMEOUT 状态。
 CORROB_DEDUP_WAIT = float(os.environ.get("GUARD_CORROB_DEDUP_WAIT", "1.0"))
+# ★ 2026-10-18 批次 4：明文递归与 R8 核对**并发**发起（sum → max）。
+#   默认**关闭**（=今天行为），改法见 `_r8p_start()` 的守卫注释。
+_R8P_ENABLED = _flag("GUARD_R8_PARALLEL", False)
+_R8P_MAX = max(1, int(os.environ.get("GUARD_R8_PARALLEL_MAX", "8")))
 # 2026-10-05 P1-8：实测本机**没有更快的认证通道可加**（quad9/cloudflare/adguard 的 DoT 全部
 # timeout/reset），现有三条冷握手 606~709ms + 单程 RTT ~900ms，1.5s 预算偏紧（auth_none≈11.6%），
 # 故放宽到 2.0s。总时长由下面的 SYNC_BUDGET 兜住。
@@ -3311,7 +3461,7 @@ _stats = {"q": 0, "redirect": 0, "r1": 0, "r2": 0, "r3": 0, "r4": 0, "r5": 0, "c
           # 本进程增量 − 探针自计数」反解（见 chainmon 的 b_attrib 块），避免两处口径打架。
           "unbound_b_queries_total": 0, "unbound_b_queries_guard_cn": 0,
           "unbound_b_noncn_attempt": 0,
-          "bad_ip_hits": 0, "win_dot": 0, "win_doq": 0, "win_doq2": 0, "cdn_skipped": 0, "v6_skipped": 0,
+          "bad_ip_hits": 0, "win_dot": 0, "win_doq": 0, "win_doq2": 0, "win_doq3": 0, "cdn_skipped": 0, "v6_skipped": 0,
           "win_dnscrypt": 0, "fast_dnscrypt_fail": 0, "fast_dnscrypt_ms": None,
           "shadow_tried": 0, "shadow_agree": 0, "shadow_disagree": 0,
           "shadow_empty": 0, "shadow_unavailable": 0,
@@ -3353,7 +3503,7 @@ _stats = {"q": 0, "redirect": 0, "r1": 0, "r2": 0, "r3": 0, "r4": 0, "r5": 0, "c
           "cn_veto_backoff_skip": 0, "cn_veto_budget_skip": 0, "cn_veto_elapsed_ms": 0,
           "cn_zone_deny_set": 0, "cn_zone_deny_hit": 0, "cn_zone_deny_expired": 0, "cn_zone_r8_entered": 0,
           "cn_clean_hit": 0, "cn_clean_set": 0, "cn_clean_expired": 0,
-          "cn_veto_w2_used": 0, "cn_veto_w2_skipped": 0,
+          "cn_veto_w2_used": 0, "cn_veto_w2_skipped": 0, "cn_veto_w2_started": 0,
           # 2026-10-10 Patch27（Codex：R8 运营商级门控）
           "r8_asn_gate_d": 0, "r8_asn_gate_k": 0, "r8_asn_gate_unknown": 0,
           "asn_snapshot_size": 0, "asn_snapshot_reload": 0,
@@ -3374,6 +3524,9 @@ _stats = {"q": 0, "redirect": 0, "r1": 0, "r2": 0, "r3": 0, "r4": 0, "r5": 0, "c
           "r7": 0, "r7_soft": 0,
           # R8：核对次数/一致/改道/窗口内改发钉住答案/核对通道不可用
           "r8_checked": 0, "r8_agree": 0, "r8_adopt": 0, "r8_pinned": 0, "r8_miss": 0,
+          # 批次 4：提前并发发起核对的开销度量（started - used = 因早退路径浪费）
+          "r8_parallel_started": 0, "r8_parallel_used": 0,
+          "r8_parallel_busy": 0, "r8_parallel_late": 0,
           # 2026-10-05 加固新增：明文含未佐证地址 / AAAA 不一致 / 干净侧无地址 / 认证通道可用性 / 非A类查询量
           "r8_extra": 0, "r8_v6_miss": 0, "r8_noans": 0, "r8_auth_ok": 0, "r8_auth_none": 0,
           "qtype_other": 0,
@@ -3437,6 +3590,7 @@ _r8_stable_dirty = False
 # 我据此误判过“r8_miss≈73% 是投毒暴露”✗。改为：这些键每次启动归零，比率一律用 delta 计算。
 # 只保留真正需要跨重启的“状态量”（如 learned_ips / strict_list_size，由各自的 reload 重算）。
 PERSIST_SKIP = ("q", "r8_checked", "r8_miss", "r8_agree", "r8_adopt", "r8_event_skip",
+                "r8_parallel_started", "r8_parallel_used", "r8_parallel_busy", "r8_parallel_late",
                 "r8_extra", "r8_extra_soft", "r8_v6_miss", "r8_pinned", "r8_backoff_skip",
                 "r8_backoff_active", "r8_backoff_cleared",
                 "corrob_attempt", "corrob_ok", "corrob_nodata", "corrob_timeout",
@@ -3458,7 +3612,7 @@ PERSIST_SKIP = ("q", "r8_checked", "r8_miss", "r8_agree", "r8_adopt", "r8_event_
                 "cn_veto_backoff_skip", "cn_veto_budget_skip", "cn_veto_elapsed_ms",
                 "cn_zone_deny_set", "cn_zone_deny_hit", "cn_zone_deny_expired", "cn_zone_r8_entered",
                 "cn_clean_hit", "cn_clean_set", "cn_clean_expired",
-                "cn_veto_w2_used", "cn_veto_w2_skipped",
+                "cn_veto_w2_used", "cn_veto_w2_skipped", "cn_veto_w2_started",
                 "r8_asn_gate_d", "r8_asn_gate_k", "r8_asn_gate_unknown",
                 "asn_snapshot_size", "asn_snapshot_reload",
                 "audit_queued", "audit_tried", "audit_agree", "audit_mismatch",
@@ -3592,6 +3746,9 @@ _step5_keys = (
     "hot_skip_out_window",
     "hot_yielded", "hot_qps_limited", "hot_conc_blocked", "hot_scan_err", "hot_loop_err",
     "hot_pause_mem", "hot_pause_io", "hot_frac_sum", "hot_frac_n", "hot_below_lo",
+    # ★ C（2026-10-22）：负缓存扩展后的新计数器 —— 必须登记，否则看板读不到 ✓
+    "sf_put_inadmissible", "sf_put_bogus", "sf_cleared", "sf_extended",
+    "sf_streak_max_ttl", "sf_cache_store", "sf_cache_hit",
     "res_mem_low", "res_io_high", "res_mem_available_mb", "res_io_pages_s",
     "adm_cache_bytes", "adm_cache_evicted_bytes", "adm_bytes_high",
     # ★ 2026-10-11（§5 验收期定位的既有缺陷）：**脏通道字节**的拦截计数 ✓
@@ -4683,10 +4840,26 @@ def udp_query(server, msg, timeout=TIMEOUT):
         return None
 
 
-_pool = {}          # (ip,port,sni) -> socket
-_up_lock = {}       # (ip,port,sni) -> Lock
+_POOL_N = max(1, int(os.environ.get("GUARD_DOT_POOL_N", "4")))   # 每通道常连接数
+_pool = {}          # (ip,port,sni) -> [socket, ...]  空闲常连接（≤ _POOL_N）
+_up_lock = {}       # (ip,port,sni) -> Lock           只保护 _pool 列表本身，不做 I/O
+_up_sem = {}        # (ip,port,sni) -> BoundedSemaphore(_POOL_N)  该通道在途上限
 _cache = {}         # (name,qtype) -> (expiry, resp)
 _neg_cache = {}     # (name,qtype) -> (expiry, DNSSEC-proven negative response)
+# ---- A3（2026-10-20）：**双源 SERVFAIL** 负缓存 ----
+# 只记忆"认证源 A 与快速独立源**都明确回 rc=2**"这一种情形；值只有到期时间戳
+#   ⇒ **不存任何应答字节** ✓（出包一律由 mk_servfail() 重建 ⇒ 无内容可注入 ✗）。
+# 动机：死链域名（上游两端都拒绝）现状每次重走 W1 超时(1.2s) + alt(2.0s) 全链路
+#   ⇒ 同一域名在 15s 内重复查询直接回 SERVFAIL ✓。
+# 寿命**复用既有** STRICT_SERVFAIL_TTL（默认 15s）✓ —— 不新增任何 TTL 常量。
+_SF_CACHE = {}      # (name,qtype) -> expiry
+_SF_MAX = 20000
+# ---- P2（2026-10-22）：失败域名的自适应负缓存（滚动续期）----
+# 现场依据：同一死链域名在 15s 负缓存未命中时要重走 unbound A(643ms)+fastpass+alt(实测 10014ms)，
+#   客户端可见 1202~3989ms；而重访间隔实测 300s ⇒ 15s 覆盖不到 ⇒ 每次重访都吃满。
+# 机制：连续失败次数→指数退避 15/30/60/120/240/300（封顶 RFC9520 建议 5 分钟），成功即清零。
+# 安全：与 A3 同源，只存 expiry 与计数，不存任何报文 ⇒ 出包一律 mk_servfail() 重建。
+_SF_STREAK = {}     # (name,qtype) -> 连续失败次数（成功即清零）
 def _cache_stamp():
     return {"wall": time.time(), "mono": time.monotonic()}
 
@@ -5010,10 +5183,43 @@ def _tcp_fast_reject(conn):
 
 
 def _pool_lock(key):
+    """该通道的**短临界区**锁：只保护 _pool[key] 列表本身，**绝不做网络 I/O**。"""
     with _lock:
         if key not in _up_lock:
             _up_lock[key] = threading.Lock()
         return _up_lock[key]
+
+
+def _pool_sem(key):
+    """该通道的在途上限（= _POOL_N）；到上限就等，**不新建连接**。"""
+    with _lock:
+        if key not in _up_sem:
+            _up_sem[key] = threading.BoundedSemaphore(_POOL_N)
+        return _up_sem[key]
+
+
+def _pool_take(key):
+    """取一条空闲常连接；没有则返回 None（调用方自己建连）。FIFO 轮转以兼顾保活。"""
+    with _pool_lock(key):
+        lst = _pool.get(key)
+        if lst:
+            return lst.pop(0)
+    return None
+
+
+def _pool_give(key, s):
+    """把用完的连接还回池；池已满则关闭多余连接（不会无限增长）。"""
+    keep = False
+    with _pool_lock(key):
+        lst = _pool.setdefault(key, [])
+        if len(lst) < _POOL_N:
+            lst.append(s)
+            keep = True
+    if not keep:
+        try:
+            s.close()
+        except Exception:
+            pass
 
 
 def _recvn(sock, n):
@@ -5070,18 +5276,33 @@ def tcp_query(addr, msg, timeout=2.0):
 
 
 def _dot_raw(msg, ip, port, sni, timeout):
-    """用常连接发一次 DoT 查询；失败则重连一次"""
+    """用常连接池发一次 DoT 查询；失败则重连一次。
+
+    ★ 2026-10-18（批次 3）：每通道由「1 条连接 + 全通道串行锁」改为
+      「_POOL_N 条连接池 + BoundedSemaphore 限流」。
+      实测旧写法下同一通道 6 路并发呈 +282ms 线性台阶
+      （[284,565,846,1129,1411,1694]，墙钟 1695ms），24 路冷并发 p90 因此被抬到 1834ms；
+      改后各路各用一条已建连接，墙钟 ≈ 单路耗时。
+      **判定语义完全不变**：合格答案定义、qid 校验、两次重连后放弃都不动。
+    """
     key = (ip, port, sni)
-    with _pool_lock(key):
+    sem = _pool_sem(key)
+    t0 = time.time()
+    # 等不到槽位就放弃（不新建连接）；上限压在 min(timeout,1.5)，
+    # 保证「等待 + 实查」不会突破 GUARD_SYNC_BUDGET(3.8) / CORROB_DOT_TIMEOUT(1.8)。
+    if not sem.acquire(timeout=min(timeout, 1.5)):
+        with _lock:
+            _stats["dot_pool_busy"] = _stats.get("dot_pool_busy", 0) + 1
+        return None
+    try:
         for attempt in (1, 2):
-            s = _pool.get(key)
+            s = _pool_take(key)
             try:
                 if s is None:
                     ctx = ssl.create_default_context()
                     s = ctx.wrap_socket(socket.create_connection((ip, port), timeout=timeout),
                                         server_hostname=sni)
-                    _pool[key] = s
-                s.settimeout(timeout)
+                s.settimeout(max(0.5, timeout - (time.time() - t0)))
                 s.sendall(struct.pack("!H", len(msg)) + msg)
                 h = _recvn(s, 2)
                 if len(h) < 2:
@@ -5099,15 +5320,18 @@ def _dot_raw(msg, ip, port, sni, timeout):
                         raise IOError("qid 不匹配（连接错位/陈旧帧）")
                 except struct.error:
                     raise IOError("正文过短无法读 qid")
+                _pool_give(key, s)      # 成功：连接还回池，供后续复用
                 return buf
             except Exception:
                 try:
                     s.close()
                 except Exception:
                     pass
-                _pool.pop(key, None)
+                # 失败的连接已从池中取出，直接丢弃；下一轮 _pool_take 会重新建连
                 if attempt == 2:
                     return None
+    finally:
+        sem.release()
 
 
 def _udp_raw(msg, ip, port, timeout):
@@ -5349,7 +5573,12 @@ def _channel_label(ip, port, sni):
     if sni is None:
         if FAST_UDP and (ip, port) == FAST_UDP:
             return "dnscrypt"
-        return "doq" if port == LOCAL_DOQ_LIST[0][1] else "doq2"
+        # 2026-10-19：原写法 `doq` if port==[0] else `doq2` 会把第三条通道(5535)误标成
+        # doq2，与 aghdq2(5534) 共用同一个熔断器/统计槽 ⇒ 改为按索引查找。
+        for _i, _hp in enumerate(LOCAL_DOQ_LIST):
+            if port == _hp[1]:
+                return "doq" if _i == 0 else ("doq2" if _i == 1 else "doq3")
+        return "doq2"
     return "dot:" + sni.split(".")[-2]
 
 def _channel_usable(ip, port, sni):
@@ -5367,7 +5596,8 @@ def _clean_channels():
     if FAST_UDP:
         ch.append({"label": "dnscrypt", "ip": FAST_UDP[0], "port": FAST_UDP[1], "sni": None})
     for i, (ip, port) in enumerate(LOCAL_DOQ_LIST):
-        ch.append({"label": "doq" if i == 0 else "doq2", "ip": ip, "port": port, "sni": None})
+        ch.append({"label": ("doq", "doq2", "doq3")[i] if i < 3 else "doq%d" % i,
+                   "ip": ip, "port": port, "sni": None})
     for ip, port, sni in CLEAN_DOT:
         ch.append({"label": "dot:" + sni.split(".")[-2], "ip": ip, "port": port, "sni": sni})
     return ch
@@ -5438,6 +5668,12 @@ def _dot_query_once(msg, name=None, qtype=None, timeout=TIMEOUT, prefer_addr=Fal
     if LOCAL_DOQ_LIST:
         ip, port = LOCAL_DOQ_LIST[0]
         fast.append((ip, port, None, "doq"))
+    # 2026-10-19：第三条（aghcf→Cloudflare，实测 p50≈83ms）与 DoQ1 同为首轮并发，
+    #   谁先返回用谁 ⇒ 只可能更快。_channel_usable 已熔断失败通道（失败后 60s 不重试）。
+    if len(LOCAL_DOQ_LIST) > 2:
+        _cf_ip, _cf_port = LOCAL_DOQ_LIST[2]
+        if _channel_usable(_cf_ip, _cf_port, None):
+            fast.append((_cf_ip, _cf_port, None, "doq3"))
     # Patch6：改用 DNSCRYPT_ADOPT（默认 None ⇒ 不进入可被采纳的首轮竞速）
     if DNSCRYPT_ADOPT and _channel_usable(DNSCRYPT_ADOPT[0], DNSCRYPT_ADOPT[1], None):
         fast.append((DNSCRYPT_ADOPT[0], DNSCRYPT_ADOPT[1], None, "dnscrypt"))
@@ -5448,6 +5684,10 @@ def _dot_query_once(msg, name=None, qtype=None, timeout=TIMEOUT, prefer_addr=Fal
         # DoQ2 是延后备用；连续失败时由 keepalive 熔断，避免每个查询反复等待坏通道。
         if _channel_usable(ip, port, None):
             slow.append((ip, port, None, "doq2"))
+    # 2026-10-19：第三条（aghcf→Cloudflare 1.1.1.1）**不进 slow 而进 fast**：
+    #   实测冷查询 p50≈83ms，比 DoQ1（NextDNS≈270ms）快一个量级。若放 slow 则要等
+    #   hedge（≈370ms）才启动，等于永远不用它、也降不了延迟。fast 是并发的，
+    #   谁先返回用谁，故放进 fast 只降延迟、不增延迟；失败时 cancel 机制保证不影响正确性。
     with _lock:
         _stats["clean_races"] += 1
     t0 = time.time()
@@ -5624,6 +5864,10 @@ STRICT_FILE = os.path.join(STATE_DIR, "strict_hosts.json")
 STRICT_BUDGET = float(os.environ.get("GUARD_STRICT_BUDGET", "2.6"))   # 严格路径硬预算（秒）
 STRICT_NEG_TTL = float(os.environ.get("GUARD_STRICT_NEG_TTL", "45"))  # 共识否定缓存
 STRICT_SERVFAIL_TTL = float(os.environ.get("GUARD_STRICT_SERVFAIL_TTL", "15"))
+# P2（2026-10-22）：失败域名负缓存自适应退避（默认关 ⇒ 零行为变化 ✓）
+_SF_BACKOFF_ON = _flag("GUARD_SF_BACKOFF", False)
+_SF_TTL_MIN = float(os.environ.get("GUARD_SF_TTL_MIN", str(STRICT_SERVFAIL_TTL)))
+_SF_TTL_MAX = float(os.environ.get("GUARD_SF_TTL_MAX", "300"))
 # 2026-10-10 Patch15（Codex）：60 → 300。理由：判据"≥2 家运营方答案集相等"的延迟下界 = 第二快
 # 独立运营方的 RTT ⇒ 客户端只在"共识窗口 + AGH 缓存"双冷时才付 ~1.1s；把 pin 放大到 5 分钟可显著
 # 降低双冷概率，而 pin 里存的是**已核对**答案（新鲜度风险有界，非投毒风险）。
@@ -5839,6 +6083,91 @@ def audit_note(msg, name, qtype, uset8):
         _stats["audit_queued"] = _stats.get("audit_queued", 0) + 1
 
 
+def _sf_get(name, qtype):
+    """A3：命中"双源明确 SERVFAIL"记忆 ⇒ True。
+
+    只代表"两家独立源刚刚都明确拒绝"，**不携带任何应答内容** ✓。
+    """
+    if not name:
+        return False
+    k = (name, qtype)
+    e = _SF_CACHE.get(k)
+    if not e:
+        return False
+    if e <= time.time():
+        _SF_CACHE.pop(k, None)
+        return False
+    with _lock:
+        _stats["sf_cache_hit"] = _stats.get("sf_cache_hit", 0) + 1
+    return True
+
+
+def _sf_put(name, qtype):
+    """A3：落 STRICT_SERVFAIL_TTL 秒（默认 15s）⇒ 拒绝结论短期可复用 ✓。
+
+    P2（2026-10-22）：连续失败时指数退避至 _SF_TTL_MAX（默认 300s）✓。
+      · 开关 GUARD_SF_BACKOFF 默认关 ⇒ 不设等于零行为变化 ✓；
+      · 次数由 _SF_STREAK 记账，_sf_clear() 在拿到可采纳答案时清零 ✓；
+      · 仍只写 expiry，不存报文 ✓。
+    """
+    if not name:
+        return
+    _k = (name, qtype)
+    _n = int(_SF_STREAK.get(_k, 0)) + 1
+    _SF_STREAK[_k] = _n
+    if _SF_BACKOFF_ON:
+        # ★ 2026-10-22 方案B：指数上限从固定的 '5' 改为**由 _SF_TTL_MAX 推导** ✗→✓
+        #   原实现写死 `2 ** min(_n - 1, 5)` ⇒ 无论 _SF_TTL_MAX 设成多少，
+        #   实际天花板恒为 15*32=480s ⇒ 把 GUARD_SF_TTL_MAX 调到 900 **完全无效**（实测确认）。
+        #   现在按目标上限反推所需的最大指数，并留 1 级余量：
+        #     _cap = ceil(log2(_SF_TTL_MAX / _SF_TTL_MIN))
+        #   TTL_MAX=300 ⇒ cap=5（15/30/60/120/240/300，与旧行为一致）
+        #   TTL_MAX=900 ⇒ cap=6（…/480/900）
+        _cap = 1
+        _r = max(1.0, float(_SF_TTL_MAX)) / max(1.0, float(_SF_TTL_MIN))
+        while _cap < 20 and (2 ** _cap) < _r:
+            _cap += 1
+        _ttl = min(_SF_TTL_MAX, _SF_TTL_MIN * (2 ** min(_n - 1, _cap)))
+        try:
+            _stats["sf_extended"] = _stats.get("sf_extended", 0) + 1
+            if _ttl > float(_stats.get("sf_streak_max_ttl") or 0.0):
+                _stats["sf_streak_max_ttl"] = _ttl
+        except Exception:
+            pass
+    else:
+        _ttl = STRICT_SERVFAIL_TTL
+    _SF_CACHE[_k] = time.time() + _ttl
+    with _lock:
+        _stats["sf_cache_store"] = _stats.get("sf_cache_store", 0) + 1
+        if len(_SF_CACHE) > _SF_MAX:
+            _now = time.time()
+            for k in [k for k, v in list(_SF_CACHE.items()) if v <= _now]:
+                _SF_CACHE.pop(k, None)
+            _stats["sf_cache_evict"] = _stats.get("sf_cache_evict", 0) + 1
+
+
+def _sf_clear(name, qtype, why=""):
+    """P2：该 (name,qtype) 已拿到可采纳答案/非 SERVFAIL 证据 ⇒ 立刻清零退避 ✓。
+
+    这是"绝不永久锁死已恢复域名"的结构性保证：
+      · 只清 _SF_STREAK 与 _SF_CACHE，绝不写入任何答案字节 ✓（答案由调用方按正常路径写）；
+      · 幂等，可重复调用；why 只用于记账。
+    """
+    if not name:
+        return False
+    _k = (name, qtype)
+    _had = (_k in _SF_CACHE) or (_k in _SF_STREAK)
+    _SF_STREAK.pop(_k, None)
+    _SF_CACHE.pop(_k, None)
+    if _had:
+        try:
+            _stats["sf_cleared"] = _stats.get("sf_cleared", 0) + 1
+            _stats["sf_cleared_" + str(why or "other")] = _stats.get("sf_cleared_" + str(why or "other"), 0) + 1
+        except Exception:
+            pass
+    return _had
+
+
 def _strict_neg_get(name, qtype):
     e = _strict_neg.get((name, qtype))
     if e and e[0] > time.time():
@@ -5873,13 +6202,19 @@ def _strict_pick_channels():
     # DoQ：本机 aghdq → NextDNS（fdaa:... 或本地端口），QUIC/TLS 认证，运营方记作 nextdns。
     if _flag("GUARD_STRICT_USE_DOQ", True):
         for ix, (ip, port) in enumerate(LOCAL_DOQ_LIST or []):
-            lab = "doq" if ix == 0 else "doq2"
+            lab = ("doq", "doq2", "doq3")[ix] if ix < 3 else "doq%d" % ix
             with _lock:
                 st = dict(_ch_stat.get(lab) or {})
             rtt = st.get("rtt_ms")
             if not (isinstance(rtt, (int, float)) and rtt > 0):
                 continue          # 未测过 RTT 的 DoQ 不参与（避免把未验证通道当共识源）
-            cand.append((rtt, (ip, port, None), "nextdns"))
+            # 2026-10-19：运营方必须按该通道的真实后端标注，不能一律写 nextdns。
+            #   LOCAL_DOQ_LIST[0]=aghdq->NextDNS，LOCAL_DOQ_LIST[1]=aghdq2->Quad9(dns10)。
+            #   旧写法两条都标 nextdns 的后果：
+            #     1) 两者同时可用时 doq2 被当同运营方重复去重掉 => 第二家独立源形同虚设；
+            #     2) aghdq 故障时只剩 doq2（实为 Quad9）却仍记作 nextdns => 等同于单家自证。
+            _op = ("nextdns", "quad9", "cloudflare")[ix] if ix < 3 else "doq%d" % ix
+            cand.append((rtt, (ip, port, None), _op))
     cand.sort(key=lambda x: x[0])
     out, seen = [], set()
     for _r, t, op in cand:
@@ -5888,7 +6223,7 @@ def _strict_pick_channels():
                 _stats["strict_operator_dedup"] = _stats.get("strict_operator_dedup", 0) + 1
             continue
         seen.add(op)
-        if op == "nextdns":
+        if op in ("nextdns", "quad9", "cloudflare"):
             with _lock:
                 _stats["strict_cand_doq"] = _stats.get("strict_cand_doq", 0) + 1
         out.append(t)
@@ -6281,6 +6616,89 @@ def corrob_query(msg, name, qtype, targets_override=None, budget=None):
     finally:
         if acquired:
             lk.release()
+
+
+_r8p_sem = threading.BoundedSemaphore(_R8P_MAX)
+
+
+def _r8p_start(msg, name, qtype):
+    """批次 4：在明文递归**之前**并发发起 R8 核对，返回 handle 或 None。
+
+    ★ 红线②守卫（务必连读）：
+      本函数只**提前发起核对**，返回的是一个尚未取值的 handle。
+      **它不返回、也不缓存任何应答字节**，调用方拿不到任何可用答案 ⇒
+      不可能出现"未核对的上游答案抢先下发"。明文答案的放行判定仍留在
+      原 R8 位置（`_r8p_fetch` 的调用点），一行都没动。
+
+    跳过提前发起的条件（都等价于"原本也不会走 R8"，故不损失覆盖面）：
+      · 开关关闭 / CORROB 整体关闭；
+      · qtype ∉ {1,28}（A/AAAA 之外由 R8T 路径处理，目标通道不同）；
+      · CN 域名且未被 zone pin 摘掉（原 R8 块同样对它们放行、不核对）；
+      · 已有核对窗口命中（corrob_get 非空 ⇒ 原路径直接改发，不再核对）；
+      · 该名字正在核对退避中（原路径跳过同步核对）；
+      · 在飞数已达 _R8P_MAX（记 r8_parallel_busy，退回同步路径）。
+    """
+    if not _R8P_ENABLED or not CORROB_ENABLED:
+        return None
+    try:
+        if qtype not in (1, 28):
+            return None
+        if is_cn_domain(name) and not _cn_zone_denied(name):
+            return None
+        if corrob_get(name, qtype) is not None:
+            return None
+        if _r8_backoff_active(name, qtype):
+            return None
+        if not _r8p_sem.acquire(False):
+            with _lock:
+                _stats["r8_parallel_busy"] = _stats.get("r8_parallel_busy", 0) + 1
+            return None
+    except Exception:
+        return None
+
+    box = {}
+
+    def _run():
+        try:
+            box["r"] = corrob_query(msg, name, qtype)
+        except Exception:
+            box["r"] = (CORROB_ERROR, None)
+        finally:
+            try:
+                _r8p_sem.release()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_run, daemon=True, name="r8p")
+    t.start()
+    with _lock:
+        _stats["r8_parallel_started"] = _stats.get("r8_parallel_started", 0) + 1
+    return (t, box)
+
+
+def _r8p_fetch(handle, msg, name, qtype, budget):
+    """取提前发起的核对结论；没有 handle（或已来不及）就退回同步 `corrob_query`。
+
+    **语义与直接调 `corrob_query` 完全一致**：返回 (status, resp)，
+    resp 为 None 时调用方原有的"核对未成功"分支照旧生效（含 fail-closed 判定）。
+    ★ 超预算时**不退化成再查一遍** ⇒ 直接按超时返回，避免把核对成本翻倍、也避免
+      突破 `GUARD_SYNC_BUDGET`（红线③：不减少覆盖面靠的是"原本该查的仍然查了"，
+      而不是"超时了再补一次"）。
+    """
+    if handle is None:
+        return corrob_query(msg, name, qtype, budget=budget)
+    t, box = handle
+    try:
+        t.join(max(0.05, float(budget)))
+    except Exception:
+        pass
+    if t.is_alive() or "r" not in box:
+        with _lock:
+            _stats["r8_parallel_late"] = _stats.get("r8_parallel_late", 0) + 1
+        return CORROB_TIMEOUT, None
+    with _lock:
+        _stats["r8_parallel_used"] = _stats.get("r8_parallel_used", 0) + 1
+    return box["r"]
 
 
 def corrob_get(name, qtype):
@@ -7360,6 +7778,67 @@ def _veto_allowed():
         return True
 
 
+# ================= 快速透传（fast-pass）：上游明确 SERVFAIL 时不再空等 alt =================
+# 背景（2026-10-20 现场取证）：
+#   local-a 返回 rc=2 被 classify_response() 归为 Verdict.TRANSPORT（无 DNSSEC EDE）⇒
+#   走 alt 救援（`_finalize_return` 的 `_dl_rem(3.0)`，单次上限 ALT_SOCKET_TIMEOUT_CAP=2.0s）。
+#   而 ALT 通道（unbound-alt，两家欧洲 DoT）实测对正常域名 p50=816ms、12 个里 3 个直接超时
+#   ⇒ 真 SERVFAIL 域名（如 CNAME 死链 ap-update-cdn-cloudflare-a2.haiteluo.com）每次白等
+#   2000ms，客户端拿到 SERVFAIL 要 2006ms，而 unbound 990ms 就已给出结论。
+#
+# 本机制：local-a 给出 transport 失败时，先向一个**快速独立源**发一次带 DO 的 UDP 查询。
+#   · 快速源也明确回 rc=2  ⇒ **两家独立运营方都拒绝** ⇒ 立即透传 SERVFAIL（不等 alt）；
+#   · 其它任何结果（有答案 / 超时 / 无应答）⇒ **原样退回原逻辑**，行为与本机制不存在时一致。
+# 为什么安全：
+#   · 只透传 SERVFAIL —— 不输出任何答案字节，不引入 fail-open 风险；
+#   · 快速源必须**明确给出 rc=2 的完整报文**才算数（超时不算），避免把网络问题当结论；
+#   · 默认关闭（GUARD_FASTPASS 未设置 ⇒ 完全不走本分支）。
+FASTPASS = _flag("GUARD_FASTPASS", False)
+FASTPASS_ADDR = os.environ.get("GUARD_FASTPASS_ADDR", "127.0.0.1:5535")
+FASTPASS_TIMEOUT = float(os.environ.get("GUARD_FASTPASS_TIMEOUT", "0.8"))
+# P0（2026-10-22）：alt 救援的**独立硬上限**（默认 1.2s，与 FASTPASS_TIMEOUT 同量级）。
+# 现场依据：alt 通道（unbound-alt，两家欧洲 DoT）对死链域名实测**永不返回**
+#   （dig @5357 超时 12s 无应答），而调用处只钳在 `_dl_rem(3.0)` ⇒ 每个死链域名
+#   白等 2.0s（ALT_SOCKET_TIMEOUT_CAP）甚至 3.0s。alt 能救回的场景实测是「有答案、
+#   p50≈816ms」，所以 1.2s 足以覆盖真能救的那部分；超时即放弃，把预算还给客户端。
+# 开关 `GUARD_ALT_HARD_CAP`（默认 1.2，设 0 表示不启用 ⇒ 回到旧行为）✓
+ALT_HARD_CAP = float(os.environ.get("GUARD_ALT_HARD_CAP", "1.2"))
+
+
+def _fastpass_servfail(name, qtype):
+    """向快速源问一次；**仅**当它明确回 rc=2 时返回 True（其余一律 False）。
+
+    超时 / 无应答 / 任何非 2 的 rcode ⇒ False（⇒ 调用方退回原 alt 逻辑）✓。
+    每一毫秒都算在请求内，所以这里不做任何重试 ✓。
+    """
+    if not FASTPASS:
+        return False
+    try:
+        _ip, _pt = FASTPASS_ADDR.rsplit(":", 1)
+        _msg = mk_query_do(name, qtype)
+        _t0 = time.monotonic()
+        _data = udp_query((_ip, int(_pt)), _msg, FASTPASS_TIMEOUT)
+        _ms = (time.monotonic() - _t0) * 1000.0
+        if _data is None:
+            with _lock:
+                _stats["fastpass_timeout"] = _stats.get("fastpass_timeout", 0) + 1
+            _tr_note("fastpass", _ms, "timeout")
+            return False
+        _rc = _data[3] & 0xF
+        with _lock:
+            _stats["fastpass_called"] = _stats.get("fastpass_called", 0) + 1
+            if _rc == 2:
+                _stats["fastpass_servfail"] = _stats.get("fastpass_servfail", 0) + 1
+            else:
+                _stats["fastpass_other"] = _stats.get("fastpass_other", 0) + 1
+        _tr_note("fastpass", _ms, "rc%d" % _rc)
+        return _rc == 2
+    except Exception:
+        with _lock:
+            _stats["fastpass_error"] = _stats.get("fastpass_error", 0) + 1
+        return False
+
+
 def _veto_udp(name, qtype, addr, timeout):
     """W1：向 unbound A 发**带 DO** 的 UDP 查询（只当见证 ✓）。
 
@@ -7441,12 +7920,38 @@ def _veto_w2_targets():
     2026-10-10 修正：`_clean_channels()` 返回的是 **dict 列表**
     （`{'label','ip','port','sni'}` ✗ 不是元组）—— 之前按元组取 `item[0]` 会 KeyError 并被吞掉，
     导致 **W2 永远为 None** ✗（"两家不同运营方"规则结构上永不满足 ✗）。
-    这里同时把 NextDNS 系通道（`doq`/`doq2`，即经 aghdq 的 DoQ）排除掉 ✓。
+    这里同时把非 `dot:` 前缀的通道（`doq`/`doq2`/`doq3`/`dnscrypt`）排除掉 ✓。
     """
     try:
         ch = _clean_channels() or []
     except Exception:
         return None
+    # 2026-10-19 P2：解析 W1 端点，用于「同端点排除」。
+    # 原规则是「W2 只认 dot: 前缀」，隐含前提是 W1 = aghdq→NextDNS（本机 doq 中继），
+    # 所以必须排除本机全部 doq 才能保证「不同运营方」。今天 W1 已换成 aghcf→Cloudflare
+    # ⇒ 正确判据应是「与 W1 同一端点」，不是「前缀是否 dot:」。
+    _w1_ep = None
+    try:
+        _hp = str(_witness_addr or "").rsplit(":", 1)
+        if len(_hp) == 2 and _hp[1].strip().isdigit():
+            _w1_ep = (_hp[0].strip(), int(_hp[1]))
+    except Exception:
+        _w1_ep = None
+
+    def _same_ep(a_ip, a_port):
+        """判候选通道与 W1 是否同一端点（localhost 写法归一化）。"""
+        if not _w1_ep:
+            return False
+        try:
+            if int(a_port) != int(_w1_ep[1]):
+                return False
+        except Exception:
+            return False
+        _a = str(a_ip)
+        _w = _w1_ep[0]
+        _lo = ("127.0.0.1", "::1", "localhost", "0.0.0.0", "")
+        return _a == _w or (_a in _lo and _w in _lo)
+
     best = None
     for it in ch:
         try:
@@ -7464,11 +7969,22 @@ def _veto_w2_targets():
             continue
         low = lab.lower()
         # 2026-10-10 P34-L（CNVD 实测定位）：W2 **只接受 `dot:` 前缀**的通道 ✓
-        #   ✗ 排除 doq/doq2/nextdns（= 经 aghdq 的 NextDNS ⇒ 与 W1 同源）
+        #   ✗ 排除 doq/doq2/doq3/nextdns（= 本机中继 ⇒ 与 W1 同源）
         #   ✗ 排除 `dnscrypt`（= FAST_UDP，dnscrypt-proxy 的 CN 规则**会转发给 unbound B** ⇒
         #      与"被质疑方"同源，且实测对它 TIMEOUT ✗ —— 这正是 veto 一直不触发的真因 ✓）
         #   ✔ 只留 `dot:<operator>`（境外认证 DoT，RTT 未知时也能被选到 ✓）
-        if not low.startswith("dot:"):
+        # 2026-10-19 P2（本次修订）：原判据 `if not low.startswith("dot:")` 的前提已失效 ——
+        # 它当年成立是因为 W1 = aghdq→NextDNS（本机 doq 中继），要排除本机全部 doq
+        # 才能保证「两家不同运营方」。现在 W1 = aghcf→Cloudflare(doq3) ⇒ 该前缀判据
+        # 反而把 W2 钉死在两家欧洲 DoT 上（实测 censurfridns 971ms / digitale 1056ms，
+        # 而预算 CN_VETO_W2_BUDGET=1.1s ⇒ W2 有效率仅 27%，见 cn_veto_w2_started/used）。
+        # 新判据（仍保证「不同源」）：
+        #   ① ✗ 排除 dnscrypt —— 其 CN 转发规则指向 unbound B ⇒ 与被质疑方同源（原注释仍成立）
+        #   ② ✗ 排除与 W1 **同一端点**的通道 —— 自我见证没有意义
+        #   ③ ✓ 其余（doq/doq2/doq3/dot:<operator>）一律可作 W2，按 rtt 取最小
+        if low.startswith("dnscrypt"):
+            continue
+        if _same_ep(ip, port):
             continue
         if "nextdns" in low:
             continue
@@ -7538,6 +8054,11 @@ def cn_exist_veto(name, qtype, bresp, bips, deadline, w1_hint=None, deny_probe=F
             pass
         with _lock:
             _stats["cn_clean_hit"] = _stats.get("cn_clean_hit", 0) + 1
+        # 2026-10-24：deny_probe 路径里 None 的语义是「无证据 ⇒ 否决回退 A/alt」✗。
+        # 清洁标记表示「该 zone 已被见证确认存在」✓ ⇒ 必须返 False（可采纳），
+        # 否则清洁缓存一旦命中反而把好域名打成 witness_nonev ✗。
+        if deny_probe:
+            return False
         return None
     if _r8_backoff_active(name, qtype):
         with _lock:
@@ -7561,9 +8082,33 @@ def cn_exist_veto(name, qtype, bresp, bips, deadline, w1_hint=None, deny_probe=F
         return None
     budget = min(CN_VETO_BUDGET, max(0.4, remain - 0.1))
 
-    # ---- W1 + W2 **并发**（P34-E：串行会让每次 CN 查询 +0.8–1.8s ✗；并发后总预算仍是一个
-    # CN_VETO_BUDGET ✓，任一路超时只丢那一路的证据 ⇒ 无证据 ⇒ 不否决 ✓）----
+    # ---- W1 + W2 **真并发**（P34-E 原意；2026-10-19 P1 修复实现）----
+    # 旧实现的隐患（本次实测定位）：下面 `_t1.join()` 先等 W1 用完 0.9s，
+    # 然后才 `_tw.start()` 启动 W2 再等 1.1s ⇒ 两段**串行**叠加最多 2.0s。
+    # 现场后果：P99 固定档 2906ms（= 0.9 + 1.1 + 回退 A/alt 约 0.9）。
+    # 修正：W2 目标由 `_veto_w2_targets()` 独立选出、**不依赖 W1 结果** ⇒ 可与 W1 同时起跑，
+    # 各自保留原预算（0.9s / 1.1s）但共享同一起点 t0 ⇒ 总耗时封顶 max(0.9,1.1)=1.1s。
+    # 安全性不变：W1 超时仍早退（无证据不否决）；W1 有地址/强否定时 W2 结果**丢弃不采用**（原语义）。
     _w1b, _t1 = _witness_box(w1_hint)
+
+    # 预先启动 W2（不等 W1）—— 目标选择不依赖 W1，因此可以提前跑。
+    # 代价：W1 很快给出地址时，这一轮 W2 属于白跑（不阻塞、不影响延迟，但增加境外核验源调用量）。
+    _wt_pre = _veto_w2_targets()
+    _r2box = {"st": CORROB_TIMEOUT, "r": None}
+    _tw = None
+    if _wt_pre and _wt_pre[0]:
+        def _w2_work():
+            try:
+                _r2box["st"], _r2box["r"] = _corrob_query_once(
+                    mk_query_do(name, qtype), name, qtype, _wt_pre[0], CN_VETO_W2_BUDGET, pool="veto")
+            except Exception:
+                _r2box["st"], _r2box["r"] = CORROB_ERROR, None
+
+        _tw = threading.Thread(target=_w2_work)
+        _tw.daemon = True
+        _tw.start()
+        with _lock:
+            _stats["cn_veto_w2_started"] = _stats.get("cn_veto_w2_started", 0) + 1
 
     # P34-G fix: the pre-send result is filled ASYNCHRONOUSLY, so we must WAIT for that thread
     # instead of re-issuing a fresh W1 just because the box looks empty right now (that would
@@ -7593,35 +8138,54 @@ def cn_exist_veto(name, qtype, bresp, bips, deadline, w1_hint=None, deny_probe=F
     else:
         rc1, ips1, proof1 = _w1v[0], _w1v[1], _w1v[2]
 
+    def _denial(rc, ips, pr):
+        """判"否定存在"：返回 'strong' / 'weak' / None。**rc=2/5 与无回应一律 None** ✓。"""
+        if rc is None:
+            return None
+        if rc == 3:
+            return "strong" if pr else "weak"
+        if rc == 0 and not ips:
+            return "strong" if pr else None          # 无证明的 NODATA ⇒ 不否决 ✓（可能是 CNAME 链/CNAME 未展开）
+        return None                                   # rc=2(SERVFAIL)/5(REFUSED)/有地址 ⇒ 不是否定 ✓
+
     # ---- 条件触发（P34-I）：只在"**需要第二家**"时才问 W2 ✓ ----
     #   · W1 已给出该族地址 ⇒ 名字存在、不存在存在性矛盾 ⇒ 跳过 W2 ✓
     #   · W1 是**强否定**（带 DNSSEC 证明）⇒ 按 Codex 规则**单见证即可否决** ⇒ 也跳过 W2 ✓
     _w1_has_addr = bool(ips1) and ((qtype == 1 and all(":" not in x for x in ips1))
                                    or (qtype == 28 and all(":" in x for x in ips1)))
     _w1_strong = (not _w1_has_addr) and bool(proof1) and (rc1 in (0, 3))
-    wt = None if (_w1_has_addr or _w1_strong) else _veto_w2_targets()
+    # A1（2026-10-20）：deny_probe 的结论是 `_dn = (d1 is not None) or (d2 is not None)` ——
+    # d1 一旦非 None，d2 就完全不参与返回值，却仍要 `_tw.join` 等满 CN_VETO_W2_BUDGET(1.1s)。
+    # 实测（cold-cn 20 个不存在域名）：p50 1191ms，其中约 1.0s 是这段纯等待。
+    # 这里提前判 d1 ⇒ 直接跳过 W2 等待。**返回值逐字节不变**：d2 本就不影响 _dn；
+    # 已启动的 W2 daemon 线程照旧在后台跑完（不阻塞、不改任何缓存/统计语义）。
+    _w1_denial = _denial(rc1, ips1, proof1)
+    _short_w2 = bool(deny_probe) and (_w1_denial is not None)
+    wt = None if (_w1_has_addr or _w1_strong or _short_w2) else _veto_w2_targets()
+    if _short_w2:
+        with _lock:
+            _stats["cn_veto_w2_short"] = _stats.get("cn_veto_w2_short", 0) + 1
     if _w1_has_addr or _w1_strong:
         with _lock:
             _stats["cn_veto_w2_skipped"] = _stats.get("cn_veto_w2_skipped", 0) + 1
     if wt and wt[0]:
         with _lock:
             _stats["cn_veto_w2_used"] = _stats.get("cn_veto_w2_used", 0) + 1
-        # 2026-10-10 加固：W2 走 verifier socket，若其内部异常/丢应答会让本线程**无限等待** ✗
-        # ⇒ 用独立线程 + `join(剩余预算)` 强制封顶；超时 ⇒ 视为"无证据"（**绝不 fail-closed** ✓）。
-        _r2box = {"st": CORROB_TIMEOUT, "r": None}
+        # 2026-10-19 P1：W2 线程已在上面与 W1 并发启动（_tw），此处只剩**结算**。
+        # 截止时刻 = t0 + CN_VETO_W2_BUDGET（与 W1 共享起点），而非从现在再多等 1.1s。
+        # 若 W2 没启动（_wt_pre 为空但这里 wt 有值）则退回同步补发，保持原行为。
+        if _tw is None:
+            def _w2_work():
+                try:
+                    _r2box["st"], _r2box["r"] = _corrob_query_once(
+                        mk_query_do(name, qtype), name, qtype, wt[0], CN_VETO_W2_BUDGET, pool="veto")
+                except Exception:
+                    _r2box["st"], _r2box["r"] = CORROB_ERROR, None
 
-        def _w2_work():
-            try:
-                _r2box["st"], _r2box["r"] = _corrob_query_once(
-                    mk_query_do(name, qtype), name, qtype, wt[0], CN_VETO_W2_BUDGET, pool="veto")
-            except Exception:
-                _r2box["st"], _r2box["r"] = CORROB_ERROR, None
-
-        _tw = threading.Thread(target=_w2_work)
-        _tw.daemon = True
-        _remain = max(0.2, CN_VETO_W2_BUDGET)
-        _tw.start()
-        _tw.join(_remain)
+            _tw = threading.Thread(target=_w2_work)
+            _tw.daemon = True
+            _tw.start()
+        _tw.join(max(0.05, (t0 + CN_VETO_W2_BUDGET) - time.time()))
         if _tw.is_alive():
             st2, r2 = CORROB_TIMEOUT, None
             with _lock:
@@ -7638,16 +8202,6 @@ def cn_exist_veto(name, qtype, bresp, bips, deadline, w1_hint=None, deny_probe=F
                     _stats["cn_veto_overload"] = _stats.get("cn_veto_overload", 0) + 1
                 else:
                     _stats["cn_veto_timeout"] = _stats.get("cn_veto_timeout", 0) + 1
-
-    def _denial(rc, ips, pr):
-        """判"否定存在"：返回 'strong' / 'weak' / None。**rc=2/5 与无回应一律 None** ✓。"""
-        if rc is None:
-            return None
-        if rc == 3:
-            return "strong" if pr else "weak"
-        if rc == 0 and not ips:
-            return "strong" if pr else None          # 无证明的 NODATA ⇒ 不否决 ✓（可能是 CNAME 链/CNAME 未展开）
-        return None                                   # rc=2(SERVFAIL)/5(REFUSED)/有地址 ⇒ 不是否定 ✓
 
     d1 = _denial(rc1, ips1, proof1)
     d2 = _denial(rc2, ips2, proof2)
@@ -7666,6 +8220,18 @@ def cn_exist_veto(name, qtype, bresp, bips, deadline, w1_hint=None, deny_probe=F
                     _stats["cn_dom_witness_nonev"] = _stats.get("cn_dom_witness_nonev", 0) + 1
         except Exception:
             pass
+        # 2026-10-24：只缓存「见证明确确认存在」(_spoke 且无否定) 的结论 ✓ ——
+        # 存在性是**域名自身属性**、不随 TTL 变化 ⇒ 300s 内复用不降低抗投毒强度 ✓；
+        # 否决(_dn) 与无证据(超时/静默) 一律不写 ✓（保持 P34-AR 原判据不变）。
+        if _spoke and not _dn:
+            try:
+                _cn_clean_set(name, qtype=qtype,
+                              source=("w1+w2" if (rc1 is not None and rc2 is not None) else "w1"),
+                              verdict="existence-only")
+                with _lock:
+                    _stats["cn_clean_witness_cached"] = _stats.get("cn_clean_witness_cached", 0) + 1
+            except Exception:
+                pass
         return True if _dn else (False if _spoke else None)
     # 2026-10-10 P34-K/L：裁决调试留痕 —— P34-O 起改为**默认关闭的开关** ✓
     #   （排查期它一次定位到"W2 被选成 dnscrypt"的真因 ✓；但常态下没必要刷日志 ✗）
@@ -7863,7 +8429,7 @@ for _pair in (os.environ.get("GUARD_SRC_MAP_EXTRA") or "").split(","):
 def _host_ipv4_set():
     """枚举**本机**全部 IPv4 地址 ✓ —— 用于把主机侧自检归入 `host`（不污染用户侧基线）✗。
 
-    为什么必须动态算：`eth0` 是 DHCP 的（本机实测 `192.0.2.10/24`），硬编码会随租约失效；
+    为什么必须动态算：`eth0` 是 DHCP 的（本机实测 `198.51.100.11/18`），硬编码会随租约失效；
     而主机自检经 `eth0` 打 `docker0` 的 `172.18.0.1:5355` 时，**内核选的源地址是 eth0 的 IP**
     （`ip route get 172.18.0.1` → `local dev lo src 172.18.0.1`，但 UDP 实测源是 eth0）⇒ 必须
     按"是否本机地址"判定，而不是只查 `_SRC_MAP` ✓。
@@ -7991,6 +8557,18 @@ def handle(msg):
     if neg:
         with _lock:
             _neg_cache.pop((name, qtype), None)
+    # ★ A3（2026-10-20）：双源明确 SERVFAIL 的 15s 记忆 ⇒ 死链域名不再每次重走全链路 ✓。
+    #   只回 SERVFAIL（不含任何答案字节）⇒ 既不扩大可信源、也不延长任何**答案**寿命 ✓。
+    #   位置在 _neg_cache 之后 ⇒ 仍是"拒绝"语义，不放行任何候选 ✓。
+    if _sf_get(name, qtype):
+        with _lock:
+            _stats["q"] += 1
+            _stats["fail_closed"] += 1
+            try:
+                _fc_classify("sf_cache")
+            except Exception:
+                pass
+        return mk_servfail(msg, qid)
     with _lock:
         _stats["q"] += 1
         known = name in _table or any(name.endswith("." + d) for d in _table)
@@ -8120,8 +8698,17 @@ def handle(msg):
         _sf_lk = None
         _sf_owned = False
     _t_dom = time.monotonic()
+    # ★ 2026-10-18 批次 4：与明文递归**并发**发起 R8 核对，把冷查询从
+    #   `unbound冷(≈323ms) + 核对冷(≈300ms)` 的 sum 压到 max。
+    #   红线②守卫：这里只提前**发起**，不拿答案见 `_r8p_start()` 的注释；
+    #   明文放行判定仍在本函数原 R8 位置等核对结论（见 `_r8p_fetch(...)` 调用点）。
+    _fut8 = None
     try:
         if uresp is None:
+            try:
+                _fut8 = _r8p_start(msg, name, qtype)
+            except Exception:
+                _fut8 = None
             uresp, src, bget = domestic(domestic_msg, name=name, qtype=qtype)
             # 领跑者发布（**成败都发** ✓）⇒ 等待者据此复用/放行 ✓
             if _sf_owned and _sf_slot is not None:
@@ -8563,7 +9150,8 @@ def handle(msg):
                     log("R8K  %-38s 核对退避中 → 跳过同步核对（不改答案）" % name)
                     # P34-AV + Task3 P1-1：出口同门 ✓ —— src 由 `_LABEL_MAP` 折算 ✓（POL⇒local-alt ✓；CNV/POL-SF⇒终局结论，不过闸 ✓）
                     return _finalize_return(uresp, _src_kind(src), name, qtype, qid, msg)
-                _cstat, cresp = corrob_query(msg, name, qtype, budget=min(CORROB_DOT_TIMEOUT, _left8))
+                _cstat, cresp = _r8p_fetch(_fut8, msg, name, qtype,
+                                           min(CORROB_DOT_TIMEOUT, _left8))
                 # 2026-10-10 Patch8（Codex ⑦）：严格清单门控 —— **必须放在 `cresp is None` 之前**。
                 # 否则核对失败时会落到 CORROB_STRICT_FAIL_CLOSED=0 的"保留明文"分支，
                 # 使"禁明文回退"静默失效 ✗。此处两条出口都 return，绝不再下发明文。
@@ -9006,25 +9594,39 @@ def tcp_server():
 
 
 def prewarm():
-    for ip, port, sni in CLEAN_DOT:
+    def _warm_one(ip, port, sni, out, idx):
         try:
-            with _pool_lock((ip, port, sni)):
-                if (ip, port, sni) not in _pool:
-                    ctx = ssl.create_default_context()
-                    _pool[(ip, port, sni)] = ctx.wrap_socket(
-                        socket.create_connection((ip, port), timeout=8), server_hostname=sni)
-                    log("prewarm ok %s" % sni)
+            ctx = ssl.create_default_context()
+            s = ctx.wrap_socket(socket.create_connection((ip, port), timeout=8),
+                                server_hostname=sni)
+            _pool_give((ip, port, sni), s)
+            out[idx] = True
         except Exception as e:
-            log("prewarm fail %s: %s" % (sni, str(e)[:50]))
+            out[idx] = str(e)[:50]
+
+    for ip, port, sni in CLEAN_DOT:
+        n = _POOL_N
+        out = [None] * n
+        ths = [threading.Thread(target=_warm_one, args=(ip, port, sni, out, i), daemon=True)
+               for i in range(n)]
+        for t in ths:
+            t.start()
+        for t in ths:
+            t.join(15)
+        okc = sum(1 for r in out if r is True)
+        if okc:
+            log("prewarm ok %s (%d/%d 条)" % (sni, okc, n))
+        else:
+            log("prewarm fail %s: %s" % (sni, out[0]))
     # DoQ 转发器（aghdq / aghdq2）各预热一次，避免首次使用付 QUIC 握手（实测冷启动 550ms~1.6s）
     for i, (ip, port) in enumerate(LOCAL_DOQ_LIST):
-        tag = "doq" if i == 0 else "doq2"
+        tag = ("doq", "doq2", "doq3")[i] if i < 3 else "doq%d" % i
         try:
             r = _udp_raw(mk_query("example.com", qid=0x4242 + i), ip, port, 5)
-            log("prewarm ok %s(aghdq%s:%d)" % (tag, "2" if i else "", port) if r
-                else "prewarm fail %s(aghdq%s:%d): 无应答" % (tag, "2" if i else "", port))
+            log("prewarm ok %s(:%d)" % (tag, port) if r
+                else "prewarm fail %s(:%d): 无应答" % (tag, port))
         except Exception as e:
-            log("prewarm fail %s(aghdq%s:%d): %s" % (tag, "2" if i else "", port, str(e)[:50]))
+            log("prewarm fail %s(:%d): %s" % (tag, port, str(e)[:50]))
 
 
 def keepalive():

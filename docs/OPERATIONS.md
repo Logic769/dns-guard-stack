@@ -135,7 +135,7 @@ sudo $CODE_DIR/tools/make-snapshot.sh          # → /root/dns-snapshot-<日期>
 | 症状 | 先做 |
 |---|---|
 | 客户端全部解析失败 | `verify.sh`；再看 `journalctl -u dnsguard -n 80`、`stats.json` 的 `fc_*` |
-| 只有 DoT 失败 | `openssl s_client -connect <ip>:853 -servername $DOMAIN`；查 stream 片段与证书 |
+| 只有 DoT 失败 | `openssl s_client -connect <ip>:853 -servername $DOMAIN`；`systemctl status dnsdist` + 证书（legacy 场景再查 stream 片段） |
 | 只有 DoH 失败 | `curl -sv https://$DOMAIN:444/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB` |
 | 国内域名被解析到境外 CDN | `probe-cand.py <域名>`；若 B 给的是污染答案而 guard 采纳了 → 加入 `cn-trust-exceptions.txt` |
 | 某个境外域名解析不到（NXDOMAIN） | 检查是否误入否决名单：`grep -i <域名> ${LISTS_DIR}/cn_veto.txt` |

@@ -1,0 +1,16 @@
+[Unit]
+Description=dnscrypt-proxy local encrypted resolver (127.0.0.2:5353)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/dnscrypt-proxy -config /opt/dnscrypt-proxy/dnscrypt-proxy.toml
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

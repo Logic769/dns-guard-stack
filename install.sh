@@ -75,6 +75,14 @@ set -a; . "$env_file"; set +a
 : "${CHAINMON_MEMORY_MAX:=256}"; : "${DEVFP_MEMORY_MAX:=176}"
 : "${INSTALL_NGINX:=0}"; : "${NGINX_VHOST_DIR:=/www/server/panel/vhost/nginx}"
 : "${NGINX_BIN:=nginx}"; : "${TZ:=Asia/Shanghai}"
+# dnsdist 入口（2026-10-22 起 853/444 由 dnsdist 直接终结 TLS，不再经 nginx 反代：
+# nginx 反代到 127.0.0.1 后后端只剩 127.0.0.1，拿不到真实客户端 IP）
+: "${DNSDIST_CONTROL:=127.0.0.1:5199}"; : "${DNSDIST_WEB:=127.0.0.1:18083}"
+gen_secret() { python3 -c 'import secrets;print(secrets.token_hex(24))' 2>/dev/null \
+  || echo "change-me-$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"; }
+: "${DNSDIST_CONTROL_KEY:=$(gen_secret)}"
+: "${DNSDIST_WEB_PASSWORD:=$(gen_secret)}"
+: "${DNSDIST_WEB_APIKEY:=$(gen_secret)}"
 # 名单档位：minimal=只放骨架（默认，不联网）/ fetch=安装时立即拉社区名单
 : "${LISTS_PROFILE:=minimal}"
 [ "$LISTS_PROFILE" = "fetch" ] && FETCH=1
@@ -135,6 +143,25 @@ render() { # render <tpl> <out>
         -e 's|172\\.18\\.0\\.5|$UNBOUND_B_IP|g' \
         -e 's|172\\.18\\.0\\.8|$UNBOUND_ALT_IP|g' \
         '$1' > '$2'"
+}
+
+# dnsdist 模板渲染：端口/监听地址/证书路径/口令都要替换（render() 只处理域名与容器 IP）。
+# 证书路径一律改写成 $CERT/$KEY（CERT/KEY 在上面的证书段已定好，默认 RUNTIME_DIR/tls/）。
+render_dnsdist() { # render_dnsdist <tpl> <out>
+  run "sed -e 's|dns\\.example\\.com|$DNS_DOMAIN|g' \\
+        -e 's|172\\.18\\.0\\.2|$AGH_IP|g' \\
+        -e 's|0\\.0\\.0\\.0:853|0.0.0.0:$DOT_PORT|g' \\
+        -e 's|0\\.0\\.0\\.0:444|0.0.0.0:$DOH_PORT|g' \\
+        -e 's|127\\.0\\.0\\.1:5199|$DNSDIST_CONTROL|g' \\
+        -e 's|127\\.0\\.0\\.1:18083|$DNSDIST_WEB|g' \\
+        -e 's|change-me-dnsdist-control-key|$DNSDIST_CONTROL_KEY|g' \\
+        -e 's|change-me-dnsdist-web-password|$DNSDIST_WEB_PASSWORD|g' \\
+        -e 's|change-me-dnsdist-web-apikey|$DNSDIST_WEB_APIKEY|g' \\
+        -e 's|/www/server/panel/vhost/cert/[^/]*/fullchain.pem|$CERT|g' \\
+        -e 's|/www/server/panel/vhost/cert/[^/]*/privkey.pem|$KEY|g' \\
+        '$1' > '$2'"
+  # 配置里含 control key 与统计口令 ⇒ 只给 root 读
+  run "chmod 0640 '$2'"
 }
 
 step "部署代码到 $CODE_DIR"
@@ -469,19 +496,63 @@ if [ -d "$HERE/dashboards/chainmon" ]; then
   warn "看板未自动启动：需先确认链路上的 nginx 日志路径与容器名与本机一致"
 fi
 
-step "nginx 片段"
-run "install -d -m 0755 '$RUNTIME_DIR/nginx'"
-render "$HERE/deploy/nginx/tcp/dnsguard-dot-853.conf" "$RUNTIME_DIR/nginx/dot-853.conf"
-render "$HERE/deploy/nginx/9.devfp-doh444.conf"      "$RUNTIME_DIR/nginx/doh-444.conf"
+step "dnsdist（公网 DoT/DoH 入口）"
+# 2026-10-22 起 853/444 由 dnsdist 直接终结 TLS：经 nginx 反代到 127.0.0.1 之后后端只剩
+# 127.0.0.1，看不到真实客户端 IP；dnsdist 直接监听既能保住 remoteaddr，又内置 PacketCache
+# （缓存在这一层，chainmon 的命中率因此改读 dnsdist 统计接口）。
+# ⚠ 端口互斥：若机器上已有的 nginx DoT/DoH 片段（tcp/dnsguard-dot-853.conf、9.dnsguard-doh444.conf）
+#   仍在生效，dnsdist 会因 853/444 被占而启动失败——切换时先禁用那两个片段再启动 dnsdist。
+if need dnsdist; then
+  run "install -d -m 0755 '$RUNTIME_DIR/dnsdist' /etc/dnsdist"
+  render_dnsdist "$HERE/deploy/dnsdist/dnsdist.conf.tpl" "$RUNTIME_DIR/dnsdist/dnsdist.conf"
+  run "install -m 0640 '$RUNTIME_DIR/dnsdist/dnsdist.conf' /etc/dnsdist/dnsdist.conf"
+  run "install -d -m 0755 /etc/systemd/system/dnsdist.service.d"
+  run "install -m 0644 '$HERE/deploy/systemd/dnsdist.service' /etc/systemd/system/dnsdist.service"
+  run "install -m 0644 '$HERE/deploy/systemd/dnsdist.service.d/override.conf' /etc/systemd/system/dnsdist.service.d/override.conf"
+  if [ "$DRY" != 1 ]; then
+    # markQuery 以 append 方式写这个文件：只建一次，重跑不截断；轮转交给 logrotate
+    # （copytruncate：dnsdist 每次查询都重新 open，不存在持有句柄的问题）
+    [ -e /var/log/dnsdist-query.log ] || run "install -m 0640 /dev/null /var/log/dnsdist-query.log"
+    cat > /etc/logrotate.d/dnsdist-query <<'EOF'
+/var/log/dnsdist-query.log {
+    daily
+    rotate 7
+    size 50M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
+EOF
+    # chainmon 读统计接口要用 apiKey，必须与 dnsdist.conf 里的 apiKey 完全一致
+    run "install -d -m 0755 /etc/systemd/system/chainmon.service.d"
+    cat > /etc/systemd/system/chainmon.service.d/30-dnsdist-stats.conf <<EOF
+# 由 install.sh 生成（$(date -Iseconds)）—— dnsdist 只读统计端点
+[Service]
+Environment=CHAINMON_DNSDIST_STATS_URL=http://$DNSDIST_WEB/api/v1/servers/localhost/statistics
+Environment=CHAINMON_DNSDIST_API_KEY=$DNSDIST_WEB_APIKEY
+EOF
+  fi
+  run "systemctl daemon-reload"
+  run "systemctl enable --now dnsdist.service" \
+    || warn "dnsdist 未启动：看 systemctl status dnsdist / journalctl -u dnsdist -n 50（常见：$DOT_PORT/$DOH_PORT 被 nginx 占用、证书路径不可读）"
+else
+  warn "未安装 dnsdist（Debian/Ubuntu：apt install dnsdist）。入口退化为下面 legacy 的 nginx 片段。"
+fi
+
+step "nginx 片段（legacy：dnsdist 之前由 nginx 承接 853/444）"
 if [ "$INSTALL_NGINX" = 1 ] && [ -d "$NGINX_VHOST_DIR" ]; then
-  run "install -d -m 0755 '$NGINX_VHOST_DIR/tcp'"
+  run "install -d -m 0755 '$RUNTIME_DIR/nginx' '$NGINX_VHOST_DIR/tcp'"
+  render "$HERE/deploy/nginx/tcp/dnsguard-dot-853.conf" "$RUNTIME_DIR/nginx/dot-853.conf"
+  render "$HERE/deploy/nginx/9.devfp-doh444.conf"      "$RUNTIME_DIR/nginx/doh-444.conf"
   run "install -m 0644 '$RUNTIME_DIR/nginx/dot-853.conf' '$NGINX_VHOST_DIR/tcp/dnsguard-dot-853.conf'"
   run "install -m 0644 '$RUNTIME_DIR/nginx/doh-444.conf' '$NGINX_VHOST_DIR/9.dnsguard-doh444.conf'"
   run "$NGINX_BIN -t && $NGINX_BIN -s reload" || warn "nginx 校验/重载失败，请手动检查"
 else
-  info "nginx 片段已生成到 $RUNTIME_DIR/nginx/（设 INSTALL_NGINX=1 可自动安装）"
-  info "  需保证：tcp 段 include 该目录里的 dot-853.conf；http 段 include doh-444.conf"
-  info "  并把证书路径指向 $CERT / $KEY"
+  info "跳过：853/444 已由 dnsdist 承接，不再安装 nginx 的 dot-853.conf / doh-444.conf"
+  info "  只有本机跑不了 dnsdist 时才设 INSTALL_NGINX=1 退回 nginx 入口（两者不能同时监听同一端口）"
+  info "  模板仍在 deploy/nginx/{tcp/dnsguard-dot-853.conf,9.devfp-doh444.conf}，可手工渲染"
 fi
 
 step "完成"

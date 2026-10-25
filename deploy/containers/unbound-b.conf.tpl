@@ -28,6 +28,8 @@ server:
     prefetch-key: yes
     serve-expired-client-timeout: 300
     infra-keep-probing: yes
+    fast-server-permil: 5
+    fast-server-num: 1
     verbosity: 1
     interface: 0.0.0.0
     port: 53
@@ -101,14 +103,14 @@ server:
 forward-zone:
     name: "."
     forward-tls-upstream: yes
-    forward-addr: 218.30.118.6@853#dot.360.cn
+    # 停用(实测p50=120/p90=353): forward-addr: 218.30.118.6@853#dot.360.cn
     forward-addr: 101.226.4.6@853#dot.360.cn
-    forward-addr: 123.125.81.6@853#dot.360.cn
+    # 停用(实测p50=135/p90=240): forward-addr: 123.125.81.6@853#dot.360.cn
     forward-addr: 223.5.5.5@853#dns.alidns.com
     # 2026-10-05：补两个**实测可用**的国内 DoT 上游（AliDNS 备 IP 21ms；DNSPod/腾讯 1.12.12.12 129ms，
     # 换运营商增加冗余）。注：腾讯 119.29.29.29 与百度 180.76.76.76 的 853 实测 timeout，不加。
     forward-addr: 223.6.6.6@853#dns.alidns.com
-    forward-addr: 1.12.12.12@853#dns.pub
+    # 停用(连接不稳,实测3/20失败): forward-addr: 1.12.12.12@853#dns.pub
     # 2026-10-05：**forward-first 改为 no（fail-closed）**。原来 yes 会在 DoT 上游失败时 "回退"，
     # 而 unbound 的迭代器继承了 forward-tls-upstream，导致它去对**根服务器的 53 端口做 TLS 握手**
     # （日志：ssl handshake failed 198.41.0.4/192.112.36.4 port 53）—— 必然失败，是"坏回退"：

@@ -1,0 +1,52 @@
+[Unit]
+Description=dnsguard bypass release (validation only; 127.0.0.1:5455)
+After=network-online.target docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/dnsguard/releases/20261010-1/guard.py
+Restart=no
+User=root
+WorkingDirectory=/opt/dnsguard/releases/20261010-1
+StandardOutput=append:/opt/dnsguard/releases/20261010-1/guard.log
+StandardError=append:/opt/dnsguard/releases/20261010-1/guard.log
+# 隔离：独立端口 / 状态目录 / 日志 / verifier socket
+Environment=GUARD_LISTEN_HOST=127.0.0.1
+Environment=GUARD_PORT=5455
+Environment=GUARD_PROBE_HOST=127.0.0.1
+Environment=GUARD_PROBE_PORT=5456
+Environment=GUARD_STATE_DIR=/opt/dnsguard/releases/20261010-1/state
+Environment=GUARD_LOG=/opt/dnsguard/releases/20261010-1/guard.log
+Environment=GUARD_VERIFIER_SOCKET=/run/dnsguard/verifier-bypass.sock
+Environment=GUARD_NO_CHURN=1
+# 与生产对齐的预算/超时（方案任务3 要求两进程共同预算）
+Environment=GUARD_DOMESTIC_DO=1
+Environment=GUARD_HEDGE_MS=280
+Environment=GUARD_SYNC_BUDGET=3.8
+Environment=GUARD_QUERY_DEADLINE=4.0
+Environment=GUARD_CORROB_DOT_TIMEOUT=3.5
+Environment=GUARD_CORROB_TTL=600
+Environment=GUARD_CORROB_STRICT_NODATA=1
+Environment=GUARD_CORROB_STRICT_FAIL_CLOSED=0
+Environment=GUARD_MAX_INFLIGHT=32
+Environment=GUARD_MAX_PENDING=48
+Environment=GUARD_UPSTREAM_WORKERS=16
+Environment=GUARD_COLD_MAX=48
+Environment=GUARD_MAX_QUEUE=16
+Environment=GUARD_DISABLE_DOQ2=1
+Environment=GUARD_FAST_UDP=127.0.0.2:5353
+Environment=GUARD_SHADOW_PCT=0
+Environment=GUARD_CN_EXIST_MODE=enforce
+Environment=GUARD_CN_VETO_WITNESS=127.0.0.1:5533
+Environment=GUARD_R8_ASN_GATE=1
+Environment=GUARD_OVERLOAD_RCODE=5
+Environment=GUARD_OVERLOAD_EDE=22
+MemoryHigh=160M
+MemoryMax=192M
+MemorySwapMax=0
+TasksMax=256
+Nice=10
+
+[Install]
+WantedBy=multi-user.target

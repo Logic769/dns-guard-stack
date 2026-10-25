@@ -4,7 +4,8 @@
 
 | 层 | 组件 | 监听 | 作用 |
 |---|---|---|---|
-| 入口 | nginx（宿主） | DoT `853/tcp`、DoH `443`、`444/tcp` | TLS 终结；DoT 内腿明文转 `adgh:53`，DoH 反代 `agh_doh`（直连 adgh 容器 443，keepalive 池）；按源限流 |
+| 入口 | `dnsdist`（宿主 systemd） | DoT `853/tcp`、DoH `444/tcp`（路径 `/dns-query`）、控制台 `127.0.0.1:5199`、统计 `127.0.0.1:18083` | TLS 终结；**保留真实客户端 IP**；内置 PacketCache（32k 条）；`dynBlockRulesGroup` 限速 200 qps/源 |
+| 入口（legacy） | nginx（宿主） | DoT `853/tcp`、DoH `443`、`444/tcp` | 2026-10-22 之前的入口：DoT 内腿明文转 `adgh:53`，DoH 反代 `agh_doh`。现已让位给 dnsdist，仅在跑不了 dnsdist 的机器上使用 |
 | 过滤/缓存 | AdGuard Home 容器 `adgh` | `53`（融合）、宿主 `127.0.0.1:3000`(UI) / `4443`(HTTPS) / `8854`(DoT) | 规则过滤、缓存、唯一上游 = guard |
 | 策略 | `guard`（宿主 systemd） | `docker0 网关:5355`(udp+tcp) + `:5356`(udp，探针通道) | 准入、共识、见证、否决、缓存代次、失败语义 |
 | 策略 | `verifier`（宿主 systemd） | `/run/dnsguard/verifier.sock`（AF_UNIX） | 独立进程做交叉验证，隔离慢查询 |
@@ -22,8 +23,8 @@
 
 ### 境外域名（例如 `www.google.com`）
 
-1. 客户端 DoT/DoH → nginx 终结 TLS（限流：每源 32 并发 / DoT 全端口 512；DoH 每源 200 r/s，burst 200）
-2. nginx → `adgh:53`：先查 AGH 本地缓存；命中即返回（此处**不**做 DNSSEC 判断）
+1. 客户端 DoT/DoH → `dnsdist` 终结 TLS，拿到真实 `remoteaddr`（限速：单来源 200 qps / 10s 窗口，超限 REFUSED 10s）
+2. `dnsdist` 先查自己的 PacketCache；命中即返回。未命中再转 `adgh:53`（AGH 本地缓存 + 规则过滤，此处**不**做 DNSSEC 判断）
 3. 未命中 → AGH 唯一上游 → guard `5355`
 4. guard 并行/对冲地问 A（境外，验签）与 alt；必要时用 verifier 做隔离验证
 5. 采纳判定：`secure`（验签通过）＞ `accepted`（可信但未验签）；`bogus`/`transport` 不采纳

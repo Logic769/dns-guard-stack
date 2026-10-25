@@ -1008,6 +1008,16 @@ def xrun(sql, args=()):
         _DIRTY[0] = True
 
 
+def xmany(sql, seq):
+    """批量执行同一条语句：一次拿锁，避免几千次 xrun 把 DB_LOCK 反复抢走。"""
+    seq = list(seq)
+    if not seq:
+        return
+    with DB_LOCK:
+        db().executemany(sql, seq)
+        _DIRTY[0] = True
+
+
 def mark_dirty():
     _DIRTY[0] = True
 
@@ -1070,6 +1080,13 @@ def device_for(fp_key, seed=None):
                 if src == "server":
                     xrun("INSERT INTO events(ts,kind,device_id,detail) VALUES(?,?,?,?)",
                          (ts, "new_device", d["id"], "发现新指纹设备"))
+            # 2026-10-25：这个缓存原来没有上限——每台设备一条完整行（devices 表 66MB / 10282 行 ≈ 6.4KB），
+            # 进程跑 1.5 小时后 RSS 从 24M 涨到 170M，正好顶死 176M 的 cgroup 硬顶，
+            # 于是文件页缓存被压到只剩 14MB，每次查库都要走磁盘，接口从毫秒级退化到 20 秒级。
+            # 这里按插入顺序淘汰最老的一半，把稳态内存压住。
+            if len(_DEV_CACHE) > 4000:
+                for _old in list(_DEV_CACHE.keys())[:2000]:
+                    _DEV_CACHE.pop(_old, None)
             _DEV_CACHE[fp_key] = d
         return d["id"], d
 
@@ -1896,7 +1913,7 @@ def ndpi_run_once():
                     cip, cport, svcport = x.get("dest_ip"), x.get("dst_port"), sp
                 else:
                     continue
-                if cip == CFG.get("server_ip"):
+                if cip in (CFG.get("server_ip"), "198.51.100.11"):
                     continue
                 risks = "、".join((r.get("risk") if isinstance(r, dict) else str(r))
                                  for r in (nd.get("flow_risk") or {}).values()) if isinstance(
@@ -2069,17 +2086,26 @@ _TEST_QH = (".dotprobe.cn", ".dotbatch.cn", ".dfp-align", ".doffprobe", ".chtest
              ".dfp-aligntest")
 
 
-def device_probe_class(dev, dot_conns=None):
-    """识别「扫描器」与「自测探针」——这两类不该计入「用了 DoT/DoH 的设备」。"""
+def device_probe_class(dev, dot_conns=None, _pc=None):
+    """识别「扫描器」与「自测探针」——这两类不该计入「用了 DoT/DoH 的设备」。
+
+    _pc 是批量模式：{"nq": {device_id: 查询数}, "t": {device_id: 测试标记查询数}}。
+    cluster_devices 会先一次性预取这两张表，避免对每台设备各跑两次查询
+    （10282 台 × 2 ≈ 2 万次串行 SELECT，全部排在 DB_LOCK 上）。"""
     ips = list((jload(dev.get("src_ips"), {}) or {}).keys())
     conns = dev.get("conn_count") or 0
-    qn = qone("SELECT COUNT(*) c FROM dns_recent WHERE device_id=?", (dev["id"],))
-    nq = (qn["c"] if qn else 0) or 0
-    # 自测探针：查询名带测试标记
-    t = qone("SELECT COUNT(*) c FROM dns_recent WHERE device_id=? AND (qh LIKE '%.dotprobe.cn'"
-             " OR qh LIKE '%.dotbatch.cn' OR qh LIKE '%.dfp-align%' OR qh LIKE '%.doffprobe%'"
-             " OR qh LIKE '%.chtest%' OR qh LIKE '%.dfp-aligntest%')", (dev["id"],))
-    if t and (t["c"] or 0) > 0:
+    if _pc is not None:
+        nq = _pc["nq"].get(dev["id"], 0)
+        tc = _pc["t"].get(dev["id"], 0)
+    else:
+        qn = qone("SELECT COUNT(*) c FROM dns_recent WHERE device_id=?", (dev["id"],))
+        nq = (qn["c"] if qn else 0) or 0
+        # 自测探针：查询名带测试标记
+        t = qone("SELECT COUNT(*) c FROM dns_recent WHERE device_id=? AND (qh LIKE '%.dotprobe.cn'"
+                 " OR qh LIKE '%.dotbatch.cn' OR qh LIKE '%.dfp-align%' OR qh LIKE '%.doffprobe%'"
+                 " OR qh LIKE '%.chtest%' OR qh LIKE '%.dfp-aligntest%')", (dev["id"],))
+        tc = (t["c"] if t else 0) or 0
+    if tc > 0:
         return "self_test"
     # 扫描器：连接很少、几乎没查询、无 SNI/ALPN，且同一 IP 下出现多个 TLS 版本家族
     if conns <= 10 and nq == 0:
@@ -2107,12 +2133,35 @@ def _ja4_parts(ja4):
 def cluster_devices():
     """把指纹合并成「物理客户端」：强证据（同一张会话票 / 同 IP+同套件哈希+同 TCP 指纹 / 同 IP+同栈家族）。
     扫描器与自测探针被单独归类，不参与合并。"""
-    devs = [dict(r) for r in qall("SELECT * FROM devices WHERE source='server'")]
+    # 只取本函数真正用到的列：整行平均 6.4KB，10282 行全读进来就是 66MB 常驻内存
+    devs = [dict(r) for r in qall("SELECT id,src_ips,conn_count,ja4,tcp_sig,first_seen,last_seen,"
+                                  "COALESCE(vendor,'') AS vendor,probe_class,cluster_id"
+                                  " FROM devices WHERE source='server'")]
     pc = {}
+    # 预取两张按设备汇总的统计表（每设备一行，而不是每设备查两次）
+    _nq_map, _t_map = {}, {}
+    _pc_ok = False
+    try:
+        for _r in qall("SELECT device_id, COUNT(*) c FROM dns_recent"
+                       " WHERE device_id IS NOT NULL GROUP BY device_id"):
+            _nq_map[_r["device_id"]] = _r["c"] or 0
+        for _r in qall("SELECT device_id, COUNT(*) c FROM dns_recent WHERE device_id IS NOT NULL"
+                       " AND (qh LIKE '%.dotprobe.cn' OR qh LIKE '%.dotbatch.cn'"
+                       " OR qh LIKE '%.dfp-align%' OR qh LIKE '%.doffprobe%'"
+                       " OR qh LIKE '%.chtest%' OR qh LIKE '%.dfp-aligntest%')"
+                       " GROUP BY device_id"):
+            _t_map[_r["device_id"]] = _r["c"] or 0
+        _pc_ok = True
+    except Exception:
+        _nq_map, _t_map = {}, {}
+    _pcc = {"nq": _nq_map, "t": _t_map}
     for d in devs:
         try:
-            pc[d["id"]] = device_probe_class(d)
-            xrun("UPDATE devices SET probe_class=? WHERE id=?", (pc[d["id"]], d["id"]))
+            _v = device_probe_class(d, _pc=_pcc)
+            pc[d["id"]] = _v
+            # 只在分类真的变化时才写库：稳态下这 10282 行几乎不用动
+            if (d.get("probe_class") or None) != (_v or None):
+                xrun("UPDATE devices SET probe_class=? WHERE id=?", (_v, d["id"]))
         except Exception:
             pc[d["id"]] = None
     parent = {d["id"]: d["id"] for d in devs}
@@ -2168,11 +2217,13 @@ def cluster_devices():
                     union(a["id"], b["id"], "同 IP + 同 TCP 指纹 + 同套件哈希 %s（同一 TLS 库的两个入口）" % ab[:8])
                 elif len(aa) >= 5 and len(bb2) >= 5 and aa[1:5] == bb2[1:5]:
                     union(a["id"], b["id"], "同 IP + 同 TCP 指纹 + 同栈家族 %s" % aa[1:5])
-    # 落库
+    # 落库：先收集再批量写。原来每台设备一次 xrun，等于让 DB_LOCK 被抢两千多次，
+    # 期间所有 API 查询都排在后面等锁 —— 这才是看板加载缓慢的直接原因。
     groups = {}
     for d in devs:
         groups.setdefault(find(d["id"]), []).append(d)
-    xrun("DELETE FROM clusters")
+    _ins = []
+    _upd = []
     n = 0
     for root, members in groups.items():
         n += 1
@@ -2191,27 +2242,35 @@ def cluster_devices():
         elif klass == "self_test":
             sw.append("自测探针")
         nm = "%s%s" % ((best.get("vendor") or "未识别"), ("（%d 个指纹）" % len(ids)) if len(ids) > 1 else "")
-        nq = 0
-        try:
-            ph = ",".join("?" * len(ids))
-            rr = qone("SELECT COUNT(*) c FROM dns_recent WHERE device_id IN (%s)" % ph, tuple(ids))
-            nq = (rr["c"] if rr else 0) or 0
-        except Exception:
+        if _pc_ok:
+            # 与 SELECT COUNT(*) … WHERE device_id IN (ids) 等价：预取表就是按设备分组的全量计数
+            nq = sum(_nq_map.get(i, 0) for i in ids)
+        else:
             nq = 0
+            try:
+                ph = ",".join("?" * len(ids))
+                rr = qone("SELECT COUNT(*) c FROM dns_recent WHERE device_id IN (%s)" % ph, tuple(ids))
+                nq = (rr["c"] if rr else 0) or 0
+            except Exception:
+                nq = 0
         active = 1 if (tot >= 20 or nq >= 20) else 0
         noisy = 1 if (tot <= 3 and nq == 0) else 0
         evs = " ".join(ev.get(root, []))
         conf = "high" if "会话票" in evs else ("mid" if "套件哈希" in evs else ("low" if "栈家族" in evs else None))
-        xrun("INSERT INTO clusters(id,name,member_ids,n_members,n_conns,ips,evidence,probe_class,"
-             "first_seen,last_seen,sw_guess,updated,n_q,active,noise,conf)"
-             " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-             (n, nm, jdump(ids), len(ids), tot, jdump(ips),
-              jdump(ev.get(root, []))[:4000], klass,
-              min((m.get("first_seen") or 0) for m in members),
-              max((m.get("last_seen") or 0) for m in members),
-              "、".join(sw), now(), nq, active, noisy, conf))
+        _ins.append((n, nm, jdump(ids), len(ids), tot, jdump(ips),
+                     jdump(ev.get(root, []))[:4000], klass,
+                     min((m.get("first_seen") or 0) for m in members),
+                     max((m.get("last_seen") or 0) for m in members),
+                     "、".join(sw), now(), nq, active, noisy, conf))
         for m in members:
-            xrun("UPDATE devices SET cluster_id=? WHERE id=?", (n, m["id"]))
+            # 簇号没变就不写，避免每轮 10282 次无意义 UPDATE
+            if (m.get("cluster_id") or 0) != n:
+                _upd.append((n, m["id"]))
+    xrun("DELETE FROM clusters")
+    xmany("INSERT INTO clusters(id,name,member_ids,n_members,n_conns,ips,evidence,probe_class,"
+          "first_seen,last_seen,sw_guess,updated,n_q,active,noise,conf)"
+          " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", _ins)
+    xmany("UPDATE devices SET cluster_id=? WHERE id=?", _upd)
     try:
         CLUSTER_MAP.clear()
         for r in qall("SELECT * FROM clusters"):
@@ -3078,7 +3137,7 @@ def _ip_shared(ip):
 
 
 CONTAINER_GW_IPS = ("172.18.0.1", "172.19.0.1", "127.0.0.1")
-SELF_IP_LIST = ("127.0.0.1", "127.0.0.2", "172.18.0.1", "172.19.0.1")
+SELF_IP_LIST = ("127.0.0.1", "127.0.0.2", "198.51.100.11", "172.18.0.1", "172.19.0.1")
 GW_FALLBACK_WIN = 0.35
 SELF_IP_IDS = None
 
@@ -4004,6 +4063,65 @@ def guarded_loop(fn, name):
 
 SUMMARY_CACHE = {"t": 0, "v": None}
 SUMMARY_LOCK = threading.Lock()
+ENROLL_CACHE = {"t": 0, "v": None}
+ENROLL_LOCK = threading.Lock()
+_REFRESH_BUSY = {"summary": False, "enroll": False}
+_REFRESH_TLOCK = threading.Lock()
+
+
+def _bg_refresh(kind):
+    """后台重算，把结果回填缓存。同一时刻每种只跑一个。"""
+    try:
+        v = api_summary() if kind == "summary" else api_enroll_list()
+        if kind == "summary":
+            with SUMMARY_LOCK:
+                SUMMARY_CACHE["v"] = v
+                SUMMARY_CACHE["t"] = now()
+        else:
+            with ENROLL_LOCK:
+                ENROLL_CACHE["v"] = v
+                ENROLL_CACHE["t"] = now()
+    except Exception:
+        pass
+    finally:
+        with _REFRESH_TLOCK:
+            _REFRESH_BUSY[kind] = False
+
+
+def _cached(kind, ttl, hard, compute):
+    """ttl 内直接命中；超过 ttl 但未超 hard 时先回旧值、后台重算（stale-while-revalidate）。
+    前端每 30 秒自动刷新一次，只有这样才能让「刷新」永远不撞上全量统计的那 1~2 秒。"""
+    if kind == "summary":
+        c, lk = SUMMARY_CACHE, SUMMARY_LOCK
+    else:
+        c, lk = ENROLL_CACHE, ENROLL_LOCK
+    with lk:
+        v = c["v"]
+        age = now() - c["t"]
+        if v is not None and age < ttl:
+            return v
+        if v is not None and age < hard:
+            with _REFRESH_TLOCK:
+                if not _REFRESH_BUSY[kind]:
+                    _REFRESH_BUSY[kind] = True
+                    threading.Thread(target=_bg_refresh, args=(kind,), daemon=True).start()
+            return v
+        v = compute()
+        c["t"] = now()
+        c["v"] = v
+        return v
+
+
+def api_summary_cached(ttl=20, hard=900):
+    """2026-10-25：SUMMARY_CACHE / SUMMARY_LOCK 早在本文件里定义，却从来没有被调用过（死代码），
+    而 /api/summary 实测要 18–32 秒。这里真正启用缓存，并加 stale-while-revalidate：
+    过期后先回上一次结果、后台重算，用户不会为了看一张看板等一次全表统计。"""
+    return _cached("summary", ttl, hard, api_summary)
+
+
+def api_enroll_cached(ttl=15, hard=600):
+    """登记列表同理：过期先回旧值，后台重算。"""
+    return _cached("enroll", ttl, hard, api_enroll_list)
 
 
 def api_clusters():
@@ -4031,27 +4149,40 @@ def api_summary():
     DNS_PROTO_SQL = ("(protos LIKE '%\"dot\"%' OR protos LIKE '%\"doh444\"%'"
                      " OR protos LIKE '%\"doh443\"%' OR protos LIKE '%\"doq\"%'"
                      " OR protos LIKE '%\"quic\"%')")
-    out["devices"] = qone("SELECT COUNT(*) c FROM devices WHERE source='server' AND linked_to IS NULL"
-                          " AND " + DNS_PROTO_SQL)["c"]
-    out["devices_all"] = qone("SELECT COUNT(*) c FROM devices WHERE source='server'"
-                              " AND linked_to IS NULL")["c"]
-    out["devices_active"] = qone("SELECT COUNT(*) c FROM devices WHERE source='server' AND last_seen > ?"
-                                 " AND " + DNS_PROTO_SQL, (now() - 3600,))["c"]
+    # 2026-10-25 提速：devices 表 66MB，上面这几个计数原本是 5 条独立的全表 COUNT
+    # （每条都要把 66MB 扫一遍），合并成一次条件聚合后只扫一遍。
+    _dc = qone("SELECT"
+               " SUM(CASE WHEN source='server' AND linked_to IS NULL AND " + DNS_PROTO_SQL
+               + " THEN 1 ELSE 0 END) dns_cnt,"
+               " SUM(CASE WHEN source='server' AND linked_to IS NULL THEN 1 ELSE 0 END) all_cnt,"
+               " SUM(CASE WHEN source='server' AND last_seen > ? AND " + DNS_PROTO_SQL
+               + " THEN 1 ELSE 0 END) active_cnt,"
+               " SUM(CASE WHEN source='server' AND first_seen > ? AND " + DNS_PROTO_SQL
+               + " THEN 1 ELSE 0 END) new24,"
+               " SUM(CASE WHEN source='server' AND linked_to IS NULL"
+               " AND EXISTS (SELECT 1 FROM enrollments e WHERE e.matched_device = devices.id)"
+               " THEN 1 ELSE 0 END) bound_cnt"
+               " FROM devices", (now() - 3600, t0))
+    out["devices"] = _dc["dns_cnt"] or 0
+    out["devices_all"] = _dc["all_cnt"] or 0
+    out["devices_active"] = _dc["active_cnt"] or 0
     out["devices_web_only"] = out["devices_all"] - out["devices"]
-    out["devices_new24"] = qone("SELECT COUNT(*) c FROM devices WHERE source='server' AND first_seen > ?"
-                                " AND " + DNS_PROTO_SQL, (t0,))["c"]
+    out["devices_new24"] = _dc["new24"] or 0
     # ==== BOUND-ONLY-PATCH v1 ====
     # 已绑定设备 = 有登记记录指向它的设备簇（enrollments.matched_device）。
     # 用户口径：设备页只显示通过绑定的设备，未绑定的是猜测，不进列表。
-    out["bound_devices"] = qone("SELECT COUNT(*) c FROM devices WHERE source='server' AND linked_to IS NULL"
-                                " AND EXISTS (SELECT 1 FROM enrollments e WHERE e.matched_device = devices.id)")["c"]
-    out["conns"] = qone("SELECT COUNT(*) c FROM conns")["c"]
+    out["bound_devices"] = _dc["bound_cnt"] or 0
     out["dns_queries"] = qone("SELECT SUM(n) s FROM dns_hour WHERE hour > ?", (t0,))["s"] or 0
     out["doh_requests"] = qone("SELECT COUNT(*) c FROM doh_requests WHERE ts > ?", (t0,))["c"]
-    out["probes"] = qone("SELECT COUNT(*) c FROM conns WHERE ts > ? AND probe=1", (t0,))["c"]
-    rr = qone("SELECT CAST(AVG(rtt_ms) AS INTEGER) v FROM conns WHERE ts > ? AND"
-              " rtt_ms IS NOT NULL", (t0,))
-    out["rtt_avg"] = rr["v"] if rr else None
+    # 2026-10-25 提速：conns 表 25MB，原本「全表 COUNT」+「24h probe=1」+「24h AVG(rtt)」
+    # 是三次独立扫描，合并成一次条件聚合。
+    _cc = qone("SELECT COUNT(*) c,"
+               " SUM(CASE WHEN ts > ? AND probe=1 THEN 1 ELSE 0 END) probes,"
+               " CAST(AVG(CASE WHEN ts > ? AND rtt_ms IS NOT NULL THEN rtt_ms END) AS INTEGER) rtt"
+               " FROM conns", (t0, t0))
+    out["conns"] = _cc["c"] or 0
+    out["probes"] = _cc["probes"] or 0
+    out["rtt_avg"] = _cc["rtt"]
     out["by_kind"] = [dict(r) for r in qall(
         "SELECT kind, COUNT(*) n, COUNT(DISTINCT device_id) devs FROM conns WHERE ts > ? GROUP BY kind ORDER BY n DESC",
         (t0,))]
@@ -4697,6 +4828,25 @@ def api_enroll_create(body, ip):
 def api_enroll_list():
     out = []
     _retry = 0
+    # 2026-10-25 提速：这里原本在 200 条记录的循环里，每条都跑一次
+    #   SELECT … FROM devices WHERE src_ips LIKE '%"ip"%'
+    # 也就是最多 200 次 devices 全表扫描（表 66MB）——实测本接口要 28 秒。
+    # 现在一次性取回需要的轻量列，在 Python 里建 id / ip 两个索引，循环内零 SQL。
+    _dev_by_id = {}
+    _dev_by_ip = {}
+    try:
+        for _r in qall("SELECT id,label,os_guess,ja4,src_ips,conn_count,last_seen FROM devices"):
+            _dd = dict(_r)
+            _dev_by_id[_dd["id"]] = _dd
+            try:
+                for _ipk in (jload(_dd.get("src_ips"), {}) or {}).keys():
+                    _dev_by_ip.setdefault(_ipk, []).append(_dd)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    _COLS_M = ("id", "label", "os_guess", "ja4", "src_ips", "conn_count", "last_seen")
+    _COLS_C = ("id", "label", "os_guess", "ja4", "conn_count", "last_seen")
     for r in qall("SELECT * FROM enrollments ORDER BY updated DESC LIMIT 200"):
         d = dict(r)
         # 延迟补匹配：抓包侧写入有延迟，登记当刻的 25 秒窗口经常还没看到这次连接（手机那次就是这样丢的）。
@@ -4729,16 +4879,16 @@ def api_enroll_list():
         for _bg in ("fp2", "hdr"):
             d[_bg + "_len"] = len(d.get(_bg) or "")
             d.pop(_bg, None)
-        m = qone("SELECT id,label,os_guess,ja4,src_ips,conn_count,last_seen FROM devices WHERE id=?",
-                 (d.get("matched_device") or 0,))
-        d["matched"] = dict(m) if m else None
+        _m = _dev_by_id.get(d.get("matched_device") or 0)
+        d["matched"] = ({_k: _m.get(_k) for _k in _COLS_M} if _m else None)
         cands = []
         ip = d.get("src_ip") or ""
         if ip:
-            cands = [dict(x) for x in qall(
-                "SELECT id,label,os_guess,ja4,conn_count,last_seen FROM devices WHERE src_ips LIKE ?"
-                " ORDER BY (CASE WHEN ja4=? THEN 0 ELSE 1 END), last_seen DESC LIMIT 15",
-                ('%"' + ip + '"%', d.get("ja4") or ""))]
+            # 与原 SQL 等价：ja4 精确命中的排最前，其余按 last_seen 倒序，取 15 条。
+            _lst = list(_dev_by_ip.get(ip, []))
+            _j4 = d.get("ja4") or ""
+            _lst.sort(key=lambda x: (0 if x.get("ja4") == _j4 else 1, -(x.get("last_seen") or 0)))
+            cands = [{_k: x.get(_k) for _k in _COLS_C} for x in _lst[:15]]
         d["candidates"] = cands
         out.append(d)
     return {"enrollments": out, "ts": now()}
@@ -5173,7 +5323,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/clusters":
                 return self._send(200, api_clusters())
             if p == "/api/summary":
-                return self._send(200, api_summary())
+                return self._send(200, api_summary_cached())
             if p == "/api/devices":
                 return self._send(200, api_devices(prm))
             if p == "/api/device":
@@ -5194,7 +5344,7 @@ class Handler(BaseHTTPRequestHandler):
             if p == "/api/join/status":
                 return self._send(200, api_join_status())
             if p == "/api/enroll":
-                return self._send(200, api_enroll_list())
+                return self._send(200, api_enroll_cached())
             if p == "/api/export":
                 return self.export(prm)
             if p == "/api/events":
@@ -5214,11 +5364,19 @@ class Handler(BaseHTTPRequestHandler):
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = self.rfile.read(n) if n else b""
+            # 缓存失效：登记页每次打开都会读 /api/enroll，写操作后必须让 15 秒缓存立刻作废，
+            # 否则刚登记完再刷新看到的是旧列表。
             if p == "/api/enroll":
+                ENROLL_CACHE["v"] = None
+                SUMMARY_CACHE["v"] = None
                 return self._send(200, api_enroll_create(body, enroll_client_ip(self)))
             if p == "/api/enroll/link":
+                ENROLL_CACHE["v"] = None
+                SUMMARY_CACHE["v"] = None
                 return self._send(200, api_enroll_link(body))
             if p == "/api/enroll/delete":
+                ENROLL_CACHE["v"] = None
+                SUMMARY_CACHE["v"] = None
                 return self._send(200, api_enroll_delete(prm))
             if p == "/api/join/register":
                 return self._send(200, api_join_register(body, enroll_client_ip(self), self.headers),
@@ -5227,8 +5385,10 @@ class Handler(BaseHTTPRequestHandler):
                 _fv = prm.get("full")
                 _f = _fv[0] if isinstance(_fv, (list, tuple)) else _fv
                 full = str(_f or "").lower() in ("1", "true", "yes")
-                return self._send(200, {"ok": True, "full": full,
-                                        "devices": reinfer_all(force=full)})
+                _n = reinfer_all(force=full)
+                # 重新推断会改变统计口径，顺手让汇总缓存作废
+                SUMMARY_CACHE["v"] = None
+                return self._send(200, {"ok": True, "full": full, "devices": _n})
             if p == "/api/device/label":
                 return self._send(200, api_label(prm, body))
         except Exception as e:

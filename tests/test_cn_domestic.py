@@ -407,8 +407,11 @@ class DenyProbeSemantics(unittest.TestCase):
         g0 = guard._cn_clean_get
         try:
             guard._cn_clean_get = lambda n: True      # 只验证"已越过跳过分支" ✓（不触网 ✓）
-            self.assertIsNone(guard.cn_exist_veto(
-                CN_NAME, 1, wire_pos(), [], time.time() + 1.0, deny_probe=True))
+            # 2026-10-24 契约：清洁标记命中 ⇒ 该 zone 已被见证确认存在 ⇒ deny_probe 返回
+            # **False（可采纳）**，而不是 None（无证据 ⇒ 否决）。旧断言 IsNone 对应旧契约。
+            # 关键仍是"越过策略跳过"：cn_veto_checked 已 +1、veto_skipped_policy 未 +1 ✓。
+            self.assertIs(guard.cn_exist_veto(
+                CN_NAME, 1, wire_pos(), [], time.time() + 1.0, deny_probe=True), False)
             self.assertGreater(guard._stats.get("cn_veto_checked", 0), c0,
                                "`deny_probe=True` ⇒ 必须真正进入探测（不再跳过 ✓）")
             self.assertEqual(guard._stats.get("veto_skipped_policy", 0), n0,
@@ -421,6 +424,11 @@ class DenyProbeSemantics(unittest.TestCase):
         _u0, _w0 = guard._veto_udp, guard._veto_w2_targets
         _fc0 = guard._stats.get("fail_closed", 0)
         guard._veto_w2_targets = lambda: None
+        # 2026-10-24 起清洁标记命中会让 deny_probe 直接返回 False（见 cn_exist_veto 的
+        # # 2026-10-24 分支）⇒ 本用例必须先清掉同名 zone 的清洁标记，否则会按"已见证存在"
+        # 早退、测不到见证否定这条路径（全量跑时会被其它用例写入的标记污染 ✗）。
+        _z = CN_NAME.lower().rstrip(".")
+        _cl0 = guard._CN_CLEAN.pop(_z, None)
 
         def _fake_udp(name, qtype, addr, to):
             return guard._VetoHint({"rc": 3, "ips": [], "proof": "nsec3", "wire": b"\x00",
@@ -436,6 +444,8 @@ class DenyProbeSemantics(unittest.TestCase):
             self.assertGreaterEqual(guard._stats.get("cn_dom_witness_deny", 0), 1)
         finally:
             guard._veto_udp, guard._veto_w2_targets = _u0, _w0
+            if _cl0 is not None:
+                guard._CN_CLEAN[_z] = _cl0
 
     def test_probe_false_when_witness_sees_name(self):
         """见证正向解析出地址 ⇒ `False`（不否认）⇒ 允许采纳 ✓。"""

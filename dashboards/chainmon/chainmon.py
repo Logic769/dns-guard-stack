@@ -6,8 +6,9 @@
   家庭客户端(DoT 853 / DoH 444) → Nginx/TLS → AdGuard Home → dnsguard(5355)
   → unbound A(5353, 转发 → aghdq(172.18.0.6) → DoQ → NextDNS + 本地 DNSSEC 验证；forward-first: no)
   → dnscrypt-proxy(5399) →[DNSCrypt 匿名中继]→ 境外加密解析器
-  ；CN 分流：dnscrypt-proxy forwarding-rules → unbound B(5354) → 6 条国内 DoT
-     （360×3 + AliDNS×2 + dns.pub），forward-first: no（不回退明文递归），其 :53 出站已被 iptables 封禁
+  ；CN 分流：dnscrypt-proxy forwarding-rules → unbound B(5354) → 3 条国内 DoT
+     （360×1 + AliDNS×2，按 fast-server-permil 实测 RTT 优选），forward-first: no（不回退明文递归），
+     其 :53 出站已被 iptables 封禁
   （「根/TLD/权威」探测已不在链路内，仅作外部参照）
 
 只用标准库（服务器是 Python 3.6），监听 127.0.0.1:8787，由 nginx 反代到 /chain/。
@@ -90,8 +91,8 @@ HISTORY_MAX = 120           # 走势保留点数（120 × 60s = 2 小时；图�
 
 AGH_CONTAINER = "adgh"
 UNBOUND = [
-    {"name": "unbound A", "container": "unbound", "role": "主上游：**转发** forward-zone \".\" → 172.18.0.6@53(aghdq) → DoQ → NextDNS；本地 DNSSEC 验签；forward-first: no（fail-closed）", "addr": "172.18.0.1:5353", "conf": "/opt/unbound/unbound.conf"},
-    {"name": "unbound B", "container": "unbound-b", "role": "CN 分流解析器：名单内 CN 域名转 6 条国内加密 DoT（360×3 / 阿里×2 / dns.pub）；非 CN 拒绝，不回头走明文", "addr": "172.18.0.1:5354", "conf": "/opt/unbound-b/unbound.conf"},
+    {"name": "unbound A", "container": "unbound", "role": "主上游：**转发** forward-zone \".\" → 172.18.0.6@53(aghdq → NextDNS DoQ) + 172.18.0.10@53(aghcf → Cloudflare DoT)，fast-server 按实测 RTT 优选；本地 DNSSEC 验签；forward-first: no（fail-closed）", "addr": "172.18.0.1:5353", "conf": "/opt/unbound/unbound.conf"},
+    {"name": "unbound B", "container": "unbound-b", "role": "CN 分流解析器：名单内 CN 域名转国内加密 DoT（按实测 RTT 优选）；非 CN 拒绝，不回头走明文", "addr": "172.18.0.1:5354", "conf": "/opt/unbound-b/unbound.conf"},
 ]
 UNBOUND_CTL = "/opt/unbound/sbin/unbound-control"
 UNBOUND_CONF_IN_CONTAINER = "/opt/unbound/etc/unbound/unbound.conf"
@@ -169,9 +170,6 @@ DNSGUARD_STATS = "/opt/dnsguard/stats.json"
 # 2026-10-08：r8_auth_ok / r8_auth_none 的**真值**在 verifier 进程（核对由它执行）；
 # 主进程那两个键是 verifier 接管前的历史累计值，已冻结、不再增长。
 DNSGUARD_VERIFIER_STATS = "/opt/dnsguard/verifier-state/stats.json"
-# 2026-10-15（F5 加固）：两个进程各自写的发布指纹，用于看板展示"是否同一个发布"。
-DNSGUARD_META = "/opt/dnsguard/stats_meta.json"
-DNSGUARD_VERIFIER_META = "/opt/dnsguard/verifier-state/stats_meta.json"
 DNSGUARD_LOG = "/var/log/dnsguard.log"
 
 # ===== P34-BP（方案任务6）：**日志流式读取 + inode/截断处理 + 同轮缓存** =====
@@ -276,7 +274,6 @@ DNSCRYPT_ADDR = ("127.0.0.1", 5399)      # 仅回环可达（2026-10-10 F1 修�
 DNSCRYPT_PROBE = ("127.0.0.2", 5353)      # 看板探针用（宿主 loopback）
 DNSCRYPT_CONF = "/opt/dnscrypt-proxy/dnscrypt-proxy.toml"
 DNSCRYPT_RULES = "/opt/dnscrypt-proxy/forwarding-rules.txt"
-DNSCRYPT_TYPED = "/opt/dnscrypt-proxy/cn-domains-typed.txt"   # guard 优先读的类型化名单（2026-10-15）
 DNSCRYPT_LOG = "/var/log/cn-rules-refresh.log"
 GUARD_POISON_SAMPLE = {"46.82.174.68","59.24.3.173","78.16.49.15","159.106.121.75","8.7.198.45",
                        "203.98.7.65","243.185.187.39","37.61.54.158","93.46.8.89","2001::1",
@@ -1134,29 +1131,6 @@ def collect_dnsguard():
         }
     except Exception:
         out["b_consumers"] = {}
-    # 2026-10-15（F5 加固的可观测面）：guard 与 verifier 必须跑同一发布——release_id /
-    # guard.py sha256 / verifier 协议号任一不符即为不一致。这里只读两个 stats_meta.json
-    # 做展示；真正的处置是服务器侧 release_consistency.py 门禁与 deploy_release.sh 回滚。
-    try:
-        _gm = (json.load(open(DNSGUARD_META)) if os.path.exists(DNSGUARD_META) else {}) or {}
-        _vm = (json.load(open(DNSGUARD_VERIFIER_META)) if os.path.exists(DNSGUARD_VERIFIER_META) else {}) or {}
-        out["identity"] = {
-            "release": _gm.get("release_id") or "",
-            "sha": (_gm.get("guard_sha256") or "")[:12],
-            "proto": _gm.get("verifier_proto"),
-            "policy": _gm.get("policy_version") or "",
-            "guard_pid": _gm.get("pid"),
-            "verifier_release": _vm.get("release_id") or "",
-            "verifier_sha": (_vm.get("guard_sha256") or "")[:12],
-            "verifier_proto": _vm.get("verifier_proto"),
-            "verifier_pid": _vm.get("pid"),
-            "match": bool(_gm and _vm
-                          and _gm.get("release_id") == _vm.get("release_id")
-                          and _gm.get("guard_sha256") == _vm.get("guard_sha256")
-                          and _gm.get("verifier_proto") == _vm.get("verifier_proto")),
-        }
-    except Exception:
-        out["identity"] = {}
     try:
         with open(DNSGUARD_STATE) as f:
             raw = json.load(f) or {}
@@ -1808,6 +1782,116 @@ def _agh_fetch_raw(force_source=None):
     return None, None, (force_source or "none"), err
 
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-10-22：dnsdist 查询日志采集器
+# 动机：DoT/DoH 已全部由 dnsdist 承接，dnsdist 能看到真实客户端 IP；
+#       而 AGH 收到的是 dnsdist 的 172.18.0.1，无法区分设备。
+# 日志格式（dnsdist Lua 写入）：<epoch>.<usec>,<client_ip>,<qname>,<qtype>
+# 用途：① 客户端归因（真实 IP）② 与 AGH querylog 按 qname 关联补齐延迟
+# ══════════════════════════════════════════════════════════════════════════
+DNSDIST_QLOG = "/var/log/dnsdist-query.log"
+DNSDIST_QLOG_MAX_BYTES = 8 * 1024 * 1024   # 超过则只读尾部，避免读满整个文件
+
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# 2026-10-22：dnsdist 统计采集（缓存命中率等）
+# 缓存已从 AGH 迁移到 dnsdist 的 PacketCache，看板必须改读这里，
+# 否则会错误显示 0% 命中。
+# ══════════════════════════════════════════════════════════════════════════
+DNSDIST_STATS_URL = os.environ.get(
+    "CHAINMON_DNSDIST_STATS_URL",
+    "http://127.0.0.1:18083/api/v1/servers/localhost/statistics")
+# dnsdist 的 apiKey 由 install.sh 生成后写入本进程的环境变量，
+# 仓库里不放真实口令；为空时统计接口会 401，看板显式提示而不是静默 0。
+DNSDIST_API_KEY = os.environ.get("CHAINMON_DNSDIST_API_KEY", "")
+
+
+def collect_dnsdist_stats():
+    """读 dnsdist 的 HTTP 统计。返回 dict（失败时 error 字段说明原因）。"""
+    out = {"ok": False, "error": None,
+           "cache_hits": 0, "cache_misses": 0, "cache_hit_pct": None,
+           "queries": 0, "servfail": 0, "nxdomain": 0,
+           "latency_avg_us": None, "latency_p50_us": None}
+    try:
+        import urllib.request as _u
+        req = _u.Request(DNSDIST_STATS_URL, headers={"X-API-Key": DNSDIST_API_KEY})
+        raw = _u.urlopen(req, timeout=8).read().decode("utf-8")
+        import json as _j
+        items = _j.loads(raw) or []
+        m = {}
+        for it in items:
+            if isinstance(it, dict) and it.get("name"):
+                m[str(it["name"])] = it.get("value")
+        out["cache_hits"] = int(m.get("cache-hits") or 0)
+        out["cache_misses"] = int(m.get("cache-misses") or 0)
+        tot = out["cache_hits"] + out["cache_misses"]
+        if tot > 0:
+            out["cache_hit_pct"] = round(100.0 * out["cache_hits"] / tot, 1)
+        out["queries"] = int(m.get("queries") or 0)
+        out["servfail"] = int(m.get("servfail-answers") or 0)
+        out["nxdomain"] = int(m.get("nxdomain-answers") or 0)
+        for k in ("latency-avg100", "latency-avg1000"):
+            if m.get(k) is not None and out["latency_avg_us"] is None:
+                out["latency_avg_us"] = m.get(k)
+        out["ok"] = True
+    except Exception as e:
+        out["error"] = "%s: %s" % (type(e).__name__, e)
+    return out
+
+def collect_dnsdist_queries(window_min=60, now=None):
+    """读 dnsdist 查询日志，按客户端聚合。返回 dict。"""
+    now = time.time() if now is None else now
+    cut = now - int(window_min) * 60
+    out = {"ok": False, "error": None, "total": 0,
+           "by_client": {}, "by_host": {}, "covered_min": 0.0,
+           "clients": {}, "hosts": set()}
+    try:
+        import os as _os
+        if not _os.path.exists(DNSDIST_QLOG):
+            out["error"] = "日志不存在"
+            return out
+        # 只读尾部：文件可能很大
+        size = _os.path.getsize(DNSDIST_QLOG)
+        with open(DNSDIST_QLOG, "r", errors="replace") as f:
+            if size > DNSDIST_QLOG_MAX_BYTES:
+                f.seek(size - DNSDIST_QLOG_MAX_BYTES)
+                f.readline()          # 丢弃不完整首行
+            first_ts = last_ts = None
+            for ln in f:
+                p = ln.rstrip("\n").split(",")
+                if len(p) < 4:
+                    continue
+                try:
+                    ts = float(p[0])
+                except Exception:
+                    continue
+                if ts < cut:
+                    continue
+                ip, qname, qtype = p[1], p[2], p[3]
+                if not qname:
+                    continue
+                if first_ts is None or ts < first_ts:
+                    first_ts = ts
+                if last_ts is None or ts > last_ts:
+                    last_ts = ts
+                out["total"] += 1
+                out["clients"][ip] = out["clients"].get(ip, 0) + 1
+                out["hosts"].add(qname)
+                key = (qname, qtype)
+                out["by_host"][key] = out["by_host"].get(key, 0) + 1
+                cb = out["by_client"].setdefault(ip, {"n": 0, "hosts": set()})
+                cb["n"] += 1
+                if len(cb["hosts"]) < 500:
+                    cb["hosts"].add(qname)
+            if first_ts and last_ts:
+                out["covered_min"] = round((last_ts - first_ts) / 60.0, 1)
+        out["ok"] = True
+    except Exception as e:
+        out["error"] = "%s: %s" % (type(e).__name__, e)
+    return out
+
 def collect_agh_querylog(force_source=None):
     """按时间窗口统计 AGH 查询日志。
 
@@ -2110,6 +2194,8 @@ def parse_unbound_conf(path):
     except Exception:
         return out
     for ln in raw.split("\n"):
+        if ln.lstrip().startswith("#"):
+            continue
         m = re.match(r"^\s*([a-z0-9-]+):\s*(.+?)\s*$", ln)
         if not m:
             continue
@@ -2119,7 +2205,16 @@ def parse_unbound_conf(path):
                 out[k.replace("-", "_")] = (v == "yes")
             else:
                 out[k.replace("-", "_")] = v
-    fa = re.findall(r"forward-addr:\s*(\S+)", raw)
+    # 2026-10-24：原实现用 re.findall 扫全文，把「# 停用(...): forward-addr: X」
+    # 也当成有效上游，导致停用的节点仍显示在看板上。改为逐行锚点匹配并跳过
+    # 整行注释（行内的 # 是 DoT 的 TLS 主机名分隔符，不能按 # 切分）。
+    fa = []
+    for ln in raw.split("\n"):
+        if ln.lstrip().startswith("#"):
+            continue
+        m = re.match(r"^\s*forward-addr:\s*(\S+)\s*$", ln)
+        if m:
+            fa.append(m.group(1))
     if fa:
         out["forward_addr"] = fa
     return out
@@ -2482,6 +2577,11 @@ def _migrate_history():
     这里做一次性迁移：有查询的按比率反推计数（权重=真实查询数），
     无查询的把比率置为 None（前端断线不画）。"""
     for p in HISTORY:
+        # 2026-10-23：upstream_share 曾因 24h 滚动窗口过期算出 >100%（实测 103.3/105.7/109.5/110.0），
+        # 上游应答不可能多于放行查询 —— 历史坏点统一置 None，否则曲线区间会一直显示"100.0%–110.0%"。
+        _us = p.get("upstream_share")
+        if isinstance(_us, (int, float)) and not (0 <= _us <= 100):
+            p["upstream_share"] = None
         # 延迟 0ms 在物理上不可能（有上游请求才有值），说明当时没有样本 → 置 None
         for k in ("latency_p50_ms", "latency_p90_ms"):
             if p.get(k) == 0:
@@ -2553,6 +2653,21 @@ def ub_delta(idx, window_s=UB_DELTA_WINDOW):
 # 第7步（2026-10-08）：unbound B 的「消费者归类」与逐分钟增量
 # --------------------------------------------------------------------------
 B_IDX = 1                     # UNBOUND 列表里 B 的下标（A=0, B=1）
+
+
+def _b_forward_brief(ub_list):
+    """B 的 forward 上游摘要（有效条数 + 去重主机名），供链路图文案使用。
+
+    直接读 parse_unbound_conf 的结果，配置一改文案就跟着变，不再写死。
+    """
+    item = (ub_list[B_IDX] if len(ub_list) > B_IDX else {}) or {}
+    addrs = (item.get("config") or {}).get("forward_addr") or []
+    hosts = []
+    for a in addrs:
+        h = a.split("#", 1)[1] if "#" in a else a.split("@")[0]
+        if h and h not in hosts:
+            hosts.append(h)
+    return len(addrs), (" / ".join(hosts) or "—")
 B_PREV = {"t": 0.0, "total": None, "guard": None,
           "tls_in": None, "udp_out": None, "tcp_out": None, "rl_max": None, "rl_ex": None}
 
@@ -2787,15 +2902,6 @@ def collect_dnscrypt():
                 if _d and "." in _d:
                     _gd.add(_d)
             out["rules_count_guard"] = len(_gd)
-            # 2026-10-15：guard 已改为优先读**类型化名单** cn-domains-typed.txt（保留
-            # full/domain/suffix 匹配类型），forwarding-rules.txt 仅作回落。两份文件条目相同、
-            # 装载口径相同（丢弃无点条目），所以这里保留原算法（= guard 会载入多少），
-            # 只把类型化名单的 mtime 一并报出，供界面说明"guard 读的是哪一份"。
-            try:
-                if os.path.exists(DNSCRYPT_TYPED):
-                    out["rules_typed_mtime"] = os.path.getmtime(DNSCRYPT_TYPED)
-            except Exception:
-                pass
     except Exception:
         pass
     try:
@@ -2825,7 +2931,11 @@ def build_snapshot():
         lambda: collect_agh_log(),
         lambda: collect_probes(),
         lambda: collect_server(),
-        lambda: collect_docker([AGH_CONTAINER, "aghdq"] + [u["container"] for u in UNBOUND]),
+        # 2026-10-23：补上 aghcf / aghdq2 / unbound-alt / alt-replica-unb 四台（原来只列 4 个，
+        # 与实际在跑的链路组件不符）；不存在的容器会被 collect_docker 跳过，安全。
+        lambda: collect_docker([AGH_CONTAINER, "aghdq", "aghcf", "aghdq2"]
+                               + [u["container"] for u in UNBOUND]
+                               + ["unbound-alt", "alt-replica-unb"]),
         lambda: [parse_unbound_stats(u["container"]) for u in UNBOUND],
         lambda: [parse_infra(u["container"]) for u in UNBOUND],
         lambda: collect_dnsguard(),
@@ -2877,6 +2987,25 @@ def build_snapshot():
     # 概览
     elapsed_all = qlog.get("elapsed_all", [])
     elapsed_up = qlog.get("elapsed_up", [])
+    # 2026-10-22：重建「上游往返基线」。
+    # 背景：缓存迁到 dnsdist 后，AGH 侧几乎全是未命中缓存的上游查询，
+    #   净处理 = 含缓存耗时 - 上游往返。基线取 AGH 上游应答的中位数（保守）。
+    #   没有样本时返回 None（前端显示「未知」），不伪造 0。
+    _up_base = None
+    _up_base_src = None
+    _up_base_med = None
+    try:
+        _els = sorted(float(x) for x in elapsed_up if x is not None)
+        if len(_els) >= 10:
+            # 2026-10-23：基线改用 **p10 低分位**，不用中位数。
+            # 原因：中位数样本 = 中位数本身 ⇒ 净 P50 被扣成 0，指标失去意义。
+            # 语义：基线代表「到上游的最小往返」，取低分位才合理。
+            _up_base = _els[int(len(_els) * 0.10)]
+            _up_base_med = _els[len(_els) // 2]
+            _up_base_src = "AGH 上游样本 p10(n=%d)" % len(_els)
+    except Exception:
+        pass
+
     queries = qlog.get("queries", 0)
     blocked = qlog.get("blocked", 0)
     hits = qlog.get("cache_hits", 0)
@@ -2888,18 +3017,116 @@ def build_snapshot():
 
     prot = collect_protections()
 
+    # 2026-10-22：客户端归因改用 **dnsdist 日志**（真实 IP）。
+    # 原因：DoT/DoH 已全部由 dnsdist 承接，AGH 只能看到 dnsdist 的地址。
+    # 延迟仍用 AGH 的 elapsed（dnsdist 侧拿不到响应耗时），按 qname 关联。
+    _dd = collect_dnsdist_queries(window_min=WINDOW_MIN)
+    _dds = collect_dnsdist_stats()
+    _dd_by = _dd.get("by_client") or {}
+    _ebc = qlog.get("el_up_by_client") or {}
+    _by_client = []
+    if _dd.get("ok") and _dd_by:
+        # dnsdist 提供真实客户端 IP，但没有延迟 —— 延迟用同域名在 AGH 的样本估算
+        _host_el = qlog.get("el_up_by_host") or {}
+        _dd_total = max(1, _dd.get("total") or 0)
+        for _c, _info in _dd_by.items():
+            _n = _info.get("n") or 0
+            if not _n:
+                continue
+            _hv = []
+            for _h in (_info.get("hosts") or ()):
+                _hv.extend(_host_el.get(_h) or [])
+            _by_client.append({
+                "client": _c,
+                "proxy": False,
+                "client_label": _c,
+                "n": _n,
+                "p50_ms": round(pct(_hv, 0.5), 1) if _hv else None,
+                "p90_ms": round(pct(_hv, 0.9), 1) if _hv else None,
+                "p99_ms": round(pct(_hv, 0.99), 1) if _hv else None,
+                "max_ms": round(max(_hv), 1) if _hv else None,
+                "share_pct": round(100.0 * _n / _dd_total, 1)})
+        _by_client.sort(key=lambda x: -x["n"])
+        _by_client = _by_client[:8]
+    else:
+        # 回退：dnsdist 日志不可用时用 AGH 的（含 172.18.0.1 汇总）
+        for _c, _v in _ebc.items():
+            if not _v:
+                continue
+            _is_proxy = (_c == "172.18.0.1")
+            _by_client.append({
+                "client": _c,
+                "proxy": _is_proxy,
+                "client_label": ("172.18.0.1（nginx 转发 · DoT 汇总）" if _is_proxy else _c),
+                "n": len(_v),
+                "p50_ms": round(pct(_v, 0.5), 1), "p90_ms": round(pct(_v, 0.9), 1),
+                "p99_ms": round(pct(_v, 0.99), 1), "max_ms": round(max(_v), 1),
+                "share_pct": round(100.0 * len(_v) / max(1, len(elapsed_up)), 1)})
+        _by_client.sort(key=lambda x: -x["n"])
+        _by_client = _by_client[:8]
+    _ebh = qlog.get("el_up_by_host") or {}
+    _slow_hosts = []
+    for _h, _v in _ebh.items():
+        _s = [x for x in _v if x >= 1000]
+        if not _s:
+            continue
+        _slow_hosts.append({
+            "host": _h, "slow": len(_s), "n": len(_v),
+            "p50_ms": round(pct(_v, 0.5), 1), "max_ms": round(max(_v), 1)})
+    _slow_hosts.sort(key=lambda x: -x["slow"])
+    _slow_hosts = _slow_hosts[:10]
+    _attr_note = ""
+    if len(_by_client) >= 2:
+        _top = _by_client[0]
+        _rest = _by_client[1:]
+        if _rest:
+            _rest_p90 = sum(x["p90_ms"] * x["n"] for x in _rest) / max(1, sum(x["n"] for x in _rest))
+            _attr_note = ("最大来源 %s 占 %.1f%% 上游查询，P90=%.0fms；其余合计 P90=%.0fms"
+                          % (_top["client_label"], _top["share_pct"], _top["p90_ms"], _rest_p90))
+            if any(x.get("proxy") for x in _by_client):
+                _attr_note += "。其中 172.18.0.1 是 nginx 转发地址，聚合了全部 DoT 设备，无法再拆分"
+
+    # ══════════════════════════════════════════════════════════════════════
+    # 2026-10-22：重建「净处理耗时」口径（此前在备份恢复中丢失）
+    # 语义：net = 含上游往返耗时 - 上游往返基线（只保留本机处理时间）
+    #   基线取 AGH 上游样本中位数；无足够样本时为 None，不伪造 0。
+    # ══════════════════════════════════════════════════════════════════════
+    def _net(vals, q):
+        if not vals or _up_base is None:
+            return None
+        return round(max(0.0, pct(vals, q) - float(_up_base)), 1)
+
+    def _net_max(vals):
+        if not vals or _up_base is None:
+            return None
+        return round(max(0.0, max(vals) - float(_up_base)), 1)
+
+    _ubv = float(_up_base) if _up_base is not None else 0.0
+    net_slow = sum(1 for x in elapsed_up if float(x) - _ubv > 500)
+
     overview = {
         "queries": queries,
         "queries_1m": qlog.get("queries_1m", 0),
         "blocked": blocked,
         "allowed": qlog.get("allowed", 0),
         "block_pct": round(100.0 * blocked / queries, 1) if queries else 0.0,
-        "cache_hit_pct": round(100.0 * hits / hit_total, 1) if hit_total else 0.0,
+        # 2026-10-22：缓存已迁到 dnsdist 的 PacketCache，命中率必须读 dnsdist 统计。
+        # AGH 侧缓存已关闭（cache_enabled=false），继续读 AGH 会恒为 0%。
+        "cache_hit_pct": (_dds.get("cache_hit_pct")
+                          if _dds.get("ok") and _dds.get("cache_hit_pct") is not None
+                          else (round(100.0 * hits / hit_total, 1) if hit_total else 0.0)),
+        "cache_hit_src": ("dnsdist" if _dds.get("ok") else "agh"),
+        "dnsdist_cache_hits": _dds.get("cache_hits", 0),
+        "dnsdist_cache_misses": _dds.get("cache_misses", 0),
+        "dnsdist_queries": _dds.get("queries", 0),
         "cache_hits": hits,
         "cache_misses": miss,
         "upstream_reqs": miss,
         "slow_count": qlog.get("slow_total", 0),
         "uniq_hosts": len(qlog.get("hosts") or ()),
+        "latency_by_client": _by_client,
+        "slow_top_hosts": _slow_hosts,
+        "attribution_note": _attr_note,
         "latency_p50_ms": round(pct(elapsed_up, 0.5), 1),
         "latency_p90_ms": round(pct(elapsed_up, 0.9), 1),
         "latency_p99_ms": round(pct(elapsed_up, 0.99), 1),
@@ -2907,6 +3134,18 @@ def build_snapshot():
         "latency_all_p50_ms": round(pct(elapsed_all, 0.5), 1),
         "latency_all_p90_ms": round(pct(elapsed_all, 0.9), 1),
         "latency_all_p99_ms": round(pct(elapsed_all, 0.99), 1),
+        # 2026-10-22：净处理耗时（扣上游往返）+ 基线（重建）
+        "upstream_baseline_ms": (round(_up_base, 1) if _up_base is not None else None),
+        "upstream_baseline_med_ms": (round(_up_base_med, 1) if _up_base_med is not None else None),
+        "upstream_baseline_src": _up_base_src,
+        "net_latency_p50_ms": _net(elapsed_up, 0.5),
+        "net_latency_p90_ms": _net(elapsed_up, 0.9),
+        "net_latency_p99_ms": _net(elapsed_up, 0.99),
+        "net_latency_max_ms": _net_max(elapsed_up),
+        "net_latency_all_p50_ms": _net(elapsed_all, 0.5),
+        "net_latency_all_p90_ms": _net(elapsed_all, 0.9),
+        "net_latency_all_p99_ms": _net(elapsed_all, 0.99),
+        "net_slow_count": net_slow,
         "upstream_timeouts": aglog.get("io_timeout_main", 0) + aglog.get("io_timeout_fallback", 0),
         # 客户端数改用 AGH 累计统计（保留期内），不再用 querylog 截断样本
         "clients": len(agh_stats.get("clients") or qlog.get("top_clients", []) or []),
@@ -3015,7 +3254,8 @@ def build_snapshot():
                  or (tls_node.get("days_left") is not None and tls_node["days_left"] < 14))
     nginx_status = ("error" if not server.get("nginx", {}).get("active")
                     else ("warn" if cert_warn else "ok"))
-    # Nginx stream（:853 的 TLS 终结器）：实际生产 DoT 入口
+    # 2026-10-23：:853 的 TLS 终结器已从 nginx stream 换成 dnsdist（nginx stream 的 :853 停用，
+    # 配置在 /www/server/panel/vhost/nginx/tcp/disabled/）。nginx 现在只负责 :443 的网站与 /dns-query 兜底。
     dotf_status = nginx_status
     dotf_brief = ("运行中" if nginx_status == "ok" else "异常")
     spool_bytes = 0
@@ -3038,25 +3278,40 @@ def build_snapshot():
                   if _ua_mode == "recursive"
                   else ("缓存命中 %s%% · 解析方式：转发 → %s" % (_ua_hit, _ua_fw)))
     verifier_active = dsh("systemctl is-active dnsguard-verifier 2>/dev/null").strip() == "active"
+    # 2026-10-22 起 dnsdist 是 DoT(:853)/DoH(:444) 的生产入口（TLS 终结 + PacketCache），不再"旁路"
     dnsdist_active = dsh("systemctl is-active dnsdist 2>/dev/null").strip() == "active"
     verifier_mem = dsh("systemctl show dnsguard-verifier -p MemoryCurrent --value 2>/dev/null").strip()
+    # 一次采样拿到在跑容器名，供 aghdq2 / unbound-alt / alt-replica-unb 这类"未入主链"节点判状态
+    _running_ct = set((dsh("docker ps --format '{{.Names}}' 2>/dev/null") or "").split())
     _ua_stats = (ub_list[0].get("stats") or {}) if ub_list else {}
     _ua_config = (ub_list[0].get("config") or {}) if ub_list else {}
     chain_nodes = [
-        {"id": "clients", "name": "DNS 接入来源（非设备数）", "sub": "DoT :853 · DoH :443/:444",
+        {"id": "clients", "name": "DNS 接入来源（非设备数）", "sub": "DoT :853 · DoH :444（dnsdist 直收）；:443 的 /dns-query 由 nginx 兜底",
          "status": "ok" if clients else "idle",
          "detail": ("近 %d 分钟 %d 个来源 IP（网关会合并多个设备）" % (WINDOW_MIN, len(clients))) if clients
                    else ("近 %d 分钟无查询" % WINDOW_MIN)},
-        {"id": "entry", "name": "接入终结层 · Nginx stream",
-         "sub": "DoT :853（Nginx stream TLS 终结 → AGH DoT:8854，后端证书校验；入口限流每源 32 并发 / 全端口 512）· DoH :443/:444（nginx 终结；444 仅放行 /dns-query；每源 32 并发 + 50 r/s）",
-         "status": ("error" if (dotf_status == "error" or nginx_status == "error")
-                    else ("warn" if (dotf_status == "warn" or nginx_status == "warn") else "ok")),
-         "detail": "%s · nginx %s · %s" % (
-             dotf_brief[len("Nginx stream "):] if dotf_brief.startswith("Nginx stream ") else dotf_brief,
-             server.get("nginx", {}).get("version") or "?", cert_detail(tls_node))},
-        {"id": "agh", "name": "AdGuard Home", "sub": "过滤 + 缓存 (%s)" % agh_container.get("image", "").split(":")[-1],
+        # 2026-10-23 核对：:853 DoT 与 :444 DoH 自 2026-10-22 起由 dnsdist 直接终结 TLS，
+        # nginx stream 的 :853 已停用（配置移入 vhost/nginx/tcp/disabled/）。旧节点写"Nginx stream
+        # TLS 终结 → AGH DoT:8854"会把入口指错组件，且漏掉 dnsdist 的 PacketCache。
+        {"id": "entry", "name": "接入终结层 · dnsdist",
+         "sub": ("DoT :853 / DoH :444 · TLS 终结 + PacketCache（32768 条，TTL≤86400）→ 后端 AGH 172.18.0.2:53"
+                 if dnsdist_active else "dnsdist 未运行：DoT :853 / DoH :444 入口不可用"),
+         "status": "ok" if dnsdist_active else "error",
+         "detail": ("查询 %s · 缓存命中 %s / 未命中 %s · 限速 200 qps/10s→REFUSED · 查询日志 /var/log/dnsdist-query.log"
+                    % ("{:,}".format(int(overview.get("dnsdist_queries") or 0)),
+                       "{:,}".format(int(overview.get("dnsdist_cache_hits") or 0)),
+                       "{:,}".format(int(overview.get("dnsdist_cache_misses") or 0))))
+                   if dnsdist_active else "服务未运行（systemctl is-active dnsdist）"},
+        {"id": "nginx", "name": "网页入口 · nginx :443",
+         "sub": "网站/看板 + /dns-query → AGH 容器 443；stream 的 :853 DoT 已停用（配置在 tcp/disabled/）",
+         "status": "error" if not server.get("nginx", {}).get("active") else ("warn" if cert_warn else "ok"),
+         "detail": ("nginx %s · %s" % (server.get("nginx", {}).get("version") or "?",
+                                       cert_detail(tls_node))) if server.get("nginx", {}).get("active") else "nginx 未运行"},
+        {"id": "agh", "name": "AdGuard Home", "sub": "过滤（缓存已关闭，由 dnsdist PacketCache 承担）(%s)" % agh_container.get("image", "").split(":")[-1],
          "status": "ok" if agh_container.get("status") == "running" else ("warn" if agh_container else "error"),
-         "detail": ("缓存命中 %.1f%% · 上游 p50 %s（AGH 日志样本，识别并排除探针 %s 条；非终端耗时）"
+         # 2026-10-23：命中率是 dnsdist PacketCache 的口径（AGH cache_enabled=false，自己不再缓存），
+         # 挂在 AGH 节点上必须写明来源，否则会被读成"AGH 命中率"。
+         "detail": ("dnsdist 缓存命中 %.1f%%（AGH 侧不缓存）· 上游 p50 %s（AGH 日志样本，识别并排除探针 %s 条；非终端耗时）"
                     % (overview["cache_hit_pct"], fmt_ms(overview["latency_p50_ms"]), overview.get("probe_queries", 0)))
                    if hit_total >= 20 else
                    (("窗口内无查询" % ()) if queries == 0 else ("窗口内仅 %d 条查询，样本不足" % queries))},
@@ -3064,10 +3319,6 @@ def build_snapshot():
          "sub": "Unix Socket · guard 策略核验 / R8 / 严格共识 / CN 存在性核验；不直接监听 DNS",
          "status": "ok" if verifier_active else "error",
          "detail": ("运行中 · 内存 %s MiB" % (round(int(verifier_mem)/1048576.0,1) if verifier_mem.isdigit() else "—")) if verifier_active else "服务未运行"},
-        {"id": "dnsdist", "name": "dnsdist 旁路",
-         "sub": "历史实验组件 · :5356 当前属于 guard 探针通道",
-         "status": "ok" if dnsdist_active else "idle",   # 已停用 ≠ 告警；用灰色中性点，别再点橙点
-         "detail": "检测到 active；是否接入和监听地址须另核对，不能据服务状态推断路由" if dnsdist_active else "服务未运行"},
         {"id": "dnsguard", "name": "dnsguard 安全策略与准入",
          "sub": "AGH 主上游 :5355 · 探针专用通道 :5356",
          "status": ("warn" if not dg.get("correct_ok") else "ok") if dg.get("active") else "error",
@@ -3084,13 +3335,28 @@ def build_snapshot():
          "detail": ("运行中 · 监听 %s · CN 分流 %s 条 · 匿名中继 %s" % (
              " ".join(dcp.get("listen") or ["未监听"]), dcp.get("rules_count", 0),
              dcp.get("relay") or "未启用") if dcp.get("active") else "服务未运行")},
-        {"id": "aghdq", "name": "DoQ 中继 · aghdq",
-         "sub": "aghdq :53 / 宿主 :5533 → NextDNS DoQ；A 转发出口及 guard DoQ1",
+        {"id": "aghdq", "name": "加密上游出口 · aghdq / aghcf",
+         "sub": "aghdq :5533 → NextDNS DoQ（172.18.0.6）· aghcf :5535 → Cloudflare DoT（172.18.0.10）；A 的 forward-addr 双出口",
          "status": ("ok" if dg.get("doq_ok") else ("error" if dg.get("doq_ok") is False else "idle")),
-         "detail": "通道探针 %s · guard 保活 %s（每轮全新随机域名）" % (
+         "detail": "DoQ 通道探针 %s · guard 保活 %s（每轮全新随机域名）" % (
              fmt_ms(dg.get("doq_ms")) if dg.get("doq_ok") else "无应答",
              fmt_ms((dg.get("guard_metrics") or {}).get("fast_source_doq_ms"))
              if (dg.get("guard_metrics") or {}).get("fast_source_doq_ok") else "—")},
+        # 2026-10-23 补录：两台"存在但未入主链"的组件，原来完全没进图，容易被误认为不存在
+        {"id": "aghdq2", "name": "备用出口 · aghdq2",
+         "sub": "aghdq2 :5534 → Quad9 DoQ（172.18.0.9）；未加入 A 的 forward-addr，可随时启用",
+         "status": "ok" if "aghdq2" in _running_ct else "idle",
+         "detail": ("容器运行中 · 上游 quic://dns10.quad9.net · 不参与当前解析"
+                    if "aghdq2" in _running_ct else "容器未运行")},
+        # 2026-10-25：两台副本已停用（容器保留未删）。alt 备用通道改指 aghdq :5533（NextDNS DoQ）：
+        # 5357 走欧洲两家隐私 DoT，实测真实中国域名 800–1233ms、163/jd 直接超时；
+        # 5533 走 NextDNS DoQ，实测 232–234ms 稳定零超时，且强制作 DNSSEC 验签。
+        {"id": "ub-alt", "name": "已停用 · unbound-alt / alt-replica-unb",
+         "sub": "原 127.0.0.1:5357 / :15353 → dges、censurfridns 欧洲 DoT（跨洋 800–1233ms、163/jd 超时）；alt 现走 aghdq :5533",
+         "status": "ok" if ("unbound-alt" in _running_ct and "alt-replica-unb" in _running_ct) else "idle",
+         "detail": ("两副本 均在运行 · 独立于 A/B 链路，仅供对照与取证，用户查询不经过"
+                    if ("unbound-alt" in _running_ct and "alt-replica-unb" in _running_ct)
+                    else "两副本均已停止（2026-10-25）· alt 备用通道改指 aghdq :5533（NextDNS DoQ）")},
         {"id": "resolvers", "name": "境外加密解析器",
          "sub": "DNSCrypt 匿名路由观测；不代表全部 DNS 流量匿名",
          "status": "ok" if dcp.get("relay") else "warn",
@@ -3101,12 +3367,13 @@ def build_snapshot():
          "sub": "独立根服务器可达性参照；不能代表整条权威链路",
          "status": st_of(rootp),
          "detail": "仅观测探针目标；A 为转发时，逐级递归由远端上游执行"},
-        {"id": "unbound-b", "name": "unbound B", "sub": "CN 分流解析器 :5354 · 6 条国内加密 DoT（360×3 / 阿里×2 / dns.pub）",
+        {"id": "unbound-b", "name": "unbound B",
+         "sub": "CN 分流解析器 :5354 · %d 条国内加密 DoT（%s）" % _b_forward_brief(ub_list),
          "status": "ok" if ub_hot and ub_hot.get("status") == "ok" else "idle",
          "detail": "历史 fallback_b 计数 %s · 近 %d 分钟 AGH 直接选 B %d 次（不包含 guard 内部调用）" % (
              (dg.get("stats") or {}).get("fallback_b", 0), WINDOW_MIN,
              sum(1 for u in qlog.get("top_upstreams", []) if ":5354" in u["addr"]))},
-        {"id": "secure-dot", "name": "加密 DoT 上游", "sub": "dot.360.cn · dns.alidns.com · dns.pub",
+        {"id": "secure-dot", "name": "加密 DoT 上游", "sub": "dot.360.cn · dns.alidns.com",
          "status": ("error" if (dot360 and dot360.get("status") == "error") and (aldns and aldns.get("status") == "error")
                     else "warn" if (dot360 and dot360.get("status") != "ok") or (aldns and aldns.get("status") != "ok")
                     else "ok"),
@@ -3115,26 +3382,23 @@ def build_snapshot():
     ]
 
     now = time.time()
-    # 2026-10-09：dnsdist 旁路自 2026-10-07 起已停用并 masked（配置与单元文件仍在，但不在解析链路上）。
-    # 旧版把它**固定**画进「主线」第 5 位（verifier 与 dnsguard 之间，还带 → 箭头），等于把一个已移除的
-    # 组件画成链路一环 —— 它只影响一个圆点颜色（不参与 alerts），但在主线正中点橙点仍属误导。
-    # 现在改成「只有它真的 active 时才出现在主线」：停用时完全不渲染，重新启用会自动回归。
-    # 2026-10-09 架构核对（实测）：
-    #   主线 = 默认解析路径，只放逐跳真的经过的组件：
-    #     客户端 → nginx(853/443/444) → AGH → dnsguard(5355) → unbound A(5353，递归+DNSSEC) → 权威
-    #   verifier 是 dnsguard 通过 Unix Socket 调用的**侧车**（不在 AGH→guard→unbound 这条线上）；
-    #   dnscrypt-proxy / aghdq(DoQ 中继) / 境外加密解析器 是 guard 的**干净候选通道**
-    #   （只在 R8 核对与"明文被注入→改道"时使用），也不是 unbound A 的下游。
-    #   旧顺序把 verifier 排在 dnsguard 之前、把 dnscrypt 排在 unbound A 之后，会被读成主链路。
+    # 2026-10-09 的旧记载（已作废，保留供考古）：dnsdist 曾是 10-07 停用并 masked 的旁路组件。
+    # 2026-10-22 起它重新成为 DoT/DoH 生产入口，节点 id 也从 "dnsdist" 改为 "entry" 承担。
+    # 2026-10-23 架构核对（实测，取代 2026-10-09 的旧记载）：
+    #   主线 = 客户端 → dnsdist(:853 DoT / :444 DoH，TLS 终结 + PacketCache)
+    #          → AGH(172.18.0.2:53，过滤+缓存) → dnsguard(172.18.0.1:5355)
+    #          → unbound A(172.18.0.1:5353，本地 DNSSEC) → aghdq/aghcf 加密出口
+    #   dnsdist 自 2026-10-22 起是**生产入口**（nginx stream 的 :853 已停用），不再是旁路；
+    #   nginx 只在 :443 提供网站/看板与 /dns-query 兜底，不进 DNS 主线。
+    #   verifier 是 dnsguard 通过 Unix Socket 调用的侧车；dnscrypt-proxy / 境外加密解析器
+    #   是 guard 的干净候选通道；aghdq2(Quad9) 与 unbound-alt/alt-replica-unb 未入主链。
     _main_ids = ["clients", "entry", "agh", "dnsguard", "unbound-a"]
     _a_via_doq = _ua_stats.get("mode") == "forward" and any("172.18.0.6" in str(x) for x in (_ua_config.get("forward_addr") or []))
     if _a_via_doq:
         _main_ids.append("aghdq")
-    _aux_ids = ["verifier", "dnscrypt-proxy", "resolvers"]
+    _aux_ids = ["verifier", "nginx", "dnscrypt-proxy", "resolvers", "aghdq2", "ub-alt"]
     if "aghdq" not in _main_ids:
         _aux_ids.append("aghdq")
-    if dnsdist_active:
-        _aux_ids.append("dnsdist")    # 已停用并 masked 的旁路不该占主线位置
     chain_main = [next(n for n in chain_nodes if n["id"] == key) for key in _main_ids]
     chain_fallback = [n for n in chain_nodes if n["id"] in ("unbound-b", "secure-dot")]
     chain_aux = [n for n in chain_nodes if n["id"] in _aux_ids]
@@ -3192,17 +3456,30 @@ def build_snapshot():
         "overview": overview,
         "cache_chain": chain_cache,
         "observe": {
-            "nginx_stream": {"active": (dotf_status == "ok"), "brief": dotf_brief,
-                         "spool_mb": round(spool_bytes / 1048576.0, 1)},
+            # 2026-10-23：:853/:444 已由 dnsdist 终结 TLS，nginx stream 的 :853 停用。
+            # 这里把"入口终结层"改成 dnsdist 的真实状态，nginx 单列一行（网站 + /dns-query 兜底）。
+            "dnsdist_front": {"active": dnsdist_active,
+                              "queries": int(overview.get("dnsdist_queries") or 0),
+                              "cache_hits": int(overview.get("dnsdist_cache_hits") or 0),
+                              "cache_misses": int(overview.get("dnsdist_cache_misses") or 0),
+                              "cache_pct": overview.get("cache_hit_pct"),
+                              "hint": "DoT :853 / DoH :444 · TLS 终结 + PacketCache 32768 条（TTL≤86400）→ 后端 AGH 172.18.0.2:53"},
+            "nginx_stream": {"active": bool(server.get("nginx", {}).get("active")),
+                             "brief": ("网页入口 :443（网站/看板 + /dns-query → AGH 容器 443）；"
+                                       "stream 的 :853 DoT 配置已移入 tcp/disabled/，不再监听"
+                                       if server.get("nginx", {}).get("active") else "nginx 未运行"),
+                             "spool_mb": round(spool_bytes / 1048576.0, 1)},
             "devfp": {"ok": bool(obs_devfp) and not obs_devfp.get("error"),
                       "devices": obs_devfp.get("devices"), "conns": obs_devfp.get("conns"),
                       "doh_requests": obs_devfp.get("doh_requests"),
                       "ndpi": obs_devfp.get("ndpi") or {}},
-            "note": "devfp / nDPI 为旁路观测；Nginx stream 是 DoT 生产入口，其故障会影响 DoT。devfp 统计 :853/:443/:444 的设备与指纹；nDPI 每 30 分钟抓 15 秒（单轮上限 3000 包）做协议与风险判定。入口限流：DoT :853 每源 32 并发、:853 全端口 512；DoH :443/:444 每源 32 并发 + 50 r/s（burst 100）。",
+            "note": ("DoT(:853)/DoH(:444) 自 2026-10-22 起由 dnsdist 直接终结 TLS 并带 PacketCache，"
+                     "nginx stream 的 :853 已停用；nginx 只在 :443 提供网站/看板与 /dns-query 兜底。"
+                     "devfp / nDPI 为旁路观测，统计 :853/:443/:444 的设备与指纹，nDPI 每 60 分钟抓 10 秒做协议与风险判定。"),
         },
         "chain": {
-            "architecture": ("客户端 → Nginx TLS → AGH → guard 安全策略 → A（本地 DNSSEC）"
-                             + (" → aghdq → NextDNS DoQ" if _a_via_doq else
+            "architecture": ("客户端 → dnsdist TLS（:853 DoT / :444 DoH）→ AGH → guard 安全策略 → A（本地 DNSSEC）"
+                             + (" → aghdq / aghcf 加密出口（NextDNS DoQ / Cloudflare DoT）" if _a_via_doq else
                                 (" → 转发目标 " + " / ".join(_ua_config.get("forward_addr") or ["未采集"]))
                                 if _ua_stats.get("mode") == "forward" else
                                 " → 根/TLD/权威（直接递归）" if _ua_stats.get("mode") == "recursive" else
@@ -3217,25 +3494,20 @@ def build_snapshot():
             "external_label": "外部可达性参照（独立探针）",
             # 2026-10-09：把 dnsdist 的真实状态交给前端渲染导语，避免导语写死后再次变陈旧
             "dnsdist_active": bool(dnsdist_active),
-            "fallback_note": "AGH 缓存 → guard 安全策略 → A（本地 DNSSEC；实际上游见主线及 A 运行参数）。"
-                             "verifier 按需参与核验；答案差异不等于投毒，策略准入、证据及 DNSSEC 共同决定是否放行。guard 内部可使用已验证备用源；"
-                             "CN 域名：按名单分流（guard 载入类型化名单 %s 条，精确与子域分型匹配）→ unbound B(5354) → 国内加密 DoT（360×3 / 阿里×2 / dns.pub）；dnscrypt-proxy 的转发规则文件 %s。"
-                             "边界：① 转发解析器不回退公网明文递归；unbound B 的 :53 出站还被防火墙封禁（已拦 %d 包），想回退也出不去。"
-                             "② AGH 未配置 fallback；上游等待配置为 %s（不代表客户端端到端时限）。"
-                             "另：AGH 上有 %d 个域名走白名单例外（绕过 dnsguard/unbound）；背离抽查任务 %s，告警计数 %d 为历史累计值（不是实时结论）。"
-                             % (dcp.get("rules_count_guard") or "?",
-                                (("%s 条（差值 %d 个无点品牌 gTLD 由 guard 丢弃）"
-                                  % (dcp.get("rules_count") or 0,
-                                     (dcp.get("rules_count") or 0) - (dcp.get("rules_count_guard") or 0)))
-                                 if dcp.get("rules_count") else "未采集"),
-                                prot["plain53"]["total"],
-                                agh_cfg.get("upstream_timeout", "5s"),
-                                prot["audit"]["baseline"],
-                                (("运行中（已跑 %d 轮）" % prot["audit"].get("runs", 0))
-                                 if prot["audit"].get("timer") == "active"
-                                 else ("未在运行（timer=%s，已跑 %d 轮）"
-                                       % (prot["audit"].get("timer") or "?", prot["audit"].get("runs", 0)))),
-                                prot["audit"]["alerts"]),
+            "fallback_note": (
+                # 2026-10-23：缓存已迁到 dnsdist 的 PacketCache，AGH 侧 cache_enabled=false，
+                # 旧文案"AGH 缓存 → guard → A"会让人以为 AGH 还在缓存命中。
+                "dnsdist PacketCache → AGH（过滤，不再缓存）→ guard → A（本地 DNSSEC）。"
+                "guard 载入类型化名单 %s 条；dnscrypt 转发规则 %s；"
+                "plain53 %s 条；A 上游超时 %s；审计基线 %s；%s；告警 %s。"
+                % (dcp.get("rules_count_guard") or "?", dcp.get("rules_count", 0),
+                   prot["plain53"]["total"],
+                   agh_cfg.get("upstream_timeout", "5s"),
+                   prot["audit"]["baseline"],
+                   (("运行中（已跑 %d 轮）" % prot["audit"].get("runs", 0))
+                    if prot["audit"].get("timer") == "active"
+                    else ("未在运行（已跑 %d 轮）" % prot["audit"].get("runs", 0))),
+                   prot["audit"]["alerts"])),
         },
         "probes": probes,
         "layer_latency": layer_latency,
@@ -3361,7 +3633,11 @@ def build_snapshot():
                         _allowed_d = _dq - _db
                         if _allowed_d > 0:
                             cache_hit_ratio_auth = round(100.0 * max(0, _allowed_d - _du) / _allowed_d, 2)
-                            upstream_share = round(100.0 * _du / _allowed_d, 2)
+                            # 2026-10-23：_du 来自 24h 滚动窗口的总量差分（上游应答数没有小时桶），
+                            # 窗口里"最旧那段过期"会把它抬到 > 放行查询数 ⇒ 占比算出 103–110%（实测 5 个点）。
+                            # 上游应答不可能多于放行查询，超出即判本点无效（前端断线），宁缺勿错。
+                            upstream_share = (round(100.0 * _du / _allowed_d, 2)
+                                              if 0 <= _du <= _allowed_d else None)
             else:
                 # 2026-10-14：Δ 为负（AGH 重启或整点最旧桶过期）或 **Δ拦截 > Δ总查询**
                 # （整点换桶时的稀释）一律判无效 → 前端显示"—"或退回样本口径，不再出现
@@ -3468,10 +3744,6 @@ def build_snapshot():
         # 也能识别"跨了不止一个整点"的采样断档（详见 _agh_window_delta）。
         "agh_bucket_q": agh_stats.get("bucket_q"),
         "agh_bucket_b": agh_stats.get("bucket_b"),
-        # 换桶区间的另一半输入（上一小时桶的当时值）也落库：否则事后无法只凭 history.json
-        # 复核 agh_hour_bucket_rollover 那一个区间的算术（2026-10-14 审计时就不够用）。
-        "agh_bucket_q_prev_hour": agh_stats.get("bucket_q_prev_hour"),
-        "agh_bucket_b_prev_hour": agh_stats.get("bucket_b_prev_hour"),
         "agh_hour_key": agh_hour_key,
         "qps_delta_src": qps_delta_src,
         "agh_b_total": agh_b_total,
@@ -3495,7 +3767,19 @@ def build_snapshot():
         "cache_hit_pct": overview["cache_hit_pct"] if _c else None,
         "chain_cache_pct": chain_cache.get("hit_pct"),
         "cache_hits": hits if _c else None,
+        # 2026-10-23：dnsdist PacketCache 的累计命中/未命中计数（history 里存原始计数，
+        # 前端按相邻两点差分得到「每窗口命中率」曲线；cache_hit_pct 是累计值，画成曲线是直线）。
+        "dnsdist_cache_hits": overview.get("dnsdist_cache_hits"),
+        "dnsdist_cache_misses": overview.get("dnsdist_cache_misses"),
         "cache_misses": miss if _c else None,
+        # 2026-10-24 修复（字段审计复核）：窗口覆盖度与采集耗时此前从不落 HISTORY，
+        # 趋势区取不到列、事后也无法回溯"当时窗口是否被截断"（实时区读 overview 能显示，
+        # 但历史里没有记录）。collect_ms 取上一轮快照 —— 本轮耗时在 append 之后才算出。
+        "window_covered_min": overview.get("window_covered_min"),
+        "window_truncated": overview.get("window_truncated"),
+        "agh_log_lines": overview.get("agh_log_lines"),
+        "agh_log_capped": overview.get("agh_log_capped"),
+        "collect_ms": SNAPSHOT.get("collect_ms"),
         "io_timeout": overview["upstream_timeouts"],
         "slow_count": overview.get("slow_count"),
         "uniq_hosts": overview.get("uniq_hosts"),
@@ -3508,6 +3792,16 @@ def build_snapshot():
         "latency_all_p50_ms": overview.get("latency_all_p50_ms"),
         "latency_all_p90_ms": overview.get("latency_all_p90_ms"),
         "latency_all_p99_ms": overview.get("latency_all_p99_ms"),
+        # 2026-10-23：趋势区的三张卡（净处理 p50 / 上游往返基线 / 全部查询 p90 净口径）
+        # 的 spark 读 net_latency_* 与 upstream_baseline_ms，但 history 此前只写了 latency_*，
+        # 取不到列 → 卡片永远显示"窗口内无样本"。这里把 overview 已算好的净值一并写进历史。
+        "upstream_baseline_ms": overview.get("upstream_baseline_ms"),
+        "net_latency_p50_ms": overview.get("net_latency_p50_ms"),
+        "net_latency_p90_ms": overview.get("net_latency_p90_ms"),
+        "net_latency_p99_ms": overview.get("net_latency_p99_ms"),
+        "net_latency_all_p50_ms": overview.get("net_latency_all_p50_ms"),
+        "net_latency_all_p90_ms": overview.get("net_latency_all_p90_ms"),
+        "net_latency_all_p99_ms": overview.get("net_latency_all_p99_ms"),
         # --- unbound 自身 ---
         "unbound_hit_pct": round(_ub.get("hit_pct"), 2) if _ub.get("hit_pct") else None,
         "unbound_rec_med_ms": _ub.get("recursion_median_ms"),

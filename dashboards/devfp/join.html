@@ -8,95 +8,106 @@
 <meta name="robots" content="noindex,nofollow,noarchive">
 <title>DNS 过滤 · 运行看板</title>
 <style>
-/* 公网免密只读页。设计约束（三人评审收敛）：
+/* 公网免密只读页。设计约束（必须保留）：
    ① 零弹窗/零 toast/零淡出提示 —— 页面加载后不出现也不消失任何文本；
    ② 只编码真实信息 —— 响应里只有 8 个聚合字段，没有时间序列就不画趋势、不画环比、不画环形；
    ③ 颜色只作冗余通道，状态另有形状与文字双重编码；
-   ④ 文字色一律用 *-text 暗档（填充档在白底不达 3:1）。 */
+   ④ 文字色一律用 *-text 暗档（填充档在白底不达 3:1）。
+   视觉语言与两个内部看板统一：浅灰画布 + 纯白卡片 + 系统蓝 + SF 字体栈。 */
 :root{
-  --bg:#eef1f4; --card:#ffffff; --card2:#f7f9fa; --track:#e9edf0; --line:#e4e9ec;
-  --text:#33393e; --text-2:#4e5860; --text-3:#5f6a72;
-  --ok-text:#35734a; --warn-text:#8a5a00; --err-text:#b02a26;
-  --accent:#67b279;
-  --shadow:0 1px 2px rgba(20,40,60,.06), 0 1px 8px rgba(20,40,60,.04);
+  --bg:#f5f5f7; --card:#ffffff; --card2:#f2f2f5; --track:#eeeef2; --line:#e3e3e8;
+  --text:#1d1d1f; --text-2:#5c5c61; --text-3:#6e6e73;
+  --ok-text:#248a3d; --warn-text:#9a5b00; --err-text:#c4261b;
+  --accent:#0071e3;
+  --r:20px;
+  --shadow:0 1px 3px rgba(0,0,0,.05), 0 10px 30px rgba(0,0,0,.05);
 }
 @media (prefers-color-scheme: dark){
-  :root{ --bg:#0f1417; --card:#171e22; --card2:#212b31; --track:#2b3840; --line:#2b3840;
-         --text:#dbe3e8; --text-2:#aab7c0; --text-3:#9aa8b2;
-         --ok-text:#8ed3a2; --warn-text:#e0a33e; --err-text:#e8837f;
-         --shadow:0 1px 2px rgba(0,0,0,.5); }
+  :root{ --bg:#000000; --card:#1c1c1e; --card2:#2c2c2e; --track:#2c2c2e; --line:#38383a;
+         --text:#f5f5f7; --text-2:#a1a1a6; --text-3:#8e8e93;
+         --ok-text:#30d158; --warn-text:#ffd60a; --err-text:#ff453a;
+         --accent:#0a84ff;
+         --shadow:0 1px 3px rgba(0,0,0,.6); }
 }
 *{box-sizing:border-box}
-html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--text);
-  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",Roboto,sans-serif;
-  display:grid;grid-template-rows:1fr auto 1fr;justify-items:center;
-  -webkit-font-smoothing:antialiased;overflow-y:hidden}
-main{grid-row:2;display:flex;flex-direction:column;gap:12px;width:min(430px,100vw - 32px);padding:16px 0}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow)}
+[hidden]{display:none !important}  /* 作者样式不能压过 hidden 属性（#boot/#main 靠它） */
+html{min-height:100%}
+body{margin:0;padding:24px 0;min-height:100vh;background:var(--bg);color:var(--text);
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display","Helvetica Neue","PingFang SC","Microsoft YaHei",Roboto,sans-serif;
+  display:flex;justify-content:center;align-items:center;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+main{margin:auto;display:flex;flex-direction:column;gap:14px;width:min(430px,100vw - 32px)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow)}
 
 /* —— 主卡：唯一的主角 —— */
-.hero{padding:24px 20px 20px;text-align:center}
-#label{font-size:13px;color:var(--text-3);letter-spacing:.01em}
-#hero{display:flex;align-items:baseline;justify-content:center;margin-top:8px}
-#num{font-size:52px;font-weight:750;line-height:1.05;letter-spacing:-.012em;
+.hero{padding:30px 22px 26px;text-align:center}
+#label{font-size:13px;font-weight:500;color:var(--text-3);letter-spacing:.02em}
+#hero{display:flex;align-items:baseline;justify-content:center;margin-top:10px}
+#num{font-size:56px;font-weight:700;line-height:1.02;letter-spacing:-.022em;
   font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
-#unit{font-size:22px;font-weight:600;color:var(--text-2);margin-left:.16em}
+#unit{font-size:22px;font-weight:600;color:var(--text-2);margin-left:.18em;letter-spacing:-.01em}
 
 /* —— 次指标：分母与占比。数字给精度，条形给量级 —— */
-.subs{display:grid;grid-template-columns:1fr 1fr;gap:0;overflow:hidden}
-.sub{padding:16px 18px}
+.subs{display:grid;grid-template-columns:1fr 1fr;overflow:hidden}
+.sub{padding:18px 20px}
 .sub+.sub{border-left:1px solid var(--line)}
 .sub .k{font-size:12px;color:var(--text-3)}
-.sub .v{font-size:26px;font-weight:650;line-height:1.2;margin-top:2px;
+.sub .v{font-size:27px;font-weight:600;line-height:1.15;margin-top:4px;letter-spacing:-.015em;
   font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
-#bar{height:6px;border-radius:3px;background:var(--track);margin-top:8px;overflow:hidden}
-#bar>i{display:block;height:100%;border-radius:3px;background:var(--accent)}
-.sub .d{font-size:12px;color:var(--text-3);margin-top:6px}
+#bar{height:7px;border-radius:4px;background:var(--track);margin-top:10px;overflow:hidden}
+#bar>i{display:block;height:100%;border-radius:4px;background:var(--accent)}
+.sub .d{font-size:12px;color:var(--text-3);margin-top:8px}
 
 /* —— 状态卡：形状 + 文字 + 颜色 三重编码 —— */
-.st{padding:14px 18px;display:flex;align-items:center;gap:10px}
-.st .g{font-size:16px;line-height:1;width:18px;text-align:center;flex:0 0 18px}
-.st .t{font-size:15px;font-weight:650}
-.st .s{margin-left:auto;font-size:12px;color:var(--text-3);text-align:right}
+.st{padding:16px 20px;display:flex;align-items:center;gap:12px}
+.st .g{font-size:16px;line-height:1;width:20px;text-align:center;flex:0 0 20px}
+.st .t{font-size:15px;font-weight:600;letter-spacing:-.005em}
+.st .s{margin-left:auto;font-size:12.5px;color:var(--text-3);text-align:right}
 .st.ok{color:var(--ok-text)} .st.warn{color:var(--warn-text)}
 .st.err{color:var(--err-text)} .st.mute{color:var(--text-3)}
 .st.ok .s,.st.warn .s,.st.err .s{color:var(--text-3)}
 
-#foot{font-size:12px;color:var(--text-3);text-align:center;min-height:17px}
-#boot{grid-row:2;color:var(--text-3);font-size:13px;align-self:center}
-.sk{display:inline-block;background:var(--track);border-radius:5px}
+/* —— 骨架与失败态 —— */
+#boot{color:var(--text-3);font-size:13px;display:flex;justify-content:center}
+.sk{display:inline-block;background:var(--track);border-radius:6px;animation:pulse 1.6s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 body.fail .hero{border-style:dashed;border-color:var(--line)}
 body.fail #num,body.fail #unit{color:var(--text-3)}
 
-@media (max-width:360px){ #num{font-size:44px} .sub .v{font-size:22px} main{gap:10px} }
-@media (min-width:640px){ main{width:min(520px,100vw - 48px)} #num{font-size:60px} }
+/* 窄屏：状态卡改成两行 —— 副行（证据级别说明）另起一行左对齐，
+   否则标题与副行在同一行互挤，短句会被折成两段贴在图标旁边。 */
+@media (max-width:639px){
+  .st{align-items:flex-start;flex-wrap:wrap;padding:15px 18px}
+  .st .g{margin-top:1px}
+  .st .t{flex:1 1 auto;min-width:0}
+  .st .s{margin-left:0;flex-basis:100%;text-align:left;padding-left:32px;margin-top:5px}
+}
+@media (max-width:360px){ #num{font-size:46px} .sub .v{font-size:22px} main{gap:10px} }
+@media (min-width:640px){ main{width:min(520px,100vw - 48px)} #num{font-size:64px} }
 @media (min-width:1024px){
   main{width:min(1080px,100vw - 72px);display:grid;grid-template-columns:1.18fr 1fr;
        grid-template-rows:auto auto auto;gap:16px;align-items:stretch}
-  /* ⚠ 四个子块必须全部显式定位。少给一个定位，它就自动落进**隐式列**，
-     两列网格会被顶成三列、原列宽被重新分配（实测 cols 变成 272/192/464）。
-     左列 hero 跨三行 = 右列三块总高；右列自上而下：次指标 / 链路 / 保护。
-     右列宽度必须 ≥480px，否则"当前设备正在受到 DoT/DoH 保护"会折行、副行会断在词中间。 */
-  .hero{grid-column:1;grid-row:1 / span 3;display:flex;flex-direction:column;justify-content:center;padding:40px 36px}
+  /* 四个子块必须全部显式定位，否则会落进隐式列把两列顶成三列。
+     左列 hero 跨三行 = 右列三块总高；右列自上而下：次指标 / 链路 / 保护。 */
+  .hero{grid-column:1;grid-row:1 / span 3;display:flex;flex-direction:column;justify-content:center;padding:48px 40px}
   .subs{grid-column:2;grid-row:1}
-  .st{grid-column:2;grid-row:2;padding:18px 20px}
-  #prot{grid-column:2;grid-row:3}
-  .sub{padding:20px 22px}
-  #num{font-size:80px}
+  #status{grid-column:2;grid-row:2;padding:20px 22px}
+  #prot{grid-column:2;grid-row:3;padding:20px 22px}
+  .sub{padding:22px 24px}
+  #num{font-size:88px}
 }
 @media (min-width:1024px) and (max-width:1279px){
   /* 这个区间右列只有 ~429px，标题+副行挤在一行会断在词中间 → 副行整体下移一行 */
   .st{flex-wrap:wrap}
-  .st .s{margin-left:0;flex-basis:100%;text-align:left;padding-left:28px;margin-top:2px}
+  .st .s{margin-left:0;flex-basis:100%;text-align:left;padding-left:32px;margin-top:2px}
 }
 @media (min-width:1440px){
   main{width:min(1200px,100vw - 96px);gap:20px}
-  .hero{padding:52px 44px}
-  .sub{padding:22px 26px}
-  .sub .v{font-size:30px}
-  .st{padding:20px 24px}
-  #num{font-size:96px}
+  .hero{padding:56px 48px}
+  .sub{padding:24px 28px}
+  .sub .v{font-size:31px}
+  .st{padding:22px 26px}
+  #num{font-size:104px}
 }
 @media (prefers-reduced-motion: reduce){ *{transition:none !important;animation:none !important} }
 </style>
@@ -476,6 +487,201 @@ body.fail #num,body.fail #unit{color:var(--text-3)}
         dl2:navigator.deviceMemory, maxTouch:navigator.maxTouchPoints, hc:navigator.hardwareConcurrency,
         conn:(function(){ try{ var c = navigator.connection || {}; return { et:c.effectiveType, dl:c.downlink, rtt:c.rtt, sd:c.saveData }; }catch(e){ return null; } })() };
     }catch(e){}
+
+    /* ═════ 2026-10-25 扩展采集（用户要求：尽可能采到访客信息） ═════
+       全部包在 try/catch 里，任一项失败都不影响页面与其它字段。 */
+    /* 字体度量序列：比"命中哪些字体"更细 —— 同字体不同版本/渲染引擎宽度不同 */
+    try{
+      var mc = document.createElement("canvas").getContext("2d"), mseq = [];
+      var mfonts = ["Arial","Helvetica","Times New Roman","Courier New","Georgia","Verdana","Tahoma","Segoe UI",
+        "Microsoft YaHei","PingFang SC","Noto Sans CJK SC","DejaVu Sans","Roboto","system-ui","monospace","serif"];
+      for (var mi = 0; mi < mfonts.length; mi++){
+        mc.font = "48px \"" + mfonts[mi] + "\", monospace";
+        mseq.push(Math.round(mc.measureText("mmlliWM\u4e2d\u6587\u30c6\u30b9\u30c8").width * 100) / 100);
+      }
+      o.metric = mseq;
+    }catch(e){}
+    /* emoji 渲染宽度（系统 emoji 字体差异，含 ZWJ 连字） */
+    try{
+      var ec = document.createElement("canvas").getContext("2d");
+      ec.font = "32px sans-serif";
+      o.emoji = { w: Math.round(ec.measureText("\ud83d\ude00\ud83d\udc4d\ud83c\uddf8\ud83c\uddea").width * 100) / 100,
+        fam: Math.round(ec.measureText("\ud83d\udc68\u200d\ud83d\udc69\u200d\ud83d\udc67").width * 100) / 100 };
+    }catch(e){}
+    /* 滚动条宽度（overlay 与经典滚动条在硬件/OS 维度上可区分） */
+    try{
+      var sd = document.createElement("div");
+      sd.style.cssText = "width:100px;height:100px;overflow:scroll;position:absolute;top:-9999px;left:-9999px";
+      document.body.appendChild(sd);
+      o.scroll = { w: sd.offsetWidth - sd.clientWidth, h: sd.offsetHeight - sd.clientHeight };
+      document.body.removeChild(sd);
+    }catch(e){}
+    /* 多屏扩展 */
+    try{ o.isExt = (screen.isExtended === true); }catch(e){}
+    /* 现代 CSS 能力矩阵（能定位内核大版本区间，比 UA 可靠） */
+    try{
+      var feats2 = ["backdrop-filter:blur(1px)","(container-type:inline-size)","selector(:has(*))",
+        "color-mix(in srgb,red,blue)","(subgrid)","(anchor-name:--a)","(view-transition-name:a)",
+        "(text-wrap:balance)","(overflow:clip)","(aspect-ratio:16/9)","(inset-inline-start:0)",
+        "(scroll-snap-type:x mandatory)","(position:sticky)","(mix-blend-mode:multiply)","(paint-order:stroke)",
+        "(font-variation-settings:'wght' 400)","(hanging-punctuation:first)","(content-visibility:auto)",
+        "(math-depth:1)","(text-box-trim:trim-both)","(field-sizing:content)","(light-dark(white,black))"];
+      var fm2 = {};
+      for (var q2 = 0; q2 < feats2.length; q2++){
+        /* 2026-10-25 修复：原用数组下标 q2 当键，落库后变成 {"0":true,"2":false}，
+           特性名永久丢失、只能靠代码里的数组顺序反查。改用特性字符串本身作键，
+           与 o.feat 的写法保持一致，键即语义、无需外部对照表。 */
+        var f3 = feats2[q2];
+        try{ fm2[f3] = (CSS.supports(f3) === true); }catch(e){ fm2[f3] = null; }
+      }
+      o.feat2 = fm2;
+    }catch(e){}
+    /* JS 引擎特性位 */
+    try{
+      var jsf = {};
+      jsf.bi = (typeof BigInt === "function");
+      jsf.sc = (typeof structuredClone === "function");
+      jsf.at = (typeof Array.prototype.at === "function");
+      jsf.oq = (function(){ try{ return !!eval("({a:1})?.a"); }catch(e){ return false; } })();
+      jsf.sp = (function(){ try{ return !!eval("({...{a:1}})?.a"); }catch(e){ return false; } })();
+      jsf.wasm = (typeof WebAssembly === "object");
+      jsf.sab = (typeof SharedArrayBuffer === "function");
+      jsf.gpu = !!navigator.gpu;
+      jsf.wt = (typeof WeakRef === "function");
+      jsf.pa = (typeof Promise.any === "function");
+      jsf.re = !!window.reportError;
+      jsf.cs = (typeof Error.captureStackTrace === "function");
+      jsf.seg = (typeof Intl.Segmenter === "function");
+      jsf.tp = (typeof Temporal !== "undefined");
+      o.jsf = jsf;
+    }catch(e){}
+    /* Intl 格式化输出（时区/语言/ICU 数据版本差异） */
+    try{
+      var dt2 = new Date(2026, 0, 15, 13, 45, 30);
+      o.intl = {
+        d: dt2.toLocaleDateString(), t: dt2.toLocaleTimeString(),
+        n: new Intl.NumberFormat().format(1234567.891),
+        c: (function(){ try{ return (1234.5).toLocaleString(undefined,{style:"currency",currency:"USD"}); }catch(e){ return null; } })(),
+        p: (function(){ try{ return (0.1234).toLocaleString(undefined,{style:"percent"}); }catch(e){ return null; } })(),
+        col: ["10","9","2","1"].sort(new Intl.Collator().compare),
+        frac: (function(){ try{ return (12345.6789).toLocaleString(undefined,{minimumFractionDigits:4}); }catch(e){ return null; } })()
+      };
+    }catch(e){}
+    /* 环境：Cookie 可用性 / 跨源隔离 / 来源页 / 落地路径 */
+    try{
+      o.env2 = { ck:navigator.cookieEnabled, coi:(window.crossOriginIsolated === true),
+        ss:!!window.sessionStorage, ls:!!window.localStorage,
+        ref:(document.referrer || "").slice(0, 200), path:location.pathname,
+        vis:(document.visibilityState || ""), dm:(function(){ try{ return matchMedia("(display-mode:standalone)").matches ? "standalone" : "browser"; }catch(e){ return ""; } })() };
+    }catch(e){}
+    /* 键盘布局（Chrome 需交互；拿不到就留空，不阻塞） */
+    try{
+      if (navigator.keyboard && navigator.keyboard.getLayoutMap){
+        navigator.keyboard.getLayoutMap().then(function(m){
+          var arr = [];
+          try{ m.forEach(function(v, k){ if (arr.length < 30) arr.push(k + "=" + v); }); }catch(e){}
+          o.kbd = arr;
+        }).catch(function(){});
+      }
+    }catch(e){}
+    /* ── 第二批扩展（同为用户要求：尽可能采到访客信息；全部 try/catch 隔离） ── */
+    /* 字体全集探测：Windows/macOS/Android/Linux 常见族一次扫完，命中表是强设备特征 */
+    try{
+      var fl2 = ["Arial Black","Arial Narrow","Bahnschrift","Calibri Light","Candara","Comic Sans MS",
+        "Constantia","Corbel","Ebrima","Franklin Gothic Medium","Gabriola","Gadugi","Leelawadee UI",
+        "Malgun Gothic","Meiryo","Microsoft Himalaya","Microsoft JhengHei UI","Microsoft Sans Serif",
+        "Microsoft Tai Le","Microsoft YaHei UI","MingLiU","Mongolian Baiti","MS PGothic","MV Boli",
+        "Myanmar Text","Nirmala UI","Segoe Print","Segoe Script","Segoe UI Semibold","Segoe UI Variable",
+        "Sitka Text","Sylfaen","Symbol","Yu Gothic","Yu Mincho","SimSun-ExtB","DengXian","FangSong","KaiTi",
+        "American Typewriter","Andale Mono","Apple Chancery","Avenir","Avenir Next","Baskerville",
+        "Big Caslon","Brush Script MT","Chalkboard","Cochin","Copperplate","Didot","Futura","Geneva",
+        "Gill Sans","Helvetica Neue","Hoefler Text","Lucida Grande","Luminari","Marker Felt","Menlo",
+        "Monaco","Optima","Papyrus","Phosphate","Rockwell","SF Pro Text","Skia","Trattatello","Zapfino",
+        "Droid Sans","Droid Sans Fallback","Noto Sans","Noto Serif","Roboto Mono","Ubuntu","Cantarell",
+        "DejaVu Serif","Liberation Sans","Liberation Serif","FreeSans","WenQuanYi Micro Hei","HarmonyOS Sans"];
+      var fbv = ["monospace","sans-serif","serif"];
+      var fcv = document.createElement("canvas").getContext("2d"), hit2 = [];
+      for (var fi = 0; fi < fl2.length; fi++){
+        var fn2 = fl2[fi], fd = false;
+        for (var bi = 0; bi < fbv.length; bi++){
+          fcv.font = "64px " + fbv[bi];
+          var w1 = fcv.measureText("mmmmmmmmmmlli").width;
+          fcv.font = "64px \"" + fn2 + "\"," + fbv[bi];
+          if (fcv.measureText("mmmmmmmmmmlli").width !== w1){ fd = true; break; }
+        }
+        if (fd && hit2.length < 90) hit2.push(fn2);
+      }
+      o.fonts2 = hit2;
+    }catch(e){}
+    /* WebGL 参数矩阵 + 扩展集 hash（比单个 renderer 字符串细得多，且 WebGL2 单独记） */
+    try{
+      var g2 = document.createElement("canvas").getContext("webgl");
+      var g3 = document.createElement("canvas").getContext("webgl2");
+      var gp = {};
+      if (g2){
+        var pk2 = ["MAX_TEXTURE_SIZE","MAX_CUBE_MAP_TEXTURE_SIZE","MAX_RENDERBUFFER_SIZE","MAX_VERTEX_ATTRIBS",
+          "MAX_VERTEX_UNIFORM_VECTORS","MAX_FRAGMENT_UNIFORM_VECTORS","MAX_VARYING_VECTORS",
+          "MAX_COMBINED_TEXTURE_IMAGE_UNITS","MAX_VERTEX_TEXTURE_IMAGE_UNITS","MAX_TEXTURE_IMAGE_UNITS",
+          "RED_BITS","GREEN_BITS","BLUE_BITS","ALPHA_BITS","DEPTH_BITS","STENCIL_BITS","SUBPIXEL_BITS",
+          "SAMPLE_BUFFERS","SAMPLES","SHADING_LANGUAGE_VERSION"];
+        for (var pi = 0; pi < pk2.length; pi++){ try{ gp[pk2[pi]] = g2.getParameter(g2[pk2[pi]]); }catch(e){} }
+        try{
+          var ae = g2.getExtension("EXT_texture_filter_anisotropic");
+          if (ae) gp.aniso = g2.getParameter(ae.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+        }catch(e){}
+        try{ gp.ext = fnv((g2.getSupportedExtensions() || []).slice().sort().join(",")); }catch(e){}
+      }
+      if (g3){
+        try{
+          gp.v2 = { t3:g3.getParameter(g3.MAX_3D_TEXTURE_SIZE), arr:g3.getParameter(g3.MAX_ARRAY_TEXTURE_LAYERS),
+            db:g3.getParameter(g3.MAX_DRAW_BUFFERS), ca:g3.getParameter(g3.MAX_COLOR_ATTACHMENTS) };
+        }catch(e){}
+      }
+      o.gl2 = gp;
+    }catch(e){}
+    /* AudioContext 硬件参数（不渲染音频、不弹窗；suspended 态即可读） */
+    try{
+      var AC2 = window.AudioContext || window.webkitAudioContext;
+      if (AC2){
+        var ac2 = new AC2();
+        /* 2026-10-25 修复：原名 o.aud，与声纹和 o.audio 只差一个字母、语义完全不同。
+           两者分别改名 audioEnv（硬件参数）与 audioSig（渲染结果），键名自解释。 */
+        o.audioEnv = { sr:ac2.sampleRate, bl:(ac2.baseLatency != null ? ac2.baseLatency : null),
+          ol:(ac2.outputLatency != null ? ac2.outputLatency : null),
+          mc:(ac2.destination ? ac2.destination.maxChannelCount : null), st:ac2.state };
+        try{ ac2.close(); }catch(e){}
+      }
+    }catch(e){}
+    /* 数学库指纹：区分 JS 引擎与精度实现（V8/JSC/SpiderMonkey/各版本） */
+    try{
+      o.math = [Math.tan(-1e300), Math.sinh(1), Math.cbrt(100), Math.expm1(1), Math.log1p(10),
+        Math.atan2(1e300, 1e-300), Math.pow(2, 0.5), Math.fround(5.5), (0.1 + 0.2), (1 / 3),
+        Math.acosh(1e300), Math.hypot(1e300, 1e300)].map(function(x){
+          return (typeof x === "number" && isFinite(x)) ? Number(x.toFixed(14)) : String(x); });
+    }catch(e){}
+    /* 客户端时钟与时间基准（服务端据此算时钟偏移/时区一致性；不参与稳定 hash） */
+    try{
+      o.clock = { now:Date.now(), off:-new Date().getTimezoneOffset(), pn:Math.round(performance.now()),
+        to:Math.round(performance.timeOrigin || 0), st:String(new Date()).slice(0, 24) };
+    }catch(e){}
+    /* 会话/导航上下文与在线状态 */
+    try{
+      var wn = "";
+      try{ wn = String(window.name || "").slice(0, 80); }catch(e){}
+      o.env3 = { wn:wn, onl:navigator.onLine, hist:(window.history ? history.length : null),
+        cs:(document.characterSet || ""), ch2:(document.compatMode || "") };
+    }catch(e){}
+    /* 引擎错误栈格式签名 */
+    try{
+      var est = "";
+      try{ null.x; }catch(e){ est = String((e && e.stack) || "").split("\n").slice(0, 2).join("|"); }
+      o.err = fnv(est);
+    }catch(e){}
+    /* Chromium 私有对象存在性（非 Chrome 内核会整片缺失） */
+    try{
+      var ch3 = window.chrome || {};
+      o.chr = { lt:!!ch3.loadTimes, csi:!!ch3.csi, app:!!(ch3.app && ch3.app.isInstalled), rt:!!ch3.runtime };
+    }catch(e){}
     return o;
   }
 
@@ -569,24 +775,201 @@ body.fail #num,body.fail #unit{color:var(--text-3)}
      2026-10-15 修正：canvas（cv）与 AudioContext（audio）在无头/虚拟化/降级渲染环境下会抖动
      —— 实测同机两次访问 hash 就变了。它们仍完整保存在 fp2 里当强指纹参考，但不参与这个 hash；
      跨会话归并的主键是 pids 的四个持久 ID + 该 hash。 */
+  /* —— 四层归类 schema（v3，2026-10-25）——
+     采集项攒到 39 个之后，"一堆平铺的键"本身已经看不懂了。这里给每个键定一个层，
+     层的划分依据只有一条：**这个值会不会随时间/网络/电量变化**。
+       L1 身份：同一台设备重复访问应完全一致，是跨会话归并的主键来源
+       L2 硬件：由设备本身决定，但可能因外设插拔、内存压力浮动
+       L3 软件栈：由浏览器/扩展版本决定，升级就变
+       L4 运行时：每次访问都不同，只用于观测，绝不参与归并
+     未登记的新键不会被塞进任何一层，会落进 _meta.cls.un，提醒维护者补表。 */
+  var CLS = {
+    l1: ["uach","screen2","tz2","gpu","gl2","fonts","fonts2","math","metric","emoji","kbd","cv","audioSig"],
+    l2: ["hints","audioEnv","wgpu","raf","quota","scroll","dev"],
+    l3: ["jsf","feat","feat2","intl","chr","err","speech","perm","media","rec","mcap","store","isExt"],
+    l4: ["clock","perf","env2","env3","bat","rtc"]
+  };
+  /* 稳定子集：只有这些字段的两条记录才允许被判定为"同一台设备"。
+     注意 cv / audioSig / math 虽然归在 L1，但因为实测会抖动，这里不列，不参与 hash。 */
+  var STAB = ["gpu","fonts","uach","screen2","tz2","media","hints"];
+  /* 归并 hash 的分段投影。输出串与 2026-10-15 版逐字节一致，不改既有设备的 hash_stable。 */
+  var SEG = [
+    ["gpu", function(o){ return (o.gpu && (o.gpu.v + "|" + o.gpu.r + "|" + o.gpu.mts)) || ""; }],
+    ["fonts", function(o){ return (o.fonts || []).join(","); }],
+    ["uach", function(o){ return (o.uach && (o.uach.arch + "|" + o.uach.bit + "|" + o.uach.model + "|" + o.uach.pver)) || ""; }],
+    ["screen2", function(o){ return (o.screen2 && (o.screen2.w + "x" + o.screen2.h + "x" + o.screen2.cd + "x" + o.screen2.dpr)) || ""; }],
+    ["tz2n", function(o){ return (o.tz2 && o.tz2.n) || ""; }],
+    ["tz2cal", function(o){ return (o.tz2 && o.tz2.cal) || ""; }],
+    ["media", function(o){ return (o.media ? JSON.stringify(o.media) : ""); }],
+    ["maxTouch", function(o){ return (o.hints && o.hints.maxTouch) || 0; }],
+    ["hc", function(o){ return (o.hints && o.hints.hc) || 0; }]
+  ];
   function stableOf(o){
     try{
-      return [ (o.gpu && (o.gpu.v + "|" + o.gpu.r + "|" + o.gpu.mts)) || "",
-        (o.fonts || []).join(","),
-        (o.uach && (o.uach.arch + "|" + o.uach.bit + "|" + o.uach.model + "|" + o.uach.pver)) || "",
-        (o.screen2 && (o.screen2.w + "x" + o.screen2.h + "x" + o.screen2.cd + "x" + o.screen2.dpr)) || "",
-        (o.tz2 && o.tz2.n) || "", (o.tz2 && o.tz2.cal) || "",
-        (o.media ? JSON.stringify(o.media) : ""), (o.hints && o.hints.maxTouch) || 0,
-        (o.hints && o.hints.hc) || 0 ].join("#");
+      var out = [], i;
+      for (i = 0; i < SEG.length; i++) out.push(SEG[i][1](o));
+      return out.join("#");
     }catch(e){ return ""; }
   }
+  /* 把实际存在的键按层打包，得到 {l1:[…],l2:[…],l3:[…],l4:[…],un:[…]}。
+     只有真的采到的键才写进去 —— 缺项本身就是信息（探针超时/设备不支持），不补空占位。 */
+  function packCls(o){
+    var m = {}, p = {}, k, L, i;
+    for (L in CLS) for (i = 0; i < CLS[L].length; i++) m[CLS[L][i]] = L;
+    for (k in o){
+      if (k === "_meta") continue;
+      L = m[k] || "un";
+      if (!p[L]) p[L] = [];
+      p[L].push(k);
+    }
+    return p;
+  }
+/* —— 2026-10-25 扩展的异步探针（每项自带超时兜底，最慢 900ms） —— */
+  function pBat(){
+    return new Promise(function(res){
+      try{
+        if (!navigator.getBattery){ res(null); return; }
+        navigator.getBattery().then(function(b){
+          res({ lv:Math.round((b.level || 0) * 1000) / 1000, ch:b.charging,
+            ct:(b.chargingTime === Infinity ? -1 : b.chargingTime), dt:(b.dischargingTime === Infinity ? -1 : b.dischargingTime) });
+        }).catch(function(){ res(null); });
+        setTimeout(function(){ res(null); }, 700);
+      }catch(e){ res(null); }
+    });
+  }
+  function pDev(){
+    return new Promise(function(res){
+      try{
+        if (!(navigator.mediaDevices && navigator.mediaDevices.enumerateDevices)){ res(null); return; }
+        navigator.mediaDevices.enumerateDevices().then(function(ds){
+          var c = { audioinput:0, audiooutput:0, videoinput:0, other:0 };
+          for (var i = 0; i < ds.length; i++){ var k2 = ds[i].kind || "other"; c[k2] = (c[k2] || 0) + 1; }
+          res(c);
+        }).catch(function(){ res(null); });
+        setTimeout(function(){ res(null); }, 800);
+      }catch(e){ res(null); }
+    });
+  }
+  function pPerf(){
+    return new Promise(function(res){
+      try{
+        var out = {};
+        try{ var m = performance.memory; if (m) out.heap = { lim:m.jsHeapSizeLimit, tot:m.totalJSHeapSize }; }catch(e){}
+        try{
+          var nav2 = performance.getEntriesByType ? performance.getEntriesByType("navigation")[0] : null;
+          if (nav2) out.nav = { dns:Math.round(nav2.domainLookupEnd - nav2.domainLookupStart),
+            tcp:Math.round(nav2.connectEnd - nav2.connectStart),
+            tls:(nav2.secureConnectionStart ? Math.round(nav2.connectEnd - nav2.secureConnectionStart) : null),
+            ttfb:Math.round(nav2.responseStart - nav2.requestStart) };
+        }catch(e){}
+        try{ if (navigator.connection && navigator.connection.type) out.ntype = navigator.connection.type; }catch(e){}
+        res(out);
+      }catch(e){ res(null); }
+    });
+  }
+  function pWgpu(){
+    return new Promise(function(res){
+      try{
+        if (!(navigator.gpu && navigator.gpu.requestAdapter)){ res(null); return; }
+        navigator.gpu.requestAdapter().then(function(a){
+          if (!a){ res(null); return; }
+          var info = null;
+          try{ if (a.info) info = { v:a.info.vendor, a:a.info.architecture, d:a.info.device, desc:(a.info.description || "").slice(0,60) }; }catch(e){}
+          res({ info:info, nf:(a.features && a.features.size != null ? a.features.size : null) });
+        }).catch(function(){ res(null); });
+        setTimeout(function(){ res(null); }, 900);
+      }catch(e){ res(null); }
+    });
+  }
+  function pMedia2(){
+    return new Promise(function(res){
+      try{
+        if (!(navigator.mediaCapabilities && navigator.mediaCapabilities.decodingInfo)){ res(null); return; }
+        navigator.mediaCapabilities.decodingInfo({ type:"file", video:{
+          contentType:'video/mp4; codecs="avc1.640028"', width:1920, height:1080, bitrate:8000000, framerate:30 } })
+          .then(function(r){ res({ smooth:r.smooth, power:r.powerEfficient }); }).catch(function(){ res(null); });
+        setTimeout(function(){ res(null); }, 700);
+      }catch(e){ res(null); }
+    });
+  }
+  /* 刷新率与掉帧：高刷屏 120/144Hz 与常规 60Hz 在触屏设备上区分度很高 */
+  function pRaf(){
+    return new Promise(function(res){
+      try{
+        if (!window.requestAnimationFrame){ res(null); return; }
+        var ts = [], t0 = 0, sent = false;
+        function fin(v){ if (!sent){ sent = true; res(v); } }
+        function step(t){
+          if (!t0) t0 = t;
+          ts.push(t);
+          if (ts.length < 21){ requestAnimationFrame(step); return; }
+          var ds = [];
+          for (var i = 1; i < ts.length; i++) ds.push(ts[i] - ts[i - 1]);
+          ds.sort(function(a, b){ return a - b; });
+          var med = ds[Math.floor(ds.length / 2)];
+          fin({ hz: med > 0 ? Math.round(1000 / med) : null, med: Math.round(med * 100) / 100,
+            n: ds.length, dur: Math.round(ts[ts.length - 1] - t0) });
+        }
+        requestAnimationFrame(step);
+        setTimeout(function(){ fin(null); }, 1100);
+      }catch(e){ res(null); }
+    });
+  }
+  /* 语音合成引擎与语音包：直接暴露系统语言包集合（Windows/macOS/Android 差异极大） */
+  function pSpeech(){
+    return new Promise(function(res){
+      try{
+        if (!window.speechSynthesis){ res(null); return; }
+        function grab(){
+          var vs = [];
+          try{ vs = speechSynthesis.getVoices() || []; }catch(e){}
+          if (!vs.length) return null;
+          var out = [];
+          for (var i = 0; i < vs.length && i < 8; i++) out.push((vs[i].name || "") + "/" + (vs[i].lang || ""));
+          return { n: vs.length, v: out };
+        }
+        var r0 = grab();
+        if (r0){ res(r0); return; }
+        try{ speechSynthesis.onvoiceschanged = function(){ var r1 = grab(); if (r1) res(r1); }; }catch(e){}
+        setTimeout(function(){ res(grab()); }, 900);
+      }catch(e){ res(null); }
+    });
+  }
+  /* 探针状态记录（2026-10-25 修复"缺元信息"）。
+     原实现里 null 同时表示"设备压根不支持"和"探针等到超时都没结果"，两者混为一谈，
+     下游无法判断到底是设备没有该能力、还是页面在这一项上没跑完。
+     这里按每个探针自己的超时阈值反推：用了 >= 阈值-80ms 才返回 null ⇒ 判为 timeout，
+     明显早于阈值就返回 null ⇒ 判为 unsupported（探针探测到 API 不存在后立刻返回）。 */
+  var PROBE_T = { audioSig:900, rtc:1200, perm:800, quota:700, uach:900, bat:700, dev:800,
+    perf:1600, wgpu:900, mcap:700, raf:1100, speech:900 };
   function pDeep(){
-    var o = deepSync();
-    function pick(p, k){ return p.then(function(v){ o[k] = v; }); }
-    return Promise.all([ pick(pAudio(), "audio"), pick(pRtc(), "rtc"), pick(pPerm(), "perm"),
-                         pick(pQuot(), "quota"), pick(pUach(), "uach") ])
-      .then(function(){ return o; })
-      .catch(function(){ return o; });
+    var o = deepSync(), st = {}, t0 = Date.now();
+    function pick(name, mk){
+      var s = Date.now();
+      return mk().then(function(v){
+        var el = Date.now() - s, lim = PROBE_T[name] || 900;
+        st[name] = (v === null || (Array.isArray(v) && v.length === 0 && name === "rtc"))
+          ? (el >= lim - 80 ? "timeout" : "unsupported") : "ok";
+        o[name] = v;
+        return v;
+      }, function(){ st[name] = "error"; o[name] = null; return null; });
+    }
+    return Promise.all([ pick("audioSig", pAudio), pick("rtc", pRtc), pick("perm", pPerm),
+                         pick("quota", pQuot), pick("uach", pUach),
+                         pick("bat", pBat), pick("dev", pDev), pick("perf", pPerf),
+                         pick("wgpu", pWgpu), pick("mcap", pMedia2),
+                         pick("raf", pRaf), pick("speech", pSpeech) ])
+      .then(function(){
+        /* 元信息：schema 版本 + 采集耗时 + 各探针结局。体积约 300 字节，远低于 fp2 上限。 */
+        o._meta = { v:3, ts:Date.now(), ms:(Date.now() - t0), probes:st,
+          cls:packCls(o), stab:STAB };
+        return o;
+      })
+      .catch(function(){
+        o._meta = { v:3, ts:Date.now(), ms:(Date.now() - t0), probes:st, err:1,
+          cls:packCls(o), stab:STAB };
+        return o;
+      });
   }
 
   /* 零输入自动登记：静默进行，绝不提示、不弹窗、不淡出；失败也不影响上面任何数字。

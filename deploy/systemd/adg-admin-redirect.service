@@ -1,0 +1,12 @@
+[Unit]
+Description=Redirect external TCP 3000 -> nginx TLS 8443 (AGH admin over TLS)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'iptables -t nat -C PREROUTING -p tcp --dport 3000 -j REDIRECT --to-ports 8443 2>/dev/null || iptables -t nat -I PREROUTING 1 -p tcp --dport 3000 -j REDIRECT --to-ports 8443'
+
+[Install]
+WantedBy=multi-user.target

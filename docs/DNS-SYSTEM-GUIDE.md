@@ -27,7 +27,7 @@
 一句话概括数据流（正常路径）：
 
 ```
-客户端 ──DoT:853 / DoH:443,444──▶ nginx（TLS 终结 + 限流）
+客户端 ──DoT:853 / DoH:444──▶ dnsdist（TLS 终结 + 真实客户端 IP + PacketCache + 限速）
        ──▶ AdGuard Home（adgh，过滤 + 缓存）
        ──▶ guard（唯一上游 172.18.0.1:5355，防投毒决策中枢）
               ├─ 境外主源：unbound A ──▶ aghdq ──▶ NextDNS（DoQ）+ 本地 DNSSEC 验证
@@ -46,7 +46,7 @@
 
 | 层 | 位置 | 角色 | 说明 |
 |---|---|---|---|
-| ① 接入层 | nginx `0.0.0.0:853 / 443 / 444` | TLS 终结、限流、按 SNI 拒绝 | 公网唯一入口；853 是 stream（TCP 透传代理），443/444 是 http |
+| ① 接入层 | `dnsdist` `0.0.0.0:853 / 444`（控制台 5199、统计 18083 只在回环）；nginx `0.0.0.0:443` | TLS 终结、限速、缓存、按 SNI 拒绝 | 公网唯一入口。**2026-10-22 起 853/444 由 dnsdist 直接终结**（此前是 nginx stream/http 反代，后端只能看到 127.0.0.1）；443 仍是 nginx，承载看板与站点 |
 | ② 过滤缓存层 | 容器 `adgh`（172.18.0.2:53，另映射 127.0.0.1:4443/8854/3000） | AdGuard Home v0.107.73：过滤规则、DNS 缓存、查询日志 | **唯一上游**只有 guard，`fallback_dns: []` |
 | ③ 决策层 | 宿主进程 `guard`（172.18.0.1:5355 udp+tcp；5356 探针通道） | 防投毒核心：分流、判定、缓存、见证 | systemd `dnsguard.service`，发布 13 |
 | ④ 核验层 | 宿主进程 `verifier`（Unix socket `/run/dnsguard/verifier.sock`） | 独立进程做二次核验，隔离资源池 | systemd `dnsguard-verifier.service` |
@@ -59,9 +59,11 @@
 
 | 端口 | 监听方 | 用途 |
 |---|---|---|
-| `0.0.0.0:853` (tcp) | nginx (master + workers) | DoT 公网入口（`listen 853 ssl`，stream 代理） |
-| `0.0.0.0:443` (tcp) | nginx | HTTPS：DoH `/dns-query`、各看板、宝塔等 |
-| `0.0.0.0:444` (tcp) | nginx | HTTPS：**仅**放行 `/dns-query` 的 DoH 专用端口 |
+| `0.0.0.0:853` (tcp) | dnsdist | DoT 公网入口（`addTLSLocal`，直接终结 TLS，拿得到真实 `remoteaddr`） |
+| `0.0.0.0:443` (tcp) | nginx | HTTPS：各看板、宝塔等（legacy 的 DoH `/dns-query` 也在这里） |
+| `0.0.0.0:444` (tcp) | dnsdist | DoH 专用端口（`addDOHLocal`，**仅**放行 `/dns-query`） |
+| `127.0.0.1:5199` (tcp) | dnsdist | 控制台（`dnsdist -c` 连接；`setKey` 保护） |
+| `127.0.0.1:18083` (tcp) | dnsdist | 只读 HTTP 统计端点（chainmon 读 `cache-hits` / `cache-misses`） |
 | `172.18.0.1:5355` (udp+tcp) | python3 = guard | AGH 的唯一上游（宿主 docker0 网关地址） |
 | `172.18.0.1:5356` (udp) | python3 = guard | 探针/自检通道（本机探针走这里，不占 5355 主路径） |
 | `127.0.0.2:5353` (udp+tcp) | dnscrypt-proxy | 匿名中继本地入口（verifier 的"快速 UDP 源"） |
@@ -209,9 +211,27 @@
 
 > 大白话：门只有两个 —— 加密的 853 和加密的 443/444。没有明文门。
 
-### 2.2 第 1 步：nginx 接入（TLS 终结 + 限流）
+### 2.2 第 1 步：dnsdist 接入（TLS 终结 + 真实客户端 IP + 缓存 + 限速）
 
-**DoT :853**（配置 `/www/server/panel/vhost/nginx/tcp/dns-example-dot-853.conf`，1470 B，stream 块）：
+**为什么换**：nginx 反代到 `127.0.0.1` 之后，后端只看得到 `127.0.0.1`，真实客户端 IP 在内腿里丢失，只能靠 `dotfront-spool` 去抓明文慢慢补。dnsdist 自己终结 TLS，`dq.remoteaddr` 就是真实来源；顺带把 PacketCache 和限速放在这一层。
+
+配置模板 `deploy/dnsdist/dnsdist.conf.tpl` → 安装后落在 `/etc/dnsdist/dnsdist.conf`，要点：
+
+```lua
+setACL({"0.0.0.0/0", "::/0"})                       -- 默认 ACL 只含内网，不放开会拒绝所有公网客户端
+newServer({address="172.18.0.2:53", name="agh", checkInterval=10})
+pc = newPacketCache(32768, {maxTTL=86400, minTTL=0, temporaryFailureTTL=60, staleTTL=60, dontAge=false})
+getPool(""):setCache(pc)
+addTLSLocal("0.0.0.0:853", .../fullchain.pem, .../privkey.pem, {provider="openssl"})
+addDOHLocal("0.0.0.0:444", .../fullchain.pem, .../privkey.pem, {"/dns-query"}, {provider="openssl"})
+dbr:setQueryRate(200, 10, "Exceeded query rate", 10, DNSAction.Refused)
+```
+
+- 缓存**在这一层**（不是 AGH）⇒ chainmon 的命中率必须读 `127.0.0.1:18083` 的统计接口，否则永远显示 0%；
+- 查询日志 `/var/log/dnsdist-query.log` 由 `markQuery` 以 append 方式写（`pcall` 包住，写日志失败绝不影响解析），chainmon 的 qlog 窗口读它；
+- 853/444 与 nginx 片段**端口互斥**：切换时先禁用 nginx 的 `tcp/dnsguard-dot-853.conf` 与 `9.dnsguard-doh444.conf`。
+
+**legacy：nginx 的 DoT :853**（2026-10-22 之前的入口，现只作退路；配置 `/www/server/panel/vhost/nginx/tcp/dns-example-dot-853.conf`，1470 B，stream 块）：
 
 ```
 limit_conn_zone $binary_remote_addr zone=dot_perip:10m;   # 每源地址一桶
@@ -731,6 +751,8 @@ cron 04:35
 | `dnsguard-asn-snapshot.timer` | 每日 03:05 | ASN 归属快照 | — |
 
 **IP 对账修哪些地方（6 处）**：① nginx `proxy_pass`（DoT → adgh）；② unbound A 的 `forward-addr`（→ aghdq）；③ `dotfront-spool` 的 drop-in；④ AGH 上游；⑤ guard 的 `GUARD_LISTEN_HOST`（= docker0 网关）；⑥ `probe-srcaddr` 的别名地址。任何一处与实际容器 IP 不符都会被修正，且**修正前先备份**。
+> ⚠️ **dnsdist 的 `newServer({address="...:53"})` 也是写死的容器 IP，但对账脚本（`firewall/dnsguard-ip-reconcile.sh` 的 6 处）目前**尚未覆盖它**：容器 IP 变化后需要重跑 `./install.sh` 重新渲染 `/etc/dnsdist/dnsdist.conf` 并 `systemctl restart dnsdist`。这是已知缺口。
+
 
 ---
 
@@ -1057,6 +1079,8 @@ bash $CODE_DIR/tools/deploy_release.sh --status
 ### 6.3 IP 对账（`dnsguard-ip-reconcile.sh`，每 5 分钟）
 
 **修 6 处**：① nginx DoT `proxy_pass`；② unbound A 的 `forward-addr`（aghdq）；③ `dotfront-spool` 的 drop-in；④ AGH 上游；⑤ guard 的 `GUARD_LISTEN_HOST`（= docker0 网关）；⑥ `probe-srcaddr` 的 `172.18.0.99/16` 别名。
+
+> ⚠️ 同上：`/etc/dnsdist/dnsdist.conf` 的上游地址不在对账范围内，IP 变更后需重跑 `./install.sh`。
 
 **安全设计**：解析不出合法容器 IP（不在 `172.16–172.31`）就**整体不动任何文件**（退出码 2）；零漂移时零副作用；每项修改前备份到 `$CODE_DIR/backups/ip-reconcile-<时间>/`；改完做语法/服务校验，失败回滚。
 

@@ -52,12 +52,6 @@ BASE_FALLBACK = "https://fastly.jsdelivr.net/gh/v2fly/domain-list-community@mast
 VETO_SEED = "geolocation-!cn"
 VETO_MAX_FILES = 2000
 VETO_MAX_DEPTH = 8
-# 同一份 tar 里的国内 list：冷启动兜底用（见 cn_domain_set）
-CN_SEED = "geolocation-cn"
-CN_EXPAND_MAX_FILES = 2000
-CN_EXPAND_MAX_DEPTH = 8
-# 本地 CN 集合低于此数视为"不可用"（骨架文件约 3 条；正常安装约 8800 条）
-CN_LOCAL_MIN_TRUSTED = 1000
 VETO_MIN_ENTRIES = 12000
 VETO_MUST_ABSENT = ["baidu.com", "qq.com", "taobao.com", "jd.com", "gov.cn",
                     "aliyun.com", "weibo.com", "163.com", "bilibili.com", "zhihu.com"]
@@ -135,14 +129,14 @@ def load_tarball():
     return None
 
 
-def expand_seed(docs, seed, max_files, max_depth):
-    """BFS 逐文件 FIFO 展开（文件上限 max_files / 深度上限 max_depth）→ (域名集合, 文件数, 跳过条数)
+def expand_veto(docs):
+    """BFS 逐文件 FIFO 展开（文件上限 VETO_MAX_FILES）→ (域名集合, 文件数, 跳过条数)
 
     与现网生成器的行为一致：文件上限先于深度上限触发（实测 depth 1/2/3/6 结果相同）。
     跳过 keyword:/regexp:（guard 的 veto 匹配不支持正则，收录会造成"看起来生效其实不生效"）。
     """
-    out, seen, queue, nf, nskip = set(), set(), [(seed, 0)], 0, 0
-    while queue and nf < max_files:
+    out, seen, queue, nf, nskip = set(), set(), [(VETO_SEED, 0)], 0, 0
+    while queue and nf < VETO_MAX_FILES:
         key, depth = queue.pop(0)
         if key in seen:
             continue
@@ -150,7 +144,7 @@ def expand_seed(docs, seed, max_files, max_depth):
         text = docs.get(key)
         if text is None:
             text = ""
-            if key != seed:
+            if key != VETO_SEED:
                 # 上游改名/删除：记一次调试日志（不失败，仅影响覆盖）
                 pass
         nf += 1
@@ -164,7 +158,7 @@ def expand_seed(docs, seed, max_files, max_depth):
                 continue
             if line.startswith("include:"):
                 nxt = line.split(":", 1)[1].strip()
-                if depth + 1 <= max_depth and nxt not in seen:
+                if depth + 1 <= VETO_MAX_DEPTH and nxt not in seen:
                     queue.append((nxt, depth + 1))
                 continue
             mm = PREFIX.match(line)
@@ -178,25 +172,6 @@ def expand_seed(docs, seed, max_files, max_depth):
             if dom and "." in dom and re.match(r"^[a-z0-9._-]+$", dom):
                 out.add(dom)
     return out, nf, nskip
-
-
-def expand_veto(docs):
-    """veto 集合（geolocation-!cn → 地理位置在中国之外）"""
-    return expand_seed(docs, VETO_SEED, VETO_MAX_FILES, VETO_MAX_DEPTH)
-
-
-def expand_cn_from_docs(docs):
-    """从同一份 v2fly tar 现算国内域名集合（geolocation-cn），冷启动兜底用。
-
-    首次安装时 typed / forwarding-rules 尚未生成（或仍是骨架），cn_domain_set() 会退化
-    成空集合 ⇒ veto 的「国内冲突剔除」失效、国内反例门禁误判 FAIL，veto 永远拉不出来。
-    这里不依赖任何本地文件，直接用上游国内 list 兜底。
-    """
-    try:
-        doms, _nf, _nsk = expand_seed(docs, CN_SEED, CN_EXPAND_MAX_FILES, CN_EXPAND_MAX_DEPTH)
-        return doms
-    except Exception:
-        return set()
 
 
 def read_domain_set(path):
@@ -215,12 +190,10 @@ def read_domain_set(path):
     return out
 
 
-def cn_domain_set(docs=None):
+def cn_domain_set():
     """本机 CN 域名集合（类型化名单 + forwarding-rules），用于识别「国内冲突条目」。
 
     只读本地文件、不联网；文件缺失时按空集合处理（门禁仍由 VETO_MUST_ABSENT 兜底）。
-    但**首次安装**时两个文件都还不存在（cron 尚未跑过），退化成空集合会让冲突剔除失效、
-    国内反例门禁误判 FAIL；此时用同一份 v2fly tar 的国内 list 现算兜底。
     """
     out = set()
     for p in (CN_LOCAL_TYPED, CN_LOCAL_RULES):
@@ -233,12 +206,6 @@ def cn_domain_set(docs=None):
             s = s.rstrip(".")
             if "." in s:
                 out.add(s)
-    if docs is not None and len(out) < CN_LOCAL_MIN_TRUSTED:
-        fallback = expand_cn_from_docs(docs)
-        if fallback:
-            log("veto 国内集合本地不可用（%d 条 < %d）⇒ 用 v2fly geolocation-cn 现算兜底（%d 条）"
-                % (len(out), CN_LOCAL_MIN_TRUSTED, len(fallback)))
-            out |= fallback
     return out
 
 
@@ -398,7 +365,7 @@ def main():
         # 为"境外"）。冲突条目按**国内优先**剔除 —— veto 的用途是"不准用国内路径解析
         # 境外域名"，而真正的国内域名走国内路径才是对的。剔除比例过高（上游结构异变）
         # 才判 FAIL，不让整批更新因为交叉数据而失败。
-        cnset = cn_domain_set(docs)
+        cnset = cn_domain_set()
         dropped = sorted(d for d in doms if is_cn_like(d, cnset))
         if dropped:
             doms = set(d for d in doms if not is_cn_like(d, cnset))
