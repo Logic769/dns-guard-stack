@@ -96,10 +96,11 @@ UNBOUND = [
 ]
 UNBOUND_CTL = "/opt/unbound/sbin/unbound-control"
 UNBOUND_CONF_IN_CONTAINER = "/opt/unbound/etc/unbound/unbound.conf"
-# 2026-10-26：入口 TLS 早已迁到 dnsdist + logic769.xyz 证书，这里仍写 dns.example.com 会让
-# read_cert_live() 用旧 SNI 做 hostname 校验，必然 CertificateError，把健康链路误报成 warn。
-TLS_CERT = "/www/server/panel/vhost/cert/logic769.xyz/fullchain.pem"
-TLS_DOMAIN = "logic769.xyz"
+# 2026-10-26：入口 TLS 早已迁到 dnsdist + 站点证书，这里若写错 SNI，read_cert_live() 会做
+# hostname 校验失败、必然 CertificateError，把健康链路误报成 warn。
+# 部署时改成自己的证书路径与域名（仓库内统一用占位符，勿提交真实域名）。
+TLS_CERT = "/www/server/panel/vhost/cert/dns.example.com/fullchain.pem"
+TLS_DOMAIN = "dns.example.com"
 
 AGH_ADDR = ("172.18.0.2", 53)
 # --------------------------------------------------------------------------

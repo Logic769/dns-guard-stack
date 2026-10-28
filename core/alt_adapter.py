@@ -870,7 +870,7 @@ def classify_kind(wire, qtype=None):
       而常连接池也曾出现 qid 不符的陈旧帧 ✗。这类"**没有任何证据的空 NOERROR**"
       （`an=0` 且 `ns=0` 且 `ad=0`）不能被当成"认证源的否定结论 ⇒ 采纳" ✓。
       **为什么不会误伤 P34-BM**：实测所有真 NODATA 都带 SOA（`ns≥1`，权威段 type 6）
-      或 `ad=1` —— `logic769.xyz` TXT/MX/SRV 均为 `ns=1 [6]`、`github.com` SRV `ns=1 [6]`、
+      或 `ad=1` —— 本域 apex 的 TXT/MX/SRV 均为 `ns=1 [6]`、`github.com` SRV `ns=1 [6]`、
       `isc.org`/`one.one.one.one` MX 为 `ns=4 [6,46,47,46] ad=1` ⇒ `ns==0 且 ad==0` 的
       "零证据空壳"在真实解析器上**不存在** ✓。
 
@@ -1018,7 +1018,7 @@ def classify_response(wire, source, ttl=0.0, now=None, policy_version=None):
     elif rcode == 0 and _kind == "negative":
         # P34-BM：**认证源的裸 NODATA 也应被采纳** ✓（方案："认证源给出经过本地验证的否定 ⇒
         # 返回认证源否定" ✓）。此前落进 else ⇒ UNKNOWN ⇒ 把"域名确实没有 A 记录"变成
-        # SERVFAIL ✗（实测 `logic769.xyz` 每分钟一次 ✓ —— 是本实现的不对称造成的真实回归 ✗）。
+        # SERVFAIL ✗（实测本域 apex 每分钟一次 ✓ —— 是本实现的不对称造成的真实回归 ✗）。
         # 安全边界不变 ✓：`local-b` 在上面已被拦成 UNKNOWN ✗（B 只是见证 ✓）。
         # ★ 2026-10-11：`"negative"` 现已要求**带否定证据**（权威段有 RR 或 AD=1）；
         #   零证据的"空壳"被单独归为 `"bare"` ⇒ 落到下面的 else ⇒ UNKNOWN ✓（不采纳 ✗）。
