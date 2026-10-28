@@ -141,6 +141,11 @@ html[data-theme="dark"] .topbar{background:rgba(0,0,0,.72)}
 .chip{display:inline-flex;align-items:center;gap:6px;font-size:var(--fs-sm);color:var(--text2);
   background:var(--fill);border-radius:var(--r-pill);padding:4px 11px;white-space:nowrap}
 .chip b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+/* 2026-10-26：可点击的 chip（自动告警 >0 时出现），用于跳到故障定位面板 */
+.chip-link{text-decoration:none;cursor:pointer;border-color:var(--warn);color:var(--warn)}
+.chip-link b{color:var(--warn)}
+.chip-link:hover{background:var(--warnbg)}
+.chip-link .dot{width:6px;height:6px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--idle);flex:none;display:inline-block}
 .dot.ok{background:var(--ok)} .dot.warn{background:var(--warn)} .dot.err{background:var(--err)}
 .dot.idle{background:var(--idle)}
@@ -164,30 +169,232 @@ html[data-theme="dark"] .topbar{background:rgba(0,0,0,.72)}
 .kpi .foot{margin-top:9px;font-size:var(--fs-fn);color:var(--text3);line-height:1.45}
 .kpi .spark{position:absolute;right:15px;top:13px;width:64px;height:20px;opacity:.7}
 
-/* ── 链路 ── */
-.flow{display:flex;align-items:stretch;overflow-x:auto;padding-bottom:3px}
-.flow::-webkit-scrollbar{height:6px}
-.flow::-webkit-scrollbar-thumb{background:var(--sep);border-radius:3px}
+/* ── 故障定位面板（2026-10-26 新增）──
+   目的：出问题时不再只靠一个 8px 圆点 + 一行被省略号截断的文字，
+   而是把「哪个节点 / 严重程度 / 具体原因 / 自动告警原文」一次性摊开在首屏。 */
+.locate{margin:0 0 var(--gap);padding:13px 16px;border-radius:var(--r-s);
+  border:1px solid var(--sep2);background:var(--card)}
+.locate.err{background:var(--errbg);border-color:var(--err)}
+.locate.warn{background:var(--warnbg);border-color:var(--warn)}
+.locate .loc-h{display:flex;align-items:center;gap:8px;font-size:var(--fs-md);font-weight:600;
+  line-height:1.45;flex-wrap:wrap}
+.locate.err .loc-h{color:var(--err)} .locate.warn .loc-h{color:var(--warn)}
+.locate .loc-go{margin-left:auto;font-size:var(--fs-fn);font-weight:500;color:var(--accent);
+  text-decoration:none;white-space:nowrap}
+.locate .loc-go:hover{text-decoration:underline}
+.locate .loc-l{list-style:none;margin:9px 0 0;padding:0;display:grid;gap:7px}
+.locate .loc-i{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;
+  font-size:var(--fs-md);line-height:1.5;padding-left:16px;position:relative}
+.locate .loc-i::before{content:"·";position:absolute;left:4px;color:var(--text3);font-weight:700}
+.locate .loc-nm{font-weight:600;flex:none;color:var(--text)}
+.locate .loc-link{text-decoration:none;color:inherit;border-bottom:1px dashed currentColor}
+.locate .loc-link:hover{color:var(--accent)}
+.locate .loc-b{flex:none;font-size:var(--fs-xs);font-weight:600;padding:1px 7px;border-radius:var(--r-pill)}
+.locate .loc-i.err .loc-b{background:var(--err);color:#fff}
+.locate .loc-i.warn .loc-b{background:var(--warn);color:#fff}
+.locate .loc-d{color:var(--text2);word-break:break-word;flex:1 1 240px;min-width:0}
+.locate .loc-i.err .loc-d{color:var(--err)}
+
+/* ── 链路：数据面架构图（archify 生成，2026-10-26 内嵌替代原横向卡片流）──
+   分工：图上只看「拓扑 + 哪一段出问题」，每个组件可点、可键盘聚焦，点了跳下方节点明细读原因。
+   配色沿用 archify 的语义变量名，全部限定在 .arch-wrap 作用域内，不污染页面既有令牌。 */
+.arch-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:var(--s3)}
+.arch-bar .t1{font-size:var(--fs-md);font-weight:600;letter-spacing:-.006em}
+.arch-bar .cap2{font-size:var(--fs-xs);color:var(--text3);font-weight:400}
+.arch-bar .grow{flex:1 1 auto;min-width:0}
+.seg{display:inline-flex;background:var(--fill);border-radius:var(--r-pill);padding:2px}
+.seg button{appearance:none;border:0;background:transparent;color:var(--text2);font:inherit;
+  font-size:var(--fs-xs);font-weight:600;padding:4px 11px;border-radius:var(--r-pill);
+  cursor:pointer;line-height:1.3;white-space:nowrap}
+.seg button[aria-pressed="true"]{background:var(--card);color:var(--text);
+  box-shadow:0 1px 2px rgba(0,0,0,.13)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.arch-scroll{overflow:auto;border-radius:var(--r-s);padding:1px 1px 4px}
+.arch-scroll::-webkit-scrollbar{height:6px}
+.arch-scroll::-webkit-scrollbar-thumb{background:var(--sep);border-radius:3px}
+/* 图内主题变量（浅色）*/
+.arch-wrap{--arch-bg:#fff; --grid:#ececf0;
+  --text-muted:#5c5c61; --text-dim:#86868b; --arrow:#a1a1a6; --arrow-emphasis:#248a3d;
+  --mask:#fff;
+  --frontend-fill:rgba(0,113,227,.07); --frontend-stroke:#0071e3;
+  --backend-fill:rgba(36,138,61,.09);  --backend-stroke:#248a3d;
+  --database-fill:rgba(88,86,214,.09); --database-stroke:#5856d6;
+  --cloud-fill:rgba(255,159,10,.14);   --cloud-stroke:#9a5b00;
+  --security-fill:rgba(196,38,27,.07); --security-stroke:#c4261b;
+  --messagebus-fill:rgba(255,146,60,.14); --messagebus-stroke:#c2410c;
+  --external-fill:rgba(110,110,115,.09);  --external-stroke:#6e6e73;
+  background:var(--arch-bg);border-radius:var(--r-s);overflow:hidden}
+/* 图内主题变量（深色）：与页面深色令牌同源，避免出现"白底卡片里一块深蓝" */
+html[data-theme="dark"] .arch-wrap{--arch-bg:#0b0b0d; --grid:#242427;
+  --text-muted:#98989d; --text-dim:#8e8e93; --arrow:#636366; --arrow-emphasis:#30d158;
+  --mask:#0b0b0d;
+  --frontend-fill:rgba(10,132,255,.16); --frontend-stroke:#0a84ff;
+  --backend-fill:rgba(48,209,88,.15);   --backend-stroke:#30d158;
+  --database-fill:rgba(94,92,230,.18);  --database-stroke:#7d7aff;
+  --cloud-fill:rgba(255,159,10,.16);    --cloud-stroke:#ffa53a;
+  --security-fill:rgba(255,69,58,.15);  --security-stroke:#ff453a;
+  --messagebus-fill:rgba(255,146,60,.16); --messagebus-stroke:#ff9f0a;
+  --external-fill:rgba(142,142,147,.14);  --external-stroke:#98989d}
+@media (prefers-color-scheme:dark){
+  html[data-theme="auto"] .arch-wrap{--arch-bg:#0b0b0d; --grid:#242427;
+    --text-muted:#98989d; --text-dim:#8e8e93; --arrow:#636366; --arrow-emphasis:#30d158;
+    --mask:#0b0b0d;
+    --frontend-fill:rgba(10,132,255,.16); --frontend-stroke:#0a84ff;
+    --backend-fill:rgba(48,209,88,.15);   --backend-stroke:#30d158;
+    --database-fill:rgba(94,92,230,.18);  --database-stroke:#7d7aff;
+    --cloud-fill:rgba(255,159,10,.16);    --cloud-stroke:#ffa53a;
+    --security-fill:rgba(255,69,58,.15);  --security-stroke:#ff453a;
+    --messagebus-fill:rgba(255,146,60,.16); --messagebus-stroke:#ff9f0a;
+    --external-fill:rgba(142,142,147,.14);  --external-stroke:#98989d}
+}
+.arch-wrap svg{display:block;width:100%;height:auto;font-family:var(--font)}
+/* "原始大小"：手机上文字不再被缩成 3px，改为横向平移查看。
+   ⚠ .arch-wrap 自身必须一起撑开——只在 svg 上写 1400px 会被 .arch-wrap 的
+   overflow:hidden 裁掉，导致外层 .arch-scroll 的 scrollWidth 仍等于容器宽度，
+   横滑完全滚不动（只剩最左边两个组件）。 */
+.arch-wrap[data-zoom="wide"]{width:1400px;max-width:none}
+.arch-wrap[data-zoom="wide"] svg{width:1400px;max-width:none}
+/* ── archify 语义 class（仅用到的部分） ── */
+.arch-wrap svg .c-grid{stroke:var(--grid);fill:none}
+.arch-wrap svg .c-mask{fill:var(--mask);stroke:none}
+.arch-wrap svg .c-frontend{fill:var(--frontend-fill);stroke:var(--frontend-stroke)}
+.arch-wrap svg .c-backend{fill:var(--backend-fill);stroke:var(--backend-stroke)}
+.arch-wrap svg .c-database{fill:var(--database-fill);stroke:var(--database-stroke)}
+.arch-wrap svg .c-cloud{fill:var(--cloud-fill);stroke:var(--cloud-stroke)}
+.arch-wrap svg .c-security{fill:var(--security-fill);stroke:var(--security-stroke)}
+.arch-wrap svg .c-messagebus{fill:var(--messagebus-fill);stroke:var(--messagebus-stroke)}
+.arch-wrap svg .c-external{fill:var(--external-fill);stroke:var(--external-stroke)}
+.arch-wrap svg .c-security-group{fill:transparent;stroke:var(--security-stroke);stroke-dasharray:4,4}
+.arch-wrap svg .c-region{fill:rgba(255,159,10,.05);stroke:var(--cloud-stroke);stroke-dasharray:8,4}
+.arch-wrap svg .t-primary{fill:var(--text)}
+.arch-wrap svg .t-muted{fill:var(--text-muted)}
+.arch-wrap svg .t-dim{fill:var(--text-dim)}
+.arch-wrap svg .t-frontend{fill:var(--frontend-stroke)}
+.arch-wrap svg .t-backend{fill:var(--backend-stroke)}
+.arch-wrap svg .t-database{fill:var(--database-stroke)}
+.arch-wrap svg .t-cloud{fill:var(--cloud-stroke)}
+.arch-wrap svg .t-security{fill:var(--security-stroke)}
+.arch-wrap svg .t-external{fill:var(--external-stroke)}
+.arch-wrap svg .t-edge-emphasis{fill:var(--arrow-emphasis)}
+.arch-wrap svg .a-default{stroke:var(--arrow);fill:none}
+.arch-wrap svg .a-emphasis{stroke:var(--arrow-emphasis);fill:none}
+.arch-wrap svg .a-security{stroke:var(--security-stroke);fill:none;stroke-dasharray:5,5}
+.arch-wrap svg .a-dashed{stroke:var(--database-stroke);fill:none;stroke-dasharray:4,4}
+.arch-wrap svg .m-default{fill:var(--arrow)}
+.arch-wrap svg .m-emphasis{fill:var(--arrow-emphasis)}
+.arch-wrap svg .m-security{fill:var(--security-stroke)}
+.arch-wrap svg .m-dashed{fill:var(--database-stroke)}
+.arch-wrap svg .semantic-sigil{fill:none;stroke:currentColor;stroke-width:1.35;
+  stroke-linecap:round;stroke-linejoin:round;opacity:.76;pointer-events:none}
+.arch-wrap svg .semantic-sigil>*{vector-effect:non-scaling-stroke}
+.arch-wrap svg .semantic-sigil .sigil-fill{fill:currentColor;stroke:none}
+.arch-wrap svg .s-frontend{color:var(--frontend-stroke)}
+.arch-wrap svg .s-backend{color:var(--backend-stroke)}
+.arch-wrap svg .s-database{color:var(--database-stroke)}
+.arch-wrap svg .s-cloud{color:var(--cloud-stroke)}
+.arch-wrap svg .s-security{color:var(--security-stroke)}
+.arch-wrap svg .s-external{color:var(--external-stroke)}
+/* ── 交互与故障高亮（2026-10-26）──
+   SVG 里"哪块坏了"原先完全没有通道。这里给每个组件按状态上色 + 右上角状态点，
+   异常时描边加粗并缓慢呼吸，和页面里卡片/圆点同一套视觉语言。 */
+.arch-wrap svg [data-node-id]{cursor:pointer;outline:none}
+.arch-wrap svg [data-node-id] .de{display:none}
+.arch-wrap[data-nodata="1"] svg{opacity:.55;filter:grayscale(.5)}
+.arch-wrap svg g.st-idle>rect:not(.c-mask){opacity:.5}
+/* 文字不减淡：idle 恰是最需要读清"叫什么、为什么灰"的状态，opacity:.5 会把 11px 文字
+   压到约 3.1:1，低于 WCAG AA 4.5:1。 */
+.arch-wrap svg g.st-idle .t-primary{fill:var(--text-muted)}
+/* st-warn / st-err 不在这里改描边色（会盖掉 security 类的语义红），
+   只做一层极轻的底色偏移，让"状态"和"类型"两个维度同时可读。 */
+.arch-wrap svg g.st-err>rect.c-mask{fill:var(--err);fill-opacity:.10}
+.arch-wrap svg g.st-warn>rect.c-mask{fill:var(--warn);fill-opacity:.09}
+/* ── 故障高亮 ──
+   ⚠ 不能用"把描边染红"来表达故障：security 类组件（dnsdist / dnsguard / verifier）
+   本身就是红色描边，染红等于没变化。所以故障改用**独立于语义色的第二通道**：
+   ① 组件外扩一圈光环（arch-halo）② 左上角感叹号徽章 ③ 右上角状态点放大。
+   这三个通道与 5 种语义色都不冲突，任何类型的组件坏了都同样醒目。 */
+.arch-wrap svg .arch-halo{fill:none;pointer-events:none}
+.arch-wrap svg .arch-halo.err{stroke:var(--err);stroke-width:2;stroke-dasharray:none;
+  animation:arch-halo 1.7s ease-in-out infinite}
+.arch-wrap svg .arch-halo.warn{stroke:var(--warn);stroke-width:1.6;opacity:.85}
+@keyframes arch-halo{
+  0%,100%{stroke-opacity:.35;stroke-width:1.6}
+  50%{stroke-opacity:1;stroke-width:2.6}
+}
+.arch-wrap svg .arch-flag{pointer-events:none}
+.arch-wrap svg .arch-flag circle{stroke:var(--arch-bg);stroke-width:1.4}
+.arch-wrap svg .arch-flag.err circle{fill:var(--err)}
+.arch-wrap svg .arch-flag.warn circle{fill:var(--warn)}
+.arch-wrap svg .arch-flag text{fill:#fff;font-size:7.5px;font-weight:800;text-anchor:middle;
+  dominant-baseline:central;font-family:var(--font)}
+.arch-wrap svg .arch-dot{stroke:var(--arch-bg);stroke-width:1.2;pointer-events:none}
+.arch-wrap svg .arch-dot.ok{fill:var(--ok)}
+.arch-wrap svg .arch-dot.warn{fill:var(--warn)}
+.arch-wrap svg .arch-dot.err{fill:var(--err)}
+.arch-wrap svg .arch-dot.idle{fill:var(--idle)}
+.arch-wrap svg [data-node-id]:hover>rect.c-mask+rect{stroke-width:2.6}
+/* 键盘聚焦：不再改描边颜色（会盖掉"这是 security 类"的语义色），
+   改用一圈 accent 光晕，和故障光环走同一套外层通道，互不干扰。 */
+.arch-wrap svg [data-node-id]:focus-visible,
+.arch-wrap svg [data-node-id]:focus{
+  filter:drop-shadow(0 0 0 var(--accent)) drop-shadow(0 0 4px var(--accent))}
+.arch-wrap svg g.flash{animation:arch-flash 1.1s ease-in-out 3}
+@keyframes arch-flash{
+  0%,100%{filter:drop-shadow(0 0 0 rgba(0,113,227,0))}
+  50%{filter:drop-shadow(0 0 6px rgba(0,113,227,.85))}
+}
+
 .node{flex:1 1 0;min-width:140px;background:var(--fill);border-radius:var(--r-s);
   padding:11px 12px;display:flex;flex-direction:column;gap:3px}
 .node .nm{font-size:var(--fs-sm);font-weight:600;display:flex;align-items:center;gap:6px;line-height:1.35}
 .node .sb{font-size:var(--fs-xs);color:var(--text2);line-height:1.45;display:-webkit-box;
   -webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
-.node .de{font-size:11px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 2026-10-26：detail 原来被压成"单行 + 省略号 + 最弱色"，真正的故障原因（如"服务未运行"）
+   根本读不到。改为最多 3 行自动换行；异常节点的 detail 用强调色并加粗，正常节点仍保持低调。 */
+.node .de{font-size:11px;color:var(--text3);line-height:1.45;white-space:normal;
+  overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .node.st-warn{background:var(--warnbg)} .node.st-err{background:var(--errbg)} .node.st-idle{opacity:.6}
-.arrow{display:flex;align-items:center;justify-content:center;width:16px;flex:none;
-  color:var(--text3);font-size:12px}
+.node.st-err .de{color:var(--err);font-weight:600;-webkit-line-clamp:5}
+.node.st-warn .de{color:var(--warn);font-weight:600}
+/* 异常节点加描边 + 缓慢脉冲，让它在整排节点里第一眼就能被找到 */
+.node.st-err{border:1px solid var(--err);animation:pulse-err 2.6s ease-in-out infinite}
+.node.st-warn{border:1px solid var(--warn)}
+@keyframes pulse-err{0%,100%{box-shadow:0 0 0 0 rgba(196,38,27,0)}50%{box-shadow:0 0 0 4px rgba(196,38,27,.16)}}
+@media(prefers-reduced-motion:reduce){
+  .node.st-err,.node.flash{animation:none}
+  .arch-wrap svg .arch-halo.err{animation:none;stroke-opacity:1;stroke-width:2.4}
+  .arch-wrap svg g.flash{animation:none;filter:drop-shadow(0 0 6px var(--accent))}
+}
+/* 被"定位面板"指到的高亮闪烁 */
+.node.flash{outline:2px solid var(--accent);outline-offset:2px;animation:flash-err 1.1s ease-in-out 3}
+@keyframes flash-err{0%,100%{outline-color:var(--accent)}50%{outline-color:transparent}}
+.arch-detail{margin-top:var(--s3);padding:11px 14px;border-radius:var(--r-s);
+  background:var(--fill);font-size:var(--fs-md);line-height:1.55}
+.arch-detail .dt{font-weight:600;font-size:var(--fs-sm);display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.arch-detail .db{font-size:var(--fs-xs);font-weight:600;padding:1px 8px;border-radius:var(--r-pill);
+  background:var(--idlebg);color:var(--text2)}
+.arch-detail .db.err{background:var(--errbg);color:var(--err)}
+.arch-detail .db.warn{background:var(--warnbg);color:var(--warn)}
+.arch-detail .db.ok{background:var(--okbg);color:var(--ok)}
+.arch-detail .ds{color:var(--text2);margin-top:4px;word-break:break-word}
+.arch-detail .dd{color:var(--text3);margin-top:3px;word-break:break-word}
+.arch-detail .dd.bad{color:var(--err);font-weight:600}
 .flowfoot{margin-top:var(--s3);font-size:var(--fs-fn);color:var(--text3);line-height:1.55}
 .subflow{margin-top:var(--s4);padding-top:var(--s4);border-top:1px solid var(--sep2)}
 .subflow .h{font-size:var(--fs-xs);font-weight:600;color:var(--text2);margin-bottom:var(--s2);letter-spacing:.03em}
 .node-row{display:grid;gap:var(--s2);grid-template-columns:repeat(auto-fill,minmax(232px,1fr))}
 @media(max-width:1080px){ .node{padding:10px 11px} }
-/* 窄屏：链路改为纵向序列，避免横向截断 */
-@media(max-width:900px){
-  .flow{flex-direction:column;overflow:visible}
-  .node{min-width:0;flex:none}
-  .arrow{width:100%;height:11px;transform:rotate(90deg);opacity:.65}
+/* 窄屏：1400px 宽的架构图压进 390px 视口后字号只剩 3px，等于不可读。
+   所以窄屏默认切"原始大小"（1400px，字号 11px 可读）在下方滚动容器里横向平移，
+   并给一句"左右滑动"提示；用户仍可点"整图"看全局形状。 */
+.arch-hint{display:none;align-items:center;gap:6px;margin:0 0 var(--s2);
+  font-size:var(--fs-xs);color:var(--text3)}
+.arch-hint i{font-style:normal;color:var(--accent)}
+@media(max-width:760px){
+  .arch-bar .cap2{display:none}
+  .arch-hint{display:flex}
 }
+@media(max-width:560px){ .arch-scroll{max-height:64vh} }
 
 /* ── 键值 ── */
 .kv{display:grid;gap:0}
@@ -375,6 +582,8 @@ html.booting #vitals{display:block;min-height:118px;background:var(--fill);borde
       <div class="vitals" id="vitals"></div>
     </div>
 
+    <div class="locate hidden" id="locate" role="status" aria-live="polite"></div>
+
     <div class="skel-row boot-only" aria-hidden="true">
       <div class="skel"><i class="big"></i><i></i></div><div class="skel"><i class="big"></i><i></i></div>
       <div class="skel"><i class="big"></i><i></i></div><div class="skel"><i class="big"></i><i></i></div>
@@ -385,13 +594,360 @@ html.booting #vitals{display:block;min-height:118px;background:var(--fill);borde
   <section class="sec" id="chain">
     <h2>解析链路</h2>
     <div class="card">
-      <div class="flow" id="flow"><div class="empty">加载中…</div></div>
-      <div class="flowfoot" id="flowfoot"></div>
-      <div class="subflow">
-        <div class="h">CN 分流与降级</div>
-        <div class="node-row" id="fallback"></div>
+      <div class="arch-bar">
+        <span class="t1">数据面架构</span><span class="cap2" id="arch-cap"></span>
+        <span class="grow"></span>
+        <div class="seg" id="arch-zoom" role="group" aria-label="架构图缩放">
+          <button type="button" data-zoom="fit" aria-pressed="true">整图</button>
+          <button type="button" data-zoom="wide" aria-pressed="false">原始大小</button>
+        </div>
       </div>
-      <details class="fold"><summary>旁路与辅助通道<span class="cap" id="aux-cap"></span></summary><div class="node-row" id="aux"></div></details>
+      <div class="arch-hint"><i>↔</i><span>左右滑动查看完整架构图；点任一组件看它的实时状态</span></div>
+  <div class="arch-scroll"><div class="arch-wrap" id="arch-wrap" data-zoom="fit">
+        <svg viewBox="0 0 1400 372" role="group" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14">
+        <title id="archify-diagram-title">DNS 解析链路 · 数据面</title>
+        <desc id="archify-diagram-description">120.26.230.117 / logic769.xyz — 客户端 → 加密入口 → 过滤与准入 → 解析与验签 → 加密出口（只含参与解析的组成部分）</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+        
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#grid)" />
+        
+        <!-- Boundaries (behind everything) -->
+        
+        
+        <!-- Connection paths (before components for correct z-order) -->
+        <g data-graph-role="automatic-crossover" style="--step:0">
+          <path data-graph-role="automatic-crossover-underlay" d="M 156 57 L 188 57" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="clients" data-edge-to="entry" data-edge-key="0" data-composition-points="156,57;188,57" data-composition-crossover="halo" data-composition-independent="true" d="M 156 57 L 188 57" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:1">
+          <path data-graph-role="automatic-crossover-underlay" d="M 328 57 L 360 57" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="entry" data-edge-to="agh" data-edge-label="ECS" data-edge-key="1" data-composition-points="328,57;360,57" data-composition-crossover="halo" data-composition-independent="true" d="M 328 57 L 360 57" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:2">
+          <path data-graph-role="automatic-crossover-underlay" d="M 500 57 L 532 57" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="agh" data-edge-to="dnsguard" data-edge-label=":5355" data-edge-key="2" data-composition-points="500,57;532,57" data-composition-crossover="halo" data-composition-independent="true" d="M 500 57 L 532 57" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:3">
+          <path data-graph-role="automatic-crossover-underlay" d="M 672 57 L 704 57" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="dnsguard" data-edge-to="unbound-a" data-edge-key="3" data-composition-points="672,57;704,57" data-composition-crossover="halo" data-composition-independent="true" d="M 672 57 L 704 57" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:4">
+          <path data-graph-role="automatic-crossover-underlay" d="M 774 30 L 774 14 Q 774 6 782 6 L 844 6 Q 852 6 852 14 L 852 49 Q 852 57 860 57 L 876 57" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-a" data-edge-to="aghdq" data-edge-label="DoQ 已停用" data-edge-key="4" data-composition-points="774,30;774,6;852,6;852,57;876,57" data-composition-crossover="halo" data-composition-independent="true" d="M 774 30 L 774 14 Q 774 6 782 6 L 844 6 Q 852 6 852 14 L 852 49 Q 852 57 860 57 L 876 57" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:5">
+          <path data-graph-role="automatic-crossover-underlay" d="M 844 46 L 860 46 Q 868 46 868 38 L 868 14 Q 868 6 876 6 L 1110 6 Q 1118 6 1118 14 L 1118 30" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-a" data-edge-to="aghcf" data-edge-label="DoT" data-edge-key="5" data-composition-points="844,46;868,46;868,6;1118,6;1118,30" data-composition-crossover="halo" data-composition-independent="true" d="M 844 46 L 860 46 Q 868 46 868 38 L 868 14 Q 868 6 876 6 L 1110 6 Q 1118 6 1118 14 L 1118 30" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:6">
+          <path data-graph-role="automatic-crossover-underlay" d="M 946 84 L 946 100 Q 946 108 954 108 L 1268 108 Q 1276 108 1276 100 L 1276 84" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="aghdq" data-edge-to="resolvers" data-edge-key="6" data-composition-points="946,84;946,108;1276,108;1276,84" data-composition-crossover="halo" data-composition-independent="true" d="M 946 84 L 946 100 Q 946 108 954 108 L 1268 108 Q 1276 108 1276 100 L 1276 84" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:7">
+          <path data-graph-role="automatic-crossover-underlay" d="M 1188 50 L 1220 50" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="aghcf" data-edge-to="resolvers" data-edge-key="7" data-composition-points="1188,50;1220,50" data-composition-crossover="halo" data-composition-independent="true" d="M 1188 50 L 1220 50" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:8">
+          <path data-graph-role="automatic-crossover-underlay" d="M 1290 84 L 1290 140" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="resolvers" data-edge-to="roots" data-edge-key="8" data-composition-points="1290,84;1290,140" data-composition-crossover="halo" data-composition-independent="true" d="M 1290 84 L 1290 140" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:9">
+          <path data-graph-role="automatic-crossover-underlay" d="M 423 84 L 423 129 Q 423 137 415 137 L 365 137 Q 357 137 357 145 L 357 218 Q 357 226 365 226 L 422 226 Q 430 226 430 234 L 430 250" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="agh" data-edge-to="unbound-b" data-edge-label="CN 分流" data-edge-key="9" data-composition-points="423,84;423,137;357,137;357,226;430,226;430,250" data-composition-crossover="halo" data-composition-independent="true" d="M 423 84 L 423 129 Q 423 137 415 137 L 365 137 Q 357 137 357 145 L 357 218 Q 357 226 365 226 L 422 226 Q 430 226 430 234 L 430 250" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:10">
+          <path data-graph-role="automatic-crossover-underlay" d="M 500 277 L 532 277" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-b" data-edge-to="secure-dot" data-edge-key="10" data-composition-points="500,277;532,277" data-composition-crossover="halo" data-composition-independent="true" d="M 500 277 L 532 277" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:11">
+          <path data-graph-role="automatic-crossover-underlay" d="M 602 84 L 602 140" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="dnsguard" data-edge-to="verifier" data-edge-key="11" data-composition-points="602,84;602,140" data-composition-crossover="halo" data-composition-independent="true" d="M 602 84 L 602 140" class="a-security" stroke-width="1.5" marker-end="url(#arrowhead-security)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:12">
+          <path data-graph-role="automatic-crossover-underlay" d="M 774 84 L 774 140" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-a" data-edge-to="dnscrypt-proxy" data-edge-key="12" data-composition-points="774,84;774,140" data-composition-crossover="halo" data-composition-independent="true" d="M 774 84 L 774 140" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:13">
+          <path data-graph-role="automatic-crossover-underlay" d="M 438.05 140 L 438.05 84" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="nginx" data-edge-to="entry" data-edge-key="13" data-composition-points="258.05,140;258.05,84" data-composition-crossover="halo" data-composition-independent="true" d="M 438.05 140 L 438.05 84" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        <g data-graph-role="automatic-crossover" style="--step:14">
+          <path data-graph-role="automatic-crossover-underlay" d="M 844 68 L 852 68 Q 860 68 860 76 L 860 159 Q 860 167 868 167 L 876 167" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-a" data-edge-to="aghdq2" data-edge-key="14" data-composition-points="844,68;860,68;860,167;876,167" data-composition-crossover="halo" data-composition-independent="true" d="M 844 68 L 852 68 Q 860 68 860 76 L 860 159 Q 860 167 868 167 L 876 167" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        </g>
+        
+        <!-- Components -->
+        <g id="anode-clients" data-node-id="clients" data-node-label="客户端 / 内网设备" tabindex="0" role="button" aria-label="聚焦客户端 / 内网设备，DoT :853 · DoH :444, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="DoT :853 · DoH :444" data-node-context="架构组件">
+          <title>客户端 / 内网设备 · DoT :853 · DoH :444 · 架构组件</title>
+          <rect x="16" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="16" y="30" width="140" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(22 36) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="86" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">客户端 / 内网设备</text>
+        <text data-detail="context" x="86" y="71" class="t-muted" font-size="9" text-anchor="middle">DoT :853 · DoH :444</text>
+        </g>
+        
+        <g id="anode-entry" data-node-id="entry" data-node-label="AdGuard Home" tabindex="0" role="button" aria-label="聚焦AdGuard Home，TLS 终结 :853/:444 · 注入 per-user ECS, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel=":853/:444 · ECS /24" data-node-tag="容器" data-node-context="架构组件">
+          <title>AdGuard Home · :853/:444 · ECS /24 · 架构组件 · 容器</title>
+          <rect x="188" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="188" y="30" width="140" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(194 36) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="258" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">AdGuard Home</text>
+        <text data-detail="context" x="258" y="71" class="t-muted" font-size="9" text-anchor="middle">:853/:444 · 注入 ECS</text>
+        <text data-detail="fine" x="258" y="76" class="t-backend" font-size="7" text-anchor="middle">容器</text>
+        </g>
+        
+        <g id="anode-agh" data-node-id="agh" data-node-label="dnsdist 缓存层" tabindex="0" role="button" aria-label="聚焦dnsdist 缓存层，内网 :5300 · ECS 感知缓存, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel=":5300 · ECS 缓存" data-node-tag="systemd" data-node-context="架构组件">
+          <title>dnsdist 缓存层 · :5300 · ECS 缓存 · 架构组件 · systemd</title>
+          <rect x="360" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="360" y="30" width="140" height="54" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(366 36) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+          <path d="m5.8 8 1.5 1.5 3-3"/>
+          <text data-node-label="" data-detail-anchor="" x="430" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnsdist 缓存层</text>
+        <text data-detail="context" x="430" y="71" class="t-muted" font-size="9" text-anchor="middle">:5300 · ECS 缓存</text>
+        <text data-detail="fine" x="430" y="76" class="t-security" font-size="7" text-anchor="middle">systemd</text>
+        </g>
+        
+        <g id="anode-dnsguard" data-node-id="dnsguard" data-node-label="dnsguard 准入" tabindex="0" role="button" aria-label="聚焦dnsguard 准入，:5355 主 / :5356 探针, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel=":5355 主 / :5356 探针" data-node-tag="systemd" data-node-context="架构组件">
+          <title>dnsguard 准入 · :5355 主 / :5356 探针 · 架构组件 · systemd</title>
+          <rect x="532" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="532" y="30" width="140" height="54" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(538 36) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="602" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnsguard 准入</text>
+        <text data-detail="context" x="602" y="71" class="t-muted" font-size="9" text-anchor="middle">:5355 主 / :5356 探针</text>
+        <text data-detail="fine" x="602" y="76" class="t-security" font-size="7" text-anchor="middle">systemd</text>
+        </g>
+        
+        <g id="anode-unbound-a" data-node-id="unbound-a" data-node-label="unbound A" tabindex="0" role="button" aria-label="聚焦unbound A，:5353 · 本地 DNSSEC 验签, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel=":5353 · 本地 DNSSEC 验签" data-node-tag="容器" data-node-context="架构组件">
+          <title>unbound A · :5353 · 本地 DNSSEC 验签 · 架构组件 · 容器</title>
+          <rect x="704" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="704" y="30" width="140" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(710 36) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="774" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound A</text>
+        <text data-detail="context" x="774" y="71" class="t-muted" font-size="9" text-anchor="middle">:5353 · 本地 DNSSEC 验签</text>
+        <text data-detail="fine" x="774" y="76" class="t-backend" font-size="7" text-anchor="middle">容器</text>
+        </g>
+        
+        <g id="anode-aghdq" data-node-id="aghdq" data-node-label="aghdq 出口" tabindex="0" role="button" aria-label="聚焦aghdq 出口，:5533 · 已摘除 A 上游, 架构组件" aria-pressed="false" data-node-kind="cloud" data-node-sublabel=":5533 · 已摘除 A 上游" data-node-tag="容器" data-node-context="架构组件">
+          <title>aghdq 出口 · :5533 · 已摘除 A 上游 · 架构组件 · 容器</title>
+          <rect x="876" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="876" y="30" width="140" height="54" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(882 36) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="946" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghdq 出口</text>
+        <text data-detail="context" x="946" y="71" class="t-muted" font-size="9" text-anchor="middle">:5533 · 已摘除 A 上游</text>
+        <text data-detail="fine" x="946" y="76" class="t-cloud" font-size="7" text-anchor="middle">容器</text>
+        </g>
+        
+        <g id="anode-aghcf" data-node-id="aghcf" data-node-label="aghcf 出口" tabindex="0" role="button" aria-label="聚焦aghcf 出口，:5535 → Cloudflare DoT · A 唯一上游, 架构组件" aria-pressed="false" data-node-kind="cloud" data-node-sublabel=":5535 → Cloudflare DoT" data-node-tag="容器" data-node-context="架构组件">
+          <title>aghcf 出口 · :5535 → Cloudflare DoT · A 唯一上游 · 架构组件 · 容器</title>
+          <rect x="1048" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="1048" y="30" width="140" height="54" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1054 36) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1118" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghcf 出口</text>
+        <text data-detail="context" x="1118" y="71" class="t-muted" font-size="9" text-anchor="middle">:5535 → Cloudflare DoT</text>
+        <text data-detail="fine" x="1118" y="76" class="t-cloud" font-size="7" text-anchor="middle">容器</text>
+        </g>
+        
+        <g id="anode-resolvers" data-node-id="resolvers" data-node-label="境外加密解析器" tabindex="0" role="button" aria-label="聚焦境外加密解析器，DNSCrypt 匿名中继, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="DNSCrypt 匿名中继" data-node-context="架构组件">
+          <title>境外加密解析器 · DNSCrypt 匿名中继 · 架构组件</title>
+          <rect x="1220" y="30" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="1220" y="30" width="140" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1226 36) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1290" y="55" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">境外加密解析器</text>
+        <text data-detail="context" x="1290" y="71" class="t-muted" font-size="9" text-anchor="middle">DNSCrypt 匿名中继</text>
+        </g>
+        
+        <g id="anode-nginx" data-node-id="nginx" data-node-label="nginx :443" tabindex="0" role="button" aria-label="聚焦nginx :443，/dns-query → AGH 4443, 架构组件" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="/dns-query → AGH 4443" data-node-tag="systemd" data-node-context="架构组件">
+          <title>nginx :443 · /dns-query → AGH 4443 · 架构组件 · systemd</title>
+          <rect x="360" y="140" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="360" y="140" width="140" height="54" rx="6" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="frontend" class="semantic-sigil s-frontend" transform="translate(366 146) scale(0.6875)">
+            <rect x="2" y="3" width="12" height="10" rx="2"/>
+            <path d="M2 6.5h12"/>
+            <circle cx="4.1" cy="4.8" r=".7" class="sigil-fill"/>
+            <circle cx="6.3" cy="4.8" r=".7" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="430" y="165" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">nginx :443</text>
+        <text data-detail="context" x="430" y="181" class="t-muted" font-size="9" text-anchor="middle">/dns-query → AGH 4443</text>
+        <text data-detail="fine" x="430" y="186" class="t-frontend" font-size="7" text-anchor="middle">systemd</text>
+        </g>
+        
+        <g id="anode-verifier" data-node-id="verifier" data-node-label="verifier 侧车" tabindex="0" role="button" aria-label="聚焦verifier 侧车，Unix Socket · R8, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="Unix Socket · R8" data-node-tag="systemd" data-node-context="架构组件">
+          <title>verifier 侧车 · Unix Socket · R8 · 架构组件 · systemd</title>
+          <rect x="532" y="140" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="532" y="140" width="140" height="54" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(538 146) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="602" y="165" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">verifier 侧车</text>
+        <text data-detail="context" x="602" y="181" class="t-muted" font-size="9" text-anchor="middle">Unix Socket · R8</text>
+        <text data-detail="fine" x="602" y="186" class="t-security" font-size="7" text-anchor="middle">systemd</text>
+        </g>
+        
+        <g id="anode-dnscrypt-proxy" data-node-id="dnscrypt-proxy" data-node-label="dnscrypt-proxy" tabindex="0" role="button" aria-label="聚焦dnscrypt-proxy，127.0.0.2:5353 · 候选, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="127.0.0.2:5353 · 候选" data-node-tag="systemd" data-node-context="架构组件">
+          <title>dnscrypt-proxy · 127.0.0.2:5353 · 候选 · 架构组件 · systemd</title>
+          <rect x="704" y="140" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="704" y="140" width="140" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(710 146) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="774" y="165" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnscrypt-proxy</text>
+        <text data-detail="context" x="774" y="181" class="t-muted" font-size="9" text-anchor="middle">127.0.0.2:5353 · 候选</text>
+        <text data-detail="fine" x="774" y="186" class="t-backend" font-size="7" text-anchor="middle">systemd</text>
+        </g>
+        
+        <g id="anode-aghdq2" data-node-id="aghdq2" data-node-label="aghdq2 alt 通道" tabindex="0" role="button" aria-label="聚焦aghdq2 alt 通道，:5534 → Quad9 DoQ · alt 通道, 架构组件" aria-pressed="false" data-node-kind="cloud" data-node-sublabel=":5534 → Quad9 DoQ" data-node-tag="容器" data-node-context="架构组件">
+          <title>aghdq2 alt 通道 · :5534 → Quad9 DoQ · alt 通道 · 架构组件 · 容器</title>
+          <rect x="876" y="140" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="876" y="140" width="140" height="54" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(882 146) scale(0.6875)">
+            <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="946" y="165" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghdq2 alt 通道</text>
+        <text data-detail="context" x="946" y="181" class="t-muted" font-size="9" text-anchor="middle">:5534 → Quad9 DoQ</text>
+        <text data-detail="fine" x="946" y="186" class="t-cloud" font-size="7" text-anchor="middle">容器</text>
+        </g>
+        
+        <g id="anode-roots" data-node-id="roots" data-node-label="根 / TLD / 权威" tabindex="0" role="button" aria-label="聚焦根 / TLD / 权威，DNSSEC 信任锚 · 参照, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="DNSSEC 信任锚 · 参照" data-node-context="架构组件">
+          <title>根 / TLD / 权威 · DNSSEC 信任锚 · 参照 · 架构组件</title>
+          <rect x="1220" y="140" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="1220" y="140" width="140" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1226 146) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="1290" y="165" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">根 / TLD / 权威</text>
+        <text data-detail="context" x="1290" y="181" class="t-muted" font-size="9" text-anchor="middle">DNSSEC 信任锚 · 参照</text>
+        </g>
+        
+        <g id="anode-unbound-b" data-node-id="unbound-b" data-node-label="unbound B" tabindex="0" role="button" aria-label="聚焦unbound B，:5354 · CN 分流, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel=":5354 · CN 分流" data-node-tag="容器" data-node-context="架构组件">
+          <title>unbound B · :5354 · CN 分流 · 架构组件 · 容器</title>
+          <rect x="360" y="250" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="360" y="250" width="140" height="54" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(366 256) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="430" y="275" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound B</text>
+        <text data-detail="context" x="430" y="291" class="t-muted" font-size="9" text-anchor="middle">:5354 · CN 分流</text>
+        <text data-detail="fine" x="430" y="296" class="t-backend" font-size="7" text-anchor="middle">容器</text>
+        </g>
+        
+        <g id="anode-secure-dot" data-node-id="secure-dot" data-node-label="国内加密 DoT" tabindex="0" role="button" aria-label="聚焦国内加密 DoT，dot.360.cn · alidns, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="dot.360.cn · alidns" data-node-context="架构组件">
+          <title>国内加密 DoT · dot.360.cn · alidns · 架构组件</title>
+          <rect x="532" y="250" width="140" height="54" rx="6" class="c-mask"/>
+          <rect x="532" y="250" width="140" height="54" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(538 256) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="602" y="275" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">国内加密 DoT</text>
+        <text data-detail="context" x="602" y="291" class="t-muted" font-size="9" text-anchor="middle">dot.360.cn · alidns</text>
+        </g>
+        
+        <!-- Connection labels -->
+        
+        <g data-detail="context" data-edge-from="entry" data-edge-to="agh" data-edge-label="ECS" data-edge-key="1">
+          <rect x="329" y="37" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="344" y="47" class="t-edge-emphasis" font-size="8" text-anchor="middle">53</text>
+        </g>
+        <g data-detail="context" data-edge-from="agh" data-edge-to="dnsguard" data-edge-label=":5355" data-edge-key="2">
+          <rect x="499" y="37" width="34" height="14" rx="3" class="c-mask"/>
+          <text x="516" y="47" class="t-edge-emphasis" font-size="8" text-anchor="middle">:5355</text>
+        </g>
+        
+        <g data-detail="context" data-edge-from="unbound-a" data-edge-to="aghdq" data-edge-label="DoQ 已停用" data-edge-key="4">
+          <rect x="816" y="11.75" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="831" y="21.75" class="t-edge-emphasis" font-size="8" text-anchor="middle">DoQ</text>
+        </g>
+        <g data-detail="context" data-edge-from="unbound-a" data-edge-to="aghcf" data-edge-label="DoT" data-edge-key="5">
+          <rect x="874" y="9" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="889" y="19" class="t-edge-emphasis" font-size="8" text-anchor="middle">DoT</text>
+        </g>
+        
+        
+        
+        <g data-detail="context" data-edge-from="agh" data-edge-to="unbound-b" data-edge-label="CN 分流" data-edge-key="9">
+          <rect x="368.2" y="117" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="390" y="127" class="t-edge-emphasis" font-size="8" text-anchor="middle">CN 分流</text>
+        </g>
+        
+        
+        
+        
+        
+        
+        <!-- Boundary labels (foreground masks keep routes out of titles) -->
+        
+        
+        <!-- Legend -->
+        <g data-legend="" data-legend-bridge="">
+          <text x="40" y="336" class="t-primary" font-size="12" font-weight="650">图例</text>
+          <g data-legend-semantic-kind="frontend" data-legend-kind="frontend" data-legend-label="前端" data-legend-x="40" data-legend-baseline="356" data-legend-width="63">
+            <rect x="40" y="347" width="16" height="10" rx="2.5" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="356" class="t-muted" font-size="10" font-weight="500">前端</text>
+          </g>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="后端" data-legend-x="125" data-legend-baseline="356" data-legend-width="63">
+            <rect x="125" y="347" width="16" height="10" rx="2.5" class="c-backend" stroke-width="1"/>
+            <text x="147" y="356" class="t-muted" font-size="10" font-weight="500">后端</text>
+          </g>
+          <g data-legend-semantic-kind="cloud" data-legend-kind="cloud" data-legend-label="云服务" data-legend-x="210" data-legend-baseline="356" data-legend-width="73">
+            <rect x="210" y="347" width="16" height="10" rx="2.5" class="c-cloud" stroke-width="1"/>
+            <text x="232" y="356" class="t-muted" font-size="10" font-weight="500">云服务</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="安全" data-legend-x="305" data-legend-baseline="356" data-legend-width="63">
+            <rect x="305" y="347" width="16" height="10" rx="2.5" class="c-security" stroke-width="1"/>
+            <text x="327" y="356" class="t-muted" font-size="10" font-weight="500">安全</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部系统" data-legend-x="390" data-legend-baseline="356" data-legend-width="83">
+            <rect x="390" y="347" width="16" height="10" rx="2.5" class="c-external" stroke-width="1"/>
+            <text x="412" y="356" class="t-muted" font-size="10" font-weight="500">外部系统</text>
+          </g>
+        </g>
+              </svg>
+      </div></div>
+      <div class="arch-detail hidden" id="arch-detail" role="status" aria-live="polite"></div>
+      <div class="flowfoot" id="flowfoot"></div>
+      <details class="fold" id="main-fold" open><summary>数据面主线<span class="cap" id="main-cap"></span></summary><div class="node-row" id="main-row"></div></details>
+      <details class="fold" id="fb-fold"><summary>CN 分流与降级<span class="cap" id="fb-cap"></span></summary><div class="node-row" id="fallback"></div></details>
+      <details class="fold" id="aux-fold"><summary>旁路与辅助通道<span class="cap" id="aux-cap"></span></summary><div class="node-row" id="aux"></div></details>
+      <details class="fold" id="ext-fold"><summary>外部依赖<span class="cap" id="ext-cap"></span></summary><div class="node-row" id="external"></div></details>
     </div>
     <div class="duo">
       <div class="card"><h3>入口观测</h3><div class="kv" id="entry"></div></div>
@@ -526,29 +1082,138 @@ function barPct(p,cls){
 function resCls(p,warn,err){ if(!has(p)) return ""; var v=Number(p); return v>=err?"err":(v>=warn?"warn":"ok"); }
 
 /* ────────── 状态色 ────────── */
-function stCls(s){ return s==="warn" ? "st-warn" : (s==="err" ? "st-err" : (s==="idle" ? "st-idle" : "")); }
-function stDot(s){ return s==="warn" ? "warn" : (s==="err" ? "err" : (s==="idle" ? "idle" : "ok")); }
+/* 2026-10-26 修复：后端 chainmon.py 的节点状态字面量**两种写法并存**——部分节点发 "error"
+   （dnsdist/verifier/dnsguard/secure-dot/roots 等），部分发 "err"。前端此处原先只认 "err"，
+   于是 "error" 落进 else 分支被画成**绿色 ok 圆点、无红底**，verdict() 也不把它计入异常数，
+   顶栏照样显示"运行正常"——故障因此完全不可见。这里统一归一后再判色。 */
+function stNorm(s){
+  s=String(s===null||s===undefined?"":s).toLowerCase();
+  if(s==="error"||s==="err"||s==="critical"||s==="down"||s==="fail"||s==="failed") return "err";
+  if(s==="warn"||s==="warning"||s==="degraded") return "warn";
+  if(s==="ok"||s==="up"||s==="active"||s==="ready"||s==="running"||s==="healthy"||s==="pass") return "ok";
+  /* 兜底必须是 idle 而不是 ok：后端将来若新增 "starting"/"paused"/"?" 之类状态，
+     落进 ok 就等于又一次"把未知画成绿色正常"——正是上面那段注释描述的同一个 bug 换了形态。
+     idle 是灰点，表示"不确定"，既不谎报健康，也能被眼睛扫到。 */
+  return "idle";
+}
+function stCls(s){ var v=stNorm(s); return v==="warn" ? "st-warn" : (v==="err" ? "st-err" : (v==="idle" ? "st-idle" : "")); }
+function stDot(s){ return stNorm(s); }
 
 /* ────────── 综合判定 ────────── */
 function verdict(d){
   var o=d.overview||{}, nodes=(d.chain&&d.chain.nodes)||[], err=0, warn=0, i, n;
+  var bad=[], soft=[];   /* 2026-10-26：收集具体是哪个节点坏了，供顶部一键定位 */
   for(i=0;i<nodes.length;i++){
     n=nodes[i];
     if(!n || n.id==="ub-alt" || n.id==="alt-replica") continue;
-    if(n.status==="err") err++;
-    else if(n.status==="warn") warn++;
+    var _s=stNorm(n.status);
+    if(_s==="err"){ err++; bad.push(n); }
+    else if(_s==="warn"){ warn++; soft.push(n); }
   }
-  var q=Number(o.unbound_queries||0), sf=(q>0 && has(o.unbound_servfail)) ? (Number(o.unbound_servfail)/q*100) : null;
+  /* 链路节点一个都没拿到时不能说"运行正常"——那是把"没数据"当成"没故障"。
+     后端异常/接口半损时 chain 可能缺失，此时应明确报"未知"。 */
+  var missing = !(d.chain && nodes.length);
+  /* 2026-10-28 口径修复：不再用「累计 SERVFAIL ÷ 累计查询」——那是"自上次清零以来"的比值，
+     一次集中失败会把它钉高数天（10-28 实测 9 天累计读数一度 984/1250=78.7%），而 unbound 每 reload
+     一次就清零，同一指标 6 分钟内出现过 78.7%→100%→0%→20.3%→6.2%。比值 ≠ 当前失败率。
+     改用后端算好的**采集窗口差分比** o.unbound_servfail_pct（窗口内新增 SERVFAIL / 新增查询，
+     样本 ≥20 才给值，否则为 null 表示"样本不足"）。累计值仍列在解析器表里备查。 */
+  var sf = has(o.unbound_servfail_pct) && o.unbound_servfail_pct!==null ? Number(o.unbound_servfail_pct) : null;
+  var sfN = Number(o.unbound_servfail_delta||0), sfQ = Number(o.unbound_queries_delta||0);
   var rec=(d.dnsguard&&d.dnsguard.recent)||[], badEv=0, bi;
   for(bi=0;bi<rec.length;bi++){ if(/VERMISMATCH|拒服务/.test(String(rec[bi]))) badEv++; }
   if(badEv && !has(d.__badEvNote)) d.__badEvNote=badEv;
   var lv="ok", why=[];
+  if(missing){ lv="warn"; why.push("未取到链路节点数据"); }
   if(err){ lv="err"; why.push(err+" 个链路节点异常"); }
   if(warn){ if(lv!=="err") lv="warn"; why.push(warn+" 个节点待确认"); }
   if(d.alerts && d.alerts.length){ if(lv==="ok") lv="warn"; why.push("自动告警 "+d.alerts.length+" 条"); }
   if(badEv){ if(lv==="ok") lv="warn"; why.push("dnsguard 拒绝服务事件 "+badEv+" 条"); }
-  if(sf!==null && sf>=5){ if(lv!=="err") lv="warn"; why.push("SERVFAIL "+sf.toFixed(1)+"%"); }
-  return {lv:lv, why:why, sf:sf};
+  if(sf!==null && sf>=5){ if(lv!=="err") lv="warn"; why.push("SERVFAIL "+sf.toFixed(1)+"%（窗口 "+num(sfQ)+" 次查询中 "+num(sfN)+" 次）"); }
+  return {lv:lv, why:why, sf:sf, sfN:sfN, sfQ:sfQ, bad:bad, soft:soft, alerts:(d.alerts||[]), badEv:badEv};
+}
+
+/* 2026-10-26：把"哪里坏了 + 坏成什么样"从散落的徽章收拢成一张可见的定位表。
+   之前故障只体现在：① 一个 8px 圆点变色（还被 status 字面量 bug 吃掉了）
+   ② 卡内一行被 ellipsis 截断的 detail ③ 一条只在鼠标悬停时才出现的 title。
+   结果就是"知道有问题，但看不出是哪、是什么"。 */
+/* 点定位面板里的节点名 → 滚到链路卡里那个节点并闪三下。找不到节点（比如不在 main/fallback/aux/external
+   任何一组）就退化为跳到链路卡顶部，不报错、不弹窗。 */
+/* 统一滚动行为：开启"减少动态效果"时用瞬时跳转，否则平滑滚动。
+   平滑滚动在某些环境（无头浏览器、部分旧版 Safari、禁用动画的系统设置下）不推进，
+   会让"点了没反应"——所以这里显式给一个退化路径。 */
+function scrollMode(){
+  try{
+    if(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return "auto";
+  }catch(e){}
+  return "smooth";
+}
+function locGo(id){
+  try{
+    var key=archKey(String(id||""));
+    if(!/^[A-Za-z0-9_-]+$/.test(key)) return false;
+    var g=document.getElementById("anode-"+key);
+    if(g){
+      g.scrollIntoView({behavior:scrollMode(), block:"center"});
+      g.classList.remove("flash"); void g.getBoundingClientRect(); g.classList.add("flash");
+      setTimeout(function(){ try{ g.classList.remove("flash"); }catch(e){} }, 3600);
+      archPick(key, true);
+      return false;
+    }
+    var el=document.getElementById("node-"+id);
+    if(!el){ var sec=document.getElementById("chain"); if(sec) sec.scrollIntoView({behavior:scrollMode(),block:"start"}); return false; }
+    el.scrollIntoView({behavior:scrollMode(), block:"center"});
+    el.classList.add("flash");
+    setTimeout(function(){ try{ el.classList.remove("flash"); }catch(e){} }, 3600);
+  }catch(e){}
+  return false;
+}
+function locRow(n, lvl){
+  var de=String(n.detail||"").trim();
+  /* id 会被拼进内联 onclick 的字符串字面量里，单/双引号与反斜杠都可能破坏引号平衡
+     （例如 id="x\\" 会让 \\' 转义掉闭合引号）。后端 id 目前都是固定枚举，这里做纵深防御：
+     只保留 [A-Za-z0-9_-]，其余一律丢弃；不合法就退化为不可点击的纯文本。 */
+  var id=String(n.id||"").replace(/[^A-Za-z0-9_-]/g,"");
+  var nm = id ? '<a class="loc-nm loc-link" href="#node-'+esc(id)+'" data-loccard="'+esc(archKey(id))+'">'+esc(n.name||n.id)+'</a>'
+              : '<span class="loc-nm">'+esc(n.name||"?")+'</span>';
+  return '<li class="loc-i '+lvl+'">'+ nm +
+    '<span class="loc-b">'+esc(lvl==="err"?"异常":"待确认")+'</span>'+
+    (de?'<span class="loc-d">'+esc(de)+'</span>':'<span class="loc-d dim">后端未给出原因字段（detail 为空）</span>')+
+  '</li>';
+}
+function renderLocate(d){
+  var box=$("locate"); if(!box) return;
+  var v=verdict(d), rows=[], i, a=v.alerts||[];
+  for(i=0;i<v.bad.length;i++) rows.push(locRow(v.bad[i],"err"));
+  for(i=0;i<v.soft.length;i++) rows.push(locRow(v.soft[i],"warn"));
+  /* 2026-10-28：SERVFAIL 一直是「顶部说了、列表里没有」的断链项——verdict 把它写进 why，
+     而这里只渲染异常/待确认节点与自动告警，用户看到"有项目需关注"却在列表里找不到对应项。
+     补一行合成条目，并指向 unbound A 节点，让"哪里坏了"真的能点过去。 */
+  var srvN=0;
+  if(v.sf!==null && v.sf>=5){
+    srvN=1;
+    rows.push(locRow({id:"unbound-a", name:"unbound A · SERVFAIL 偏高",
+      detail:"本次采集窗口 "+num(v.sfQ)+" 次查询中 "+num(v.sfN)+" 次 SERVFAIL（"+v.sf.toFixed(1)+"%）。"
+        +"unbound A 是 fail-closed 转发器（→ aghcf :5535 → Cloudflare DoT，2026-10-28 起唯一上游），上游抖动即整段 SERVFAIL、不回退明文递归；"
+        +"数值为相邻快照差分，累计值见下方解析器表"}, "warn"));
+  }
+  var ah="";
+  for(i=0;i<a.length;i++){
+    var al=a[i]||{}, lv=(stNorm(al.level)==="err")?"err":"warn";
+    ah+='<li class="loc-i '+lv+'"><span class="loc-nm">自动告警</span>'+
+      '<span class="loc-b">'+esc(lv==="err"?"异常":"警告")+'</span>'+
+      '<span class="loc-d">'+esc(al.text||al.code||"")+(al.code?' <code class="mono t-xs">'+esc(al.code)+'</code>':'')+'</span></li>';
+  }
+  if(!rows.length && !a.length){ box.className="locate hidden"; box.innerHTML=""; return; }
+  var head = v.lv==="err" ? ("检测到 "+(v.bad.length)+" 个异常节点"+(a.length?("，另有 "+a.length+" 条自动告警"):""))
+                          : ("没有异常节点，但 "+(v.soft.length+srvN+a.length)+" 项需要确认");
+  var next='<div class="loc-h"><i class="dot '+v.lv+'"></i>'+esc(head)+
+    '<a href="#chain" class="loc-go">跳到解析链路 ↓</a></div><ul class="loc-l">'+rows.join("")+ah+'</ul>';
+  /* 内容签名不变就跳过重建，避免每 60 秒把整块面板重排一遍（滚动位置、鼠标悬停的链接都会被打断）。
+     注意：这只护住 #locate 自身，护不到链路卡里的 .flash 高亮——那个由 renderFlow 全量重建。
+     实际影响可忽略：闪烁 1.1s×3≈3.3s，远短于 60 秒的刷新周期。 */
+  if(box.__sig===next && box.className==="locate "+v.lv) return;
+  box.__sig=next; box.className="locate "+v.lv; box.innerHTML=next;
 }
 
 /* ────────── 顶栏 / 概览 ────────── */
@@ -567,7 +1232,7 @@ function renderTop(d){
   if(v.lv==="ok"){
     desc="窗口内未触发自动告警；告警只覆盖 5 类单周期条件，0 条不等于全链路健康（口径见页尾）。";
   }else{
-    desc=v.why.join("；")+"。具体位置见下方对应区块。";
+    desc=v.why.join("；")+"。具体是哪个节点、什么原因，见下方「故障定位」列表。";
   }
   setText("hero-desc", desc);
   setText("hero-interval", d.auto_refresh_s || 60);
@@ -576,7 +1241,11 @@ function renderTop(d){
   chips.push('<span class="chip" title="统计窗口：分位、拦截率、按来源采样都取这一段">统计窗口 <b>'+num(d.window_min||60)+' 分钟</b></span>');
   if(has(d.covered_min)) chips.push('<span class="chip" title="qlog 文件的时间跨度，不是统计窗口">日志跨度 <b>'+num(d.covered_min)+' 分钟</b></span>');
   chips.push('<span class="chip">采集 <b>'+num((d.collect_ms||0)/1000,1)+' s</b></span>');
-  chips.push('<span class="chip">自动告警 <b>'+num((d.alerts||[]).length)+' 条</b></span>');
+  var _an=(d.alerts||[]).length;
+  /* 2026-10-26：原来只有一个赤裸的条数，看不到告警原文。>0 时做成可点击，直接滚到定位面板。 */
+  chips.push(_an>0
+    ? '<a class="chip chip-link" href="#locate" title="点击查看告警原文"><span class="dot warn"></span>自动告警 <b>'+num(_an)+' 条</b> · 查看</a>'
+    : '<span class="chip">自动告警 <b>0 条</b></span>');
   if(has(d.log_lag_s) && Number(d.log_lag_s)>120) chips.push('<span class="chip" style="color:var(--warn)">日志滞后 <b>'+dur(d.log_lag_s)+'</b></span>');
   if(has(age) && Number(age)>(Number(d.auto_refresh_s||60)*2)) chips.push('<span class="chip" style="color:var(--warn)">数据已过期 <b>'+dur(age)+'</b></span>');
   setHtml("hero-chips", chips.join(""));
@@ -615,7 +1284,7 @@ function renderKpis(d){
       foot:"窗口 "+num(o.queries)+" 条 · 近 60 秒 "+num(o.queries_1m)+" 条<br>AGH 计数差分（Δt "+num(o.qps_dt_s,0)+" s）",
       spark:spark(H.qps_total)}),
     kpiCard({label:"缓存命中", value:num(o.cache_hit_pct,1), unit:"%",
-      foot:"dnsdist PacketCache（累计）<br>命中 "+num(o.dnsdist_cache_hits)+" · 未命中 "+num(o.dnsdist_cache_misses),
+      foot:"dnsdist PacketCache（累计）<br>"+(o.dnsdist_stats_error?("⚠ 统计不可用："+esc(o.dnsdist_stats_error)):("命中 "+num(o.dnsdist_cache_hits)+" · 未命中 "+num(o.dnsdist_cache_misses))),
       spark:spark(H.cache_hit_pct)}),
     kpiCard({label:"拦截率", value:num(o.block_pct,1), unit:"%",
       foot:"拦截 "+num(o.blocked)+" / "+num(o.queries)+" 条<br>窗口样本口径，非累计",
@@ -628,37 +1297,203 @@ function renderKpis(d){
 }
 
 /* ────────── 链路 ────────── */
+/* 架构图节点 id → 后端节点 id。数据面图是 1:1 的，唯一例外是 aghcf：
+   后端把 aghcf 并进了 "加密上游出口 · aghcf（aghdq 已摘除）" 这一个节点（id 仍是 aghdq），
+   所以图上的 aghcf 要映射回 aghdq —— 否则它会永远显示"未知状态"。 */
+var ARCH_ALIAS={aghcf:"aghdq"};
+function archKey(id){ return ARCH_ALIAS[id]||id; }
+function archNode(id){
+  var nodes=(LAST&&LAST.chain&&LAST.chain.nodes)||[], k=archKey(id), i;
+  for(i=0;i<nodes.length;i++){ if(nodes[i] && nodes[i].id===k) return nodes[i]; }
+  return null;
+}
+/* nodeHtml：明细卡片。id 仍是 node-{id}，定位面板/架构图点击都靠它定位。
+   额外差异：detail 不再塞进 title 里当唯一出口，而是渲成一整行可读文本。 */
 function nodeHtml(n){
-  return '<div class="node '+stCls(n.status)+'" title="'+esc(n.detail||"")+'">'+
+  var _s=stNorm(n.status);
+  return '<div class="node '+stCls(n.status)+'"'+(n.id?' id="node-'+esc(n.id)+'"':'')+
+    ((_s==="err"||_s==="warn")?' aria-label="'+esc((n.name||"")+" · "+(_s==="err"?"异常":"待确认")+" · "+(n.detail||"")) +'"':'')+'>'+
     '<div class="nm"><i class="dot '+stDot(n.status)+'"></i>'+esc(n.name)+'</div>'+
     '<div class="sb">'+esc(n.sub||"")+'</div>'+
     (n.detail?'<div class="de">'+esc(n.detail)+'</div>':'')+'</div>';
 }
-function renderFlow(d){
-  var ch=d.chain||{}, main=ch.main||[], i, html="";
-  if(!main.length){ setHtml("flow",'<div class="empty">链路数据缺失</div>'); }
-  else{
-    for(i=0;i<main.length;i++){
-      if(i) html+='<div class="arrow">\u203A</div>';
-      html+=nodeHtml(main[i]);
+/* 架构图里的组件与明细卡片共用同一份 chain.nodes 数据：
+   给每个 <g data-node-id> 打上状态 class、右上角补一个状态点、并绑定点击/回车。 */
+function paintArch(){
+  var wrap=$("arch-wrap"); if(!wrap) return;
+  var gs=wrap.querySelectorAll("g[data-node-id]"), i, g, nd, _s, rect, cx, cy, dot, hue;
+  /* 链路数据缺失时，图面上每个组件都会走 if(!nd) continue ⇒ 不画状态点、不改标签，
+     于是"没数据"和"全部正常"长得一模一样。这里显式标注，别让沉默读成健康。 */
+  var _nodata = !(LAST && LAST.chain && (LAST.chain.nodes||[]).length);
+  try{ wrap.setAttribute("data-nodata", _nodata?"1":"0"); }catch(e){}
+  for(i=0;i<gs.length;i++){
+    g=gs[i]; nd=archNode(g.getAttribute("data-node-id"));
+    g.classList.remove("st-warn","st-err","st-idle","flash");
+    var olds=g.querySelectorAll(".arch-dot,.arch-halo,.arch-flag");
+    for(var k=0;k<olds.length;k++){ if(olds[k].parentNode) olds[k].parentNode.removeChild(olds[k]); }
+    if(!nd) continue;
+    _s=stNorm(nd.status);
+    if(_s==="warn") g.classList.add("st-warn");
+    else if(_s==="err") g.classList.add("st-err");
+    else if(_s==="idle") g.classList.add("st-idle");
+    rect=g.querySelector("rect.c-mask");
+    if(rect){
+      cx=Number(rect.getAttribute("x")); cy=Number(rect.getAttribute("y"));
+      var w=Number(rect.getAttribute("width")), h=Number(rect.getAttribute("height"));
+      var rx=Number(rect.getAttribute("rx")||0);
+      var SVGNS="http://www.w3.org/2000/svg";
+      /* ① 异常/待确认 → 组件外面套一圈光环。这是独立于 5 种语义色的通道，
+            security 类组件（本身红描边）坏了也能一眼看出来。 */
+      if(_s==="err"||_s==="warn"){
+        var halo=document.createElementNS(SVGNS,"rect");
+        halo.setAttribute("class","arch-halo "+_s);
+        halo.setAttribute("x",cx-4); halo.setAttribute("y",cy-4);
+        halo.setAttribute("width",w+8); halo.setAttribute("height",h+8);
+        halo.setAttribute("rx",rx+3);
+        halo.setAttribute("aria-hidden","true");
+        g.insertBefore(halo,g.firstChild);
+      }
+      /* ② 左上角感叹号徽章：即使光环被缩略/色弱忽略，形状本身也能传达"这里不对" */
+      if(_s==="err"||_s==="warn"){
+        var fg=document.createElementNS(SVGNS,"g");
+        fg.setAttribute("class","arch-flag "+_s);
+        fg.setAttribute("aria-hidden","true");
+        var fc=document.createElementNS(SVGNS,"circle");
+        fc.setAttribute("cx",cx+1); fc.setAttribute("cy",cy+1); fc.setAttribute("r",5.2);
+        var ft=document.createElementNS(SVGNS,"text");
+        ft.setAttribute("x",cx+1); ft.setAttribute("y",cy+1.4);
+        ft.textContent="!";
+        fg.appendChild(fc); fg.appendChild(ft);
+        g.appendChild(fg);
+      }
+      /* ③ 右上角状态点，和页面别处的 .dot 同一套语义 */
+      dot=document.createElementNS(SVGNS,"circle");
+      dot.setAttribute("class","arch-dot "+_s);
+      dot.setAttribute("cx",cx+w-4); dot.setAttribute("cy",cy+4); dot.setAttribute("r",3.4);
+      dot.setAttribute("aria-hidden","true");
+      g.appendChild(dot);
     }
-    setHtml("flow", html);
+    /* aria 跟着状态走，读屏能听出"这台上游是异常/待确认/正常" */
+    hue = _s==="err" ? "异常" : (_s==="warn" ? "待确认" : (_s==="idle" ? "未启用" : "正常"));
+    /* 读屏要能听懂"这是什么 + 现在怎样"：sub 里有端口和角色，比 detail 更常用。 */
+    g.setAttribute("aria-label",
+      (nd.name||g.getAttribute("data-node-id"))
+      + (nd.sub?("，"+(nd.sub)):"")
+      + "，" + hue
+      + (nd.detail?("，"+(nd.detail)):""));
   }
+  try{ archRePick(); }catch(e){}
+}
+/* 选中架构图里某个组件 → 在图上闪一下，并在图下摊开它的名称/状态/端口/原因。
+   这样"点一下"既回答了"这块在干什么"，也不用滚到页面另一头才知道它坏没坏。 */
+function archPick(id, jump){
+  var nd=archNode(id), box=$("arch-detail"), wrap=$("arch-wrap"), g;
+  if(wrap){
+    var gs=wrap.querySelectorAll("g[data-node-id]");
+    for(var i=0;i<gs.length;i++){
+      g=gs[i];
+      if(archKey(g.getAttribute("data-node-id"))===archKey(id)){
+        g.classList.remove("flash"); void g.getBoundingClientRect(); g.classList.add("flash");
+        /* aghcf 与 aghdq 映射到同一个后端节点，两个 g 都会命中；
+           aria-pressed 是"当前选中"，只能给真正被点的那个，否则读屏听到两个都按下。 */
+        g.setAttribute("aria-pressed", g.getAttribute("data-node-id")===String(id) ? "true" : "false");
+        setTimeout((function(el){ return function(){ try{ el.classList.remove("flash"); }catch(e){} }; })(g),3600);
+      } else { g.setAttribute("aria-pressed","false"); }
+    }
+  }
+  if(!box) return false;
+  try{ box.__sel=String(id||""); }catch(e){}
+  if(!nd){ box.className="arch-detail hidden"; box.innerHTML=""; return false; }
+  var _s=stNorm(nd.status);
+  var lbl = _s==="err" ? "异常" : (_s==="warn" ? "待确认" : (_s==="idle" ? "未启用" : "正常"));
+  box.className="arch-detail";
+  box.innerHTML='<div class="dt"><i class="dot '+stDot(nd.status)+'"></i>'+esc(nd.name||id)+
+    '<span class="db '+_s+'">'+esc(lbl)+'</span></div>'+
+    (nd.sub?'<div class="ds">'+esc(nd.sub)+'</div>':'')+
+    (nd.detail?'<div class="dd'+((_s==="err"||_s==="warn")?' bad':'')+'">'+esc(nd.detail)+'</div>':'')+
+    '<div class="dt" style="margin-top:7px"><a class="loc-link" href="#node-'+esc(archKey(id))+'" data-loccard="'+esc(archKey(id))+'">在下方明细中查看 →</a></div>';
+  /* jump=true 时顺带把对应的明细卡片也滚进视野并闪一下：
+     用户点的是图上的方块，想要的是"这块到底怎么了"，答案在明细卡里。 */
+  if(jump){ try{ locCard(archKey(id)); }catch(e){} }
+  return false;
+}
+/* paintArch 每 60 秒重绘状态；如果用户之前点开了某个组件，
+   面板文字必须跟着刷新——否则圆点变红了，面板还写着"正常"。 */
+function archRePick(){
+  var box=$("arch-detail");
+  if(!box || !box.__sel) return;
+  if(box.className.indexOf("hidden")>=0) return;
+  try{ archPick(box.__sel, false); }catch(e){}
+}
+/* 滚动到明细卡片并高亮；已经完整可见就不滚，避免点一下页面跳走反而看不到图 */
+function locCard(id){
+  try{
+    if(!/^[A-Za-z0-9_-]+$/.test(id)) return false;
+    var el=document.getElementById("node-"+id); if(!el) return false;
+    /* 卡片可能在收起的 <details> 里：关闭状态 getBoundingClientRect() 全 0，
+       既不大于 vh 也不小于 0 ⇒ 永远不滚，只给一个看不见的元素加闪。
+       所以先把它所在的折叠组打开。 */
+    try{
+      var dt=el.closest ? el.closest("details") : null;
+      if(dt && !dt.open) dt.open=true;
+    }catch(e){}
+    var r=el.getBoundingClientRect(), vh=window.innerHeight||0;
+    /* 顶部 58px 是吸顶栏（--topbar-h），卡片滚到它下面等于被盖住，也算"不可见"。 */
+    if(r.top<58 || r.bottom>vh){
+      el.scrollIntoView({behavior:scrollMode(), block:"center"});
+    }
+    el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash");
+    setTimeout(function(){ try{ el.classList.remove("flash"); }catch(e){} }, 3600);
+  }catch(e){}
+  return false;
+}
+/* 判定某组里有没有真异常（与 verdict 同口径：已停用的备用副本不算） */
+function grpBad(arr){
+  for(var j=0;j<(arr||[]).length;j++){
+    var t=arr[j];
+    if(!t || t.id==="ub-alt" || t.id==="alt-replica") continue;
+    var s=stNorm(t.status); if(s!=="ok" && s!=="idle") return true;
+  }
+  return false;
+}
+function renderFlow(d){
+  /* 后端字段可能缺失或为 null（接口半损、版本不一致），逐项兜成数组，
+     否则 ch.fallback||[] 拿到 null 仍会 null.length 抛错，整块架构区白屏。 */
+  var ch=d.chain||{};
+  var nodes=ch.nodes||[], main=ch.main||[], fb=ch.fallback||[], ax=ch.aux||[], ex=ch.external||[], i, html="";
+  /* 后端把「加密上游出口」放在 main 里也用同一个 id，所以只要节点在 nodes 里就能画出来 */
+  for(i=0;i<main.length;i++) html+=nodeHtml(main[i]);
+  if(!html) html='<div class="empty">链路数据缺失</div>';
+  setHtml("main-row", html);
+  setText("main-cap", main.length ? ("· "+main.length+" 项 · 图上主线顺序") : "");
+  var h2="", h3="", h4="";
+  for(i=0;i<fb.length;i++) h2+=nodeHtml(fb[i]);
+  for(i=0;i<ax.length;i++) h3+=nodeHtml(ax[i]);
+  for(i=0;i<ex.length;i++) h4+=nodeHtml(ex[i]);
+  setHtml("fallback", h2 || '<div class="empty">—</div>');
+  setText("fb-cap", fb.length ? ("· "+fb.length+" 项") : "");
+  setHtml("aux", h3 || '<div class="empty">—</div>');
+  setText("aux-cap", ax.length ? ("· "+ax.length+" 项") : "");
+  setHtml("external", h4 || '<div class="empty">—</div>');
+  setText("ext-cap", ex.length ? ("· "+ex.length+" 项") : "");
   var foot=ch.architecture ? esc(ch.architecture) : "";
   if(ch.fallback_note) foot+=(foot?" · ":"")+esc(ch.fallback_note);
   setHtml("flowfoot", foot);
-  var fb=ch.fallback||[], ax=ch.aux||[], h2="", h3="";
-  for(i=0;i<fb.length;i++) h2+=nodeHtml(fb[i]);
-  for(i=0;i<ax.length;i++) h3+=nodeHtml(ax[i]);
-  setHtml("fallback", h2 || '<div class="empty">—</div>');
-  setHtml("aux", h3 || '<div class="empty">—</div>');
-  setText("aux-cap", ax.length ? ("· "+ax.length+" 项") : "");
+  /* 图例上方的口径：说明"图与下方明细同源"，并交代 DNSSEC 根信任锚这类图上看不见但真实存在的东西 */
+  setText("arch-cap", nodes.length ? ("· "+nodes.length+" 个组件 · 点击任一组件看它的实时状态") : "· 未取到链路数据，图上状态不可用");
+  /* 折叠组里有非 ok/idle 的节点就自动展开，别让问题藏在 <details> 里。
+     注意只"展开"不"收起"——用户手动展开过的组，不该因为本轮数据变好就被强行关掉。 */
+  try{ var ef=$("ext-fold"); if(ef && _anyBad(ex)) ef.setAttribute("open",""); }catch(e){}
+  try{ var af=$("aux-fold"); if(af && _anyBad(ax)) af.setAttribute("open",""); }catch(e){}
+  try{ var ff=$("fb-fold"); if(ff && _anyBad(fb)) ff.setAttribute("open",""); }catch(e){}
+  
 }
+function _anyBad(arr){ return grpBad(arr); }
 
 function renderEntry(d){
   var ob=d.observe||{}, f=ob.dnsdist_front||{}, ns=ob.nginx_stream||{}, dev=ob.devfp||{}, rows=[];
   rows.push(kv("dnsdist 前端", (f.active?pill("活跃"):pill("停用","idle"))+' <span class="mono">:853 / :444</span>'));
-  rows.push(kv("PacketCache", num(f.cache_hits)+" 命中 / "+num(f.cache_misses)+" 未命中 · "+num(f.cache_pct,1)+"%"));
+  rows.push(kv("PacketCache", f.stats_ok===false?("⚠ 统计不可用："+esc(f.stats_error||"401 未授权")):(num(f.cache_hits)+" 命中 / "+num(f.cache_misses)+" 未命中 · "+num(f.cache_pct,1)+"%")));
   rows.push(kvB("nginx :443", esc(ns.brief||"—")));
   if(dev.ok===false) rows.push(kv("设备指纹", '<span class="dim">'+pill("未启用","idle")+' 旁路统计未运行</span>'));
   setHtml("entry", rows.join(""));
@@ -756,7 +1591,12 @@ function renderSecurity(d){
     ["CN 类型判定总量", num(st.cn_typed_total)],
     ["R8 同步核对", num(st.r8_checked)],
     ["DNSSEC 已验证", num(sm.dnssec_validated)],
-    ["改道（redirect）", num(st.redirect)]
+    ["改道（redirect）", num(st.redirect)],
+    ["无证据下发（已收口 TTL）", num(sm.failopen_ttl_capped)],
+    ["　其中 R8 缺失 / 退避", num(sm.failopen_r8_miss)+" / "+num(sm.failopen_backoff)],
+    ["　其中 ASN 门 / 预算耗尽", num(sm.failopen_asn_gate)+" / "+num(sm.failopen_budget)],
+    ["strict 通道去重（端点 / 运营方）", num(sm.strict_endpoint_dedup)+" / "+num(sm.strict_operator_dedup)],
+    ["CN-IP 观察档冲突（已收口）", num(sm.cnip_observe_conflict)]
   ], i, h="";
   for(i=0;i<cats.length;i++) h+=kv(cats[i][0], cats[i][1]);
   setHtml("sec-cats", h);
@@ -922,10 +1762,10 @@ function renderNotes(d){
     "<b>窗口与口径</b>：除显式标注「累计」外，本页数字均为统计窗口 "+num(d.window_min||60)+" 分钟内的窗口值（分位、拦截率、按来源采样同此窗口）。AGH 日志跨度 "+num(d.covered_min)+" 分钟是 qlog 文件的物理跨度，与统计窗口同名不同义、不能互相替代；QPS 由 AGH 计数差分得到（Δt "+num(o.qps_dt_s,1)+" s）。",
     "<b>延迟三种口径不可混读</b>：全部应答 P50 "+ms(o.latency_all_p50_ms)+"（含 dnsdist 命中，命中自身耗时几乎为 0，因此该值被命中的极快应答拉低）；未命中缓存 P50 "+ms(o.latency_p50_ms)+"（透传到 AGH 的真实处理耗时）；净处理已扣上游往返基线 "+ms(o.upstream_baseline_ms)+"，该基线取的是最快批次的 p10，偏乐观、只是整体平移，因此本页不单列「网络延迟」，也不展示 net_latency_*。",
     "<b>三层缓存各算各的</b>：dnsdist PacketCache 累计命中 "+num(o.dnsdist_cache_hits)+" 次 / 未命中 "+num(o.dnsdist_cache_misses)+" 次 = "+num(o.cache_hit_pct,1)+"%（进程累计口径）；AGH 自 2026-10-22 起关闭缓存（<code>cache_enabled=false</code>），AGH 层命中恒为 0 是预期值、不是故障；unbound A 自身 "+num(ubStats.hit_pct,1)+"%（cachehits/queries）。三个百分比来源不同，不能串成一条链上的同一个数。",
-    "<b>来源</b>：dnsdist 终结 DoT/DoH，DoT 侧经 nginx→docker-proxy，AGH 只看到网关地址 172.18.0.1，真实客户端 IP 未透传（PROXY protocol 未开启）。因此 DoT 侧「Top 客户端」恒为同一个网关地址、没有信息量，本页不展示；「按来源」表的 IP 是客户端侧采样里可识别的入向地址（样本合计与窗口查询量不同口径，表头已标），链路卡里「1 个来源 IP」按入向连接统计 —— 两者都不等于在用设备数。",
+    "<b>来源</b>：2026-10-28 起 DoT :853 / DoH :444 由 AGH 直接终结（TLS 在 AGH 完成），AGH 因此能看到真实客户端 IP，并按它给上游注入 ECS /24；DoH 走 nginx :443 兜底时，AGH 依 trusted_proxies 从 X-Forwarded-For 取真实 IP（nginx 已改为只传 $remote_addr，客户端无法伪造）。dnsdist 已退到 172.18.0.1:5300 只做 ECS 感知 PacketCache，不再是公网入口。「按来源」表的 IP 是客户端侧采样里可识别的入向地址（样本合计与窗口查询量不同口径，表头已标），链路卡里「来源 IP」按入向连接统计 —— 两者都不等于在用设备数。",
     "<b>拦截率</b>：窗口样本口径（拦截 "+num(o.blocked)+" / "+num(o.queries)+" 条）。历史累计口径的 block_ratio_auth（"+num(o.block_ratio_auth,1)+"%）与窗口值不同源，本页只展示窗口值，避免同一指标两个数字并排。",
-    "<b>自动告警覆盖有限</b>：只对单周期「失败关闭、R8 验证缺失、干净源失败、证书到期、客户端洪泛」五类条件判定，不含累计 SERVFAIL / bogus。0 条告警 ≠ 全链路健康：unbound A 累计 SERVFAIL "+num(o.unbound_servfail)+" 条、验签失败 "+num(o.unbound_bogus)+" 条不在告警判定范围内，仍列在下方解析器表中。",
-    "<b>每小时重启</b>：chainmon 由 chainmon-restart.timer 每小时重启一次（内存兜底），增量类指标在重启后归零并重建基线，累计已重置 "+num(rsReset)+" 次。本页因此优先使用累计值与窗口值，不展示「近一分钟增量」。",
+    "<b>自动告警覆盖有限</b>：只对单周期「失败关闭、R8 验证缺失、干净源失败、证书到期、客户端洪泛」五类条件判定，不含 DNSSEC bogus。0 条告警 ≠ 全链路健康：unbound A 验签失败 "+num(o.unbound_bogus)+" 条不在告警判定范围内，仍列在下方解析器表中。SERVFAIL 自 2026-10-28 起按<b>采集窗口增量</b>判定（见下一条），不再用累计值触发降级。",
+    "<b>每小时重启</b>：chainmon 由 chainmon-restart.timer 每小时重启一次（内存兜底），增量类指标在重启后归零并重建基线，累计已重置 "+num(rsReset)+" 次。本页因此优先使用累计值与窗口值，不展示「近一分钟增量」；唯一例外是 SERVFAIL 比值——unbound 的计数会被 reload 或一次 <code>unbound-control stats</code>（非 <code>stats_noreset</code>）读取清零，累计值直接相除没有意义，故改用相邻快照差分，且样本不足 20 次查询时不作判定。",
     "<b>拒绝服务事件</b>：dnsguard 事件流中出现 VERMISMATCH / 拒服务时，顶栏判定会降级为「需关注」——这类事件不属于自动告警覆盖的 5 类阈值条件，但代表核对链路自身在拒答，必须人工介入（查 current 软链与两进程 cwd）。",
     "<b>安全计数</b>：dnsguard 的失败关闭 "+num(st.fail_closed)+" 次、策略采纳 "+num(st.policy_adopted)+" 次均为累计值，跨重启保留；判据命中或改道次数不等于投毒次数，CDN/Geo 差异同样可能产生分歧。",
     "<b>不展示的字段</b>：guard_lat_p50/95/99、guard_gt1000/2000、cache_chain.hit_pct/hits/queries、upstream_share、block_ratio_auth、cache_hit_ratio_auth 在当前环境下恒空或与窗口口径不同源；净处理时延 net_latency_* 只是扣掉基线后的平移，无信息增益，一并不单列。"
@@ -945,9 +1785,13 @@ var LAST=null;
 function render(d){
   LAST=d;
   try{ document.documentElement.classList.remove("booting"); }catch(e){}
+  safe(function(){renderLocate(d);},"locate");
   safe(function(){renderTop(d);},"top");
   safe(function(){renderKpis(d);},"kpi");
   safe(function(){renderFlow(d);},"flow");
+  /* 架构图上色独立一格：renderFlow 里任一明细卡片畸形抛错会被 safe(...,"flow") 吞掉，
+     那种情况下架构图会静默冻结在上一次数据 —— 所以不能跟它绑在同一个 try 里。 */
+  safe(function(){paintArch();},"arch");
   safe(function(){renderEntry(d);},"entry");
   safe(function(){renderLatency(d);},"lat");
   safe(function(){renderSlow(d);},"slow");
@@ -1022,12 +1866,72 @@ function cycleTheme(){
 }
 
 initTheme();
+/* 1400px 宽的架构图压进手机宽度后字号只剩约 3px，等于不可读。
+   窄屏因此默认用"原始大小"（字号保持 11px）在卡片内横向平移，而不是整图硬缩。 */
+try{ if((window.innerWidth||9999)<760) setZoom("wide", true); }catch(e){}
+/* 只在加载时判一次，横竖屏切换后就错了：竖屏 wide、转横屏本该 fit。 */
+try{
+  var _mq=window.matchMedia ? window.matchMedia("(max-width:760px)") : null;
+  if(_mq && _mq.addListener){
+    _mq.addListener(function(ev){ try{ setZoom(ev.matches?"wide":"fit", true); }catch(e){} });
+  } else if(_mq && _mq.addEventListener){
+    _mq.addEventListener("change", function(ev){ try{ setZoom(ev.matches?"wide":"fit", true); }catch(e){} });
+  }
+}catch(e){}
+/* 架构图节点带 tabindex="0" role="button"，键盘必须能激活，
+   否则等于对读屏/纯键盘用户谎称"这是按钮"。 */
+document.addEventListener("keydown",function(e){
+  if(e.key!=="Enter" && e.key!==" " && e.key!=="Spacebar") return;
+  var t=e.target; if(!t || !t.closest) return;
+  var g=t.closest("g[data-node-id]");
+  if(!g) return;
+  e.preventDefault();
+  archPick(g.getAttribute("data-node-id"), false);
+});
 document.addEventListener("click",function(e){
   var t=e.target;
-  if(!t || !t.id) return;
+  if(!t) return;
+  /* 架构图组件：SVG 里任意子元素被点到都算，向上找最近的 data-node-id */
+  try{
+    var g = t.closest ? t.closest("g[data-node-id]") : null;
+    if(g){ e.preventDefault(); archPick(g.getAttribute("data-node-id"), false); return; }
+  }catch(err){}
+  /* 图上"在下方明细中查看"的链接：只在卡片不可见时才滚动，避免页面无故跳走 */
+  var a = t.closest ? t.closest("[data-loccard]") : null;
+  if(a){ e.preventDefault(); locCard(a.getAttribute("data-loccard")); return; }
+  var b = t.closest ? t.closest("[data-zoom]") : null;
+  if(b && b.parentNode && b.parentNode.id==="arch-zoom"){ setZoom(b.getAttribute("data-zoom")); return; }
+  if(!t.id) return;
   if(t.id==="btn-refresh"){ load(); }
   else if(t.id==="btn-theme"){ cycleTheme(); }
 });
+/* 架构图缩放开/关：整图（等比缩放到卡片宽）↔ 原始大小（1400px，窄屏横向平移）。
+   手机上一味缩到整图会把 11px 的组件名压成 3px，等于不可读，所以给用户一个不缩的选项。 */
+function setZoom(v, quiet){
+  var w=$("arch-wrap"), box=$("arch-zoom"); if(!w) return;
+  v = (v==="wide") ? "wide" : "fit";
+  w.setAttribute("data-zoom", v);
+  if(box){
+    var bs=box.querySelectorAll("button"), i;
+    for(i=0;i<bs.length;i++) bs[i].setAttribute("aria-pressed", bs[i].getAttribute("data-zoom")===v ? "true" : "false");
+  }
+  /* 切到原始大小时把图横向滚到"有问题的那一段"附近，省得用户自己找 */
+  if(v==="wide" && !quiet){
+    try{
+      var bad=null, gs=w.querySelectorAll("g[data-node-id]");
+      for(var j=0;j<gs.length;j++){
+        var nd=archNode(gs[j].getAttribute("data-node-id"));
+        if(nd && stNorm(nd.status)==="err"){ bad=gs[j]; break; }
+      }
+      if(bad && bad.scrollIntoView){ bad.scrollIntoView({block:"nearest",inline:"center"}); }
+    }catch(e){}
+  }
+}
+/* 兜底：故障定位列表历史上用过内联 onclick="return locGo('x')"，
+   而本脚本整体在 IIFE 内、locGo 并非全局 ⇒ 必然 ReferenceError。
+   现在改成 data-loccard 事件委托，这里再把它挂到 window，
+   保证任何残留的内联调用（或用户在控制台调用）都不再抛错。 */
+try{ window.locGo=locGo; window.locCard=locCard; window.archPick=archPick; }catch(e){}
 tick=setInterval(function(){
   if(document.hidden) return;
   updateTick();

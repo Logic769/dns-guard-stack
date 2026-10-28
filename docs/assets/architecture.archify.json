@@ -3,7 +3,7 @@
   "diagram_type": "architecture",
   "meta": {
     "title": "dns-guard-stack 解析链架构",
-    "subtitle": "公网客户端 → dnsdist 入口层 → 主 AdGuard Home → guard 决策层 → 候选源 → 上游互联网",
+    "subtitle": "公网客户端 → AdGuard Home 入口（TLS + 按客户端 IP 注入 ECS /24）→ dnsdist 缓存层（内网 5300，ECS 感知）→ guard 决策层 → 候选源 → 上游互联网",
     "locale": "zh-CN",
     "output": "docs/assets/architecture.html",
     "visual_preset": "signal-flow",
@@ -27,32 +27,32 @@
     {
       "id": "dnsdist",
       "type": "security",
-      "label": "dnsdist 入口层",
-      "sublabel": "宿主服务 · 853 / 444 · TLS 终结",
+      "label": "dnsdist 缓存层",
+      "sublabel": "宿主 · 内网 172.18.0.1:5300",
       "pos": [
-        274,
-        368
+        560,
+        372
       ],
       "size": [
-        164,
-        112
+        172,
+        100
       ],
-      "tag": "PacketCache · 限流"
+      "tag": "PacketCache 131072 · parseECS · 限流"
     },
     {
       "id": "adgh",
       "type": "backend",
-      "label": "adgh 主 AdGuard Home",
-      "sublabel": "容器 · 过滤 + 缓存",
+      "label": "adgh · 公网入口",
+      "sublabel": "853 DoT / 444 DoH · TLS 终结",
       "pos": [
-        517,
-        382
+        280,
+        372
       ],
       "size": [
-        158,
-        84
+        172,
+        100
       ],
-      "tag": "上游只指向 guard"
+      "tag": "ECS /24 · 规则过滤 · 缓存关闭"
     },
     {
       "id": "guard",
@@ -60,22 +60,22 @@
       "label": "guard 决策层",
       "sublabel": "宿主网关 · 5355 / 5356",
       "pos": [
-        740,
+        850,
         356
       ],
       "size": [
         176,
         136
       ],
-      "tag": "准入 · 共识 · 见证 · 否决"
+      "tag": "准入 · 共识 · 见证 · 否决 · TTL 收口"
     },
     {
       "id": "unbound",
       "type": "backend",
       "label": "unbound · A 侧",
-      "sublabel": "本机 DNSSEC 验证",
+      "sublabel": "本机 DNSSEC 验签 · forward 双上游",
       "pos": [
-        1000,
+        1100,
         84
       ],
       "size": [
@@ -87,9 +87,9 @@
       "id": "unbound-b",
       "type": "backend",
       "label": "unbound-b · B 侧",
-      "sublabel": "国内 6 家加密 DoT",
+      "sublabel": "国内 3 家加密 DoT · ECS 分片",
       "pos": [
-        1000,
+        1100,
         150
       ],
       "size": [
@@ -100,10 +100,10 @@
     {
       "id": "aghdq",
       "type": "cloud",
-      "label": "aghdq · DoQ 主",
-      "sublabel": "NextDNS DoQ",
+      "label": "aghdq · 已摘除",
+      "sublabel": "NextDNS DoQ · 上游握手故障",
       "pos": [
-        1000,
+        1100,
         216
       ],
       "size": [
@@ -114,10 +114,10 @@
     {
       "id": "aghdq2",
       "type": "cloud",
-      "label": "aghdq2 · DoQ 次",
-      "sublabel": "Quad9 DoQ · slow 列表",
+      "label": "aghdq2 · DoQ 备 / alt",
+      "sublabel": "Quad9 DoQ · 备用上游 + 核对",
       "pos": [
-        1000,
+        1100,
         282
       ],
       "size": [
@@ -128,10 +128,10 @@
     {
       "id": "aghcf",
       "type": "cloud",
-      "label": "aghcf · 见证 / 透传",
-      "sublabel": "Cloudflare DoT",
+      "label": "aghcf · DoT 主 + 见证",
+      "sublabel": "Cloudflare + censurfridns（parallel）",
       "pos": [
-        1000,
+        1100,
         348
       ],
       "size": [
@@ -142,10 +142,10 @@
     {
       "id": "unbound-alt",
       "type": "backend",
-      "label": "unbound-alt · 核对",
-      "sublabel": "第三方 DoT · 独立 TCB",
+      "label": "unbound-alt · 已停用",
+      "sublabel": "alt 已改走 aghdq2（Quad9 DoQ）",
       "pos": [
-        1000,
+        1100,
         414
       ],
       "size": [
@@ -159,7 +159,7 @@
       "label": "dnscrypt-proxy · 影子",
       "sublabel": "加密候选 + 采样",
       "pos": [
-        1000,
+        1100,
         480
       ],
       "size": [
@@ -173,7 +173,7 @@
       "label": "上游互联网",
       "sublabel": "NextDNS · Quad9 · Cloudflare · 国内 DoT",
       "pos": [
-        1270,
+        1340,
         180
       ],
       "size": [
@@ -188,7 +188,7 @@
       "label": "alt-replica-unb",
       "sublabel": "alt 副本 · 演练 / 灰度",
       "pos": [
-        1270,
+        1340,
         560
       ],
       "size": [
@@ -203,7 +203,7 @@
       "label": "verifier",
       "sublabel": "AF_UNIX · 独立进程交叉验证",
       "pos": [
-        740,
+        560,
         560
       ],
       "size": [
@@ -245,7 +245,7 @@
       "label": "名单刷新",
       "sublabel": "cn 名单归档 + 验签",
       "pos": [
-        576,
+        590,
         800
       ],
       "size": [
@@ -259,11 +259,11 @@
       "label": "防火墙与地址对账",
       "sublabel": "iptables 收口 + 容器 IP 一致性",
       "pos": [
-        832,
+        850,
         800
       ],
       "size": [
-        300,
+        240,
         108
       ]
     }
@@ -271,7 +271,7 @@
   "boundaries": [
     {
       "kind": "region",
-      "label": "容器网络 dnsnet 172.18.0.0/16 · 固定 IP",
+      "label": "容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）",
       "wraps": [
         "unbound",
         "unbound-b",
@@ -295,20 +295,20 @@
   "connections": [
     {
       "from": "client",
-      "to": "dnsdist",
+      "to": "adgh",
       "label": "853 DoT · 444 DoH",
       "variant": "emphasis"
     },
     {
-      "from": "dnsdist",
-      "to": "adgh",
-      "label": "内腿 53",
+      "from": "adgh",
+      "to": "dnsdist",
+      "label": "ECS · 内网 5300",
       "variant": "emphasis"
     },
     {
-      "from": "adgh",
+      "from": "dnsdist",
       "to": "guard",
-      "label": "唯一上游",
+      "label": "缓存未命中 → 5355",
       "variant": "emphasis"
     },
     {
@@ -323,30 +323,31 @@
     },
     {
       "from": "guard",
-      "to": "aghdq",
+      "to": "aghcf",
       "variant": "emphasis"
     },
     {
       "from": "guard",
       "to": "aghdq2",
-      "label": "hedge",
-      "variant": "dashed"
-    },
-    {
-      "from": "guard",
-      "to": "aghcf",
-      "label": "见证",
-      "variant": "dashed"
-    },
-    {
-      "from": "guard",
-      "to": "unbound-alt",
+      "label": "alt / 备上游",
       "variant": "emphasis"
+    },
+    {
+      "from": "guard",
+      "to": "aghdq",
+      "label": "已摘除",
+      "variant": "dashed"
     },
     {
       "from": "guard",
       "to": "dnscrypt",
       "label": "影子",
+      "variant": "dashed"
+    },
+    {
+      "from": "guard",
+      "to": "unbound-alt",
+      "label": "已停用",
       "variant": "dashed"
     },
     {
@@ -358,19 +359,11 @@
       "to": "upstream"
     },
     {
-      "from": "aghdq",
-      "to": "upstream"
-    },
-    {
-      "from": "aghdq2",
-      "to": "upstream"
-    },
-    {
       "from": "aghcf",
       "to": "upstream"
     },
     {
-      "from": "unbound-alt",
+      "from": "aghdq2",
       "to": "upstream"
     },
     {
@@ -387,7 +380,7 @@
     },
     {
       "from": "probes",
-      "to": "dnsdist",
+      "to": "adgh",
       "label": "探活",
       "variant": "dashed"
     },
@@ -415,27 +408,27 @@
       "dot": "cyan",
       "title": "必经链（实线）",
       "items": [
-        "客户端 → dnsdist → 主 AdGuard Home → guard 单一入口",
-        "guard 是唯一策略实现，AdGuard 没有绕过它的 fallback",
-        "候选源出网前都要经 guard 的准入判定"
+        "客户端 → AdGuard Home（TLS 终结 + 注入 ECS /24）→ dnsdist（ECS 感知缓存）→ guard 单一入口",
+        "guard 是唯一策略实现，AdGuard 没有绕过它的 fallback（fallback_dns: []）",
+        "候选源出网前都要经 guard 的准入判定；无独立佐证的放行出口统一把 TTL 压到 60s"
       ]
     },
     {
       "dot": "amber",
       "title": "条件通道（虚线）",
       "items": [
-        "aghdq2 仅在 hedge 之后并发，不和主通道抢首答",
-        "aghcf 提供国内域名存在性见证与 SERVFAIL 快速透传",
-        "dnscrypt 只做影子采样，应答不能当作 DNSSEC 证据"
+        "aghcf 是 unbound A 的主 forward-addr（Cloudflare + censurfridns 并行），兼国内域名存在性见证",
+        "aghdq2 是 unbound A 的备 forward-addr，兼 guard 的 alt 认证备用与 DoQ 核对通道",
+        "aghdq（NextDNS）上游握手持续失败，已从 forward-addr 摘除；dnscrypt 只做影子采样"
       ]
     },
     {
       "dot": "slate",
       "title": "部署口径",
       "items": [
-        "容器全部在 Compose 网络 dnsnet 里用固定 IP，guard 位于宿主网关侧",
-        "alt-replica-unb 在 altreplica0（10.99.0.0/24），用于演练与灰度",
-        "dnsdist 是宿主 systemd 服务，不是容器；legacy 部署改由 Nginx 承接 853 / 444"
+        "生产实例用 Docker 默认 bridge（无固定 IP），容器重启会漂移，靠 5 分钟一次的地址对账收敛",
+        "AGH 自带缓存必须关：它是域名单键，不按 ECS 分片（实测把 A 省答案返回给 B 省）",
+        "配置模板仍是旧形态（dnsdist 公网入口），差异表见 ARCHITECTURE.md 第 8 节"
       ]
     }
   ]

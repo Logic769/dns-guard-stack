@@ -2686,6 +2686,66 @@ def _conn_get(src_ip, sport, dport, ttl, win, ip_id, df, opts, first_ts=None):
         return c
 
 
+# =========================================================================
+# 2026-10-28 CPU 优化：给 AF_PACKET 挂内核侧 BPF 过滤
+# 原来 socket 以 htons(3)=ETH_P_ALL 打开却**没有挂任何过滤**（全文件无 SO_ATTACH_FILTER），
+# 整机所有报文都要 recvmsg 进 Python、逐包 parse_packet 之后才按端口丢弃。实测该机 DNS
+# 相关报文（tcp/udp 853/444/443）只占 eth0 抓到总量的 14%，其余 86% 纯属用户态空转。
+# 下面这段是指令由 tcpdump -dd 编译而来（28 条，含 IPv6 与 IPv4 分片处理），语义与
+# CFG["tls_ports"] + QUIC 完全一致，只把需要的报文交付上来。
+# =========================================================================
+_BPF_TLS = [
+    (0x28, 0, 0, 0x0000000c),
+    (0x15, 0, 9, 0x000086dd),
+    (0x30, 0, 0, 0x00000014),
+    (0x15, 1, 0, 0x00000006),
+    (0x15, 0, 22, 0x00000011),
+    (0x28, 0, 0, 0x00000036),
+    (0x15, 19, 0, 0x00000355),
+    (0x15, 18, 0, 0x000001bc),
+    (0x15, 17, 0, 0x000001bb),
+    (0x28, 0, 0, 0x00000038),
+    (0x15, 15, 13, 0x00000355),
+    (0x15, 0, 15, 0x00000800),
+    (0x30, 0, 0, 0x00000017),
+    (0x15, 1, 0, 0x00000006),
+    (0x15, 0, 12, 0x00000011),
+    (0x28, 0, 0, 0x00000014),
+    (0x45, 10, 0, 0x00001fff),
+    (0xb1, 0, 0, 0x0000000e),
+    (0x48, 0, 0, 0x0000000e),
+    (0x15, 6, 0, 0x00000355),
+    (0x15, 5, 0, 0x000001bc),
+    (0x15, 4, 0, 0x000001bb),
+    (0x48, 0, 0, 0x00000010),
+    (0x15, 2, 0, 0x00000355),
+    (0x15, 1, 0, 0x000001bc),
+    (0x15, 0, 1, 0x000001bb),
+    (0x6, 0, 0, 0x00040000),
+    (0x6, 0, 0, 0x00000000),
+]
+
+_BPF_KEEP = []          # 必须保活：内核只拷贝指针，缓冲区被回收会导致过滤规则乱掉
+
+
+def _attach_bpf(sock_):
+    """把 _BPF_TLS 挂到 AF_PACKET socket 上。失败不致命（退化为无过滤，功能不变，只费 CPU）。"""
+    try:
+        import ctypes
+        raw = b"".join(struct.pack("HBBI", c, jt, jf, k) for c, jt, jf, k in _BPF_TLS)
+        code_buf = ctypes.create_string_buffer(raw, len(raw))
+        prog_buf = ctypes.create_string_buffer(16)      # struct sock_fprog: u16 len + 6B pad + ptr
+        struct.pack_into("H", prog_buf, 0, len(_BPF_TLS))
+        struct.pack_into("Q", prog_buf, 8, ctypes.addressof(code_buf))
+        sock_.setsockopt(socket.SOL_SOCKET, 26, prog_buf.raw)   # 26 = SO_ATTACH_FILTER
+        _BPF_KEEP.append((code_buf, prog_buf))
+        log("已挂载内核 BPF 过滤：只接收 tcp/udp 853/444/443 共 %d 条指令" % len(_BPF_TLS))
+        return True
+    except Exception as e:
+        log("挂载内核 BPF 过滤失败（继续无过滤抓包，功能不受影响）: %s" % e)
+        return False
+
+
 def sniff_loop():
     iface = CFG["iface"]
     try:
@@ -2706,6 +2766,7 @@ def sniff_loop():
                 log("启用时间戳选项 %s 失败: %s" % (opt, e))
         s.bind((iface, 0))
         s.settimeout(2.0)
+        _attach_bpf(s)
     except Exception as e:
         log("抓包套接字打开失败（%s）：%s" % (iface, e))
         return
@@ -4982,8 +5043,14 @@ def join_chain_level():
         return _CHAIN_MEMO["level"], _CHAIN_MEMO["cts"], False
     try:
         import urllib.request as _u
-        raw = _u.urlopen("http://127.0.0.1:8787/api/metrics", timeout=4).read().decode("utf-8", "ignore")
+        _resp = _u.urlopen("http://127.0.0.1:8787/api/metrics", timeout=4)
+        raw = _resp.read().decode("utf-8", "ignore")
         d = json.loads(raw)
+        # 2026-10-27：chainmon 重启后首轮采集完成前返回 HTTP 202 + {"ready": false}，且没有 chain 字段。
+        # 旧实现把它当成「0 个节点」判成 warn，页面就显示「链路降级」（实测每小时约 30 秒空窗）。
+        # 「还没采到」是「不知道」，不是「降级」：归还 stale，让页面显示「状态待确认」，且不写 30 秒记忆。
+        if getattr(_resp, "status", 200) == 202 or d.get("ready") is False or not ((d.get("chain") or {}).get("nodes")):
+            return "warn", int(now()), True
         st = [n.get("status") for n in (((d.get("chain") or {}).get("nodes")) or [])]
         cts = int(d.get("ts") or now())
         if not st:

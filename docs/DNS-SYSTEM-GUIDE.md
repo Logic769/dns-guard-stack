@@ -1,6 +1,8 @@
 # DNS 解析系统详解 · dns.example.com
 
-> 编写时间：2026-10-15 23:30（Asia/Shanghai）；2026-10-25 按 dnsdist 入口与 aghdq2 / aghcf 两个新出口做了同步（章节结构与判据未变，数值以 8.2 的截止时间为准）
+> 编写时间：2026-10-15 23:30（Asia/Shanghai）；2026-10-25 按 dnsdist 入口与 aghdq2 / aghcf 两个新出口同步；**2026-10-28 按「AGH 公网入口 + ECS / dnsdist 退到内网缓存层」再同步入口相关章节**（第 0 / 1.1 / 1.2 / 1.3 / 2.2 与 dnsdist 配置示例）。其余章节的结构与判据未变，数值以 8.2 的截止时间为准
+>
+> **入口形态已再次变更（2026-10-28）**：公网 853 / 444 现在由 AdGuard Home 终结，并按客户端真实 IP 注入 ECS `/24`；dnsdist 退到内网 `172.18.0.1:5300` 做 ECS 感知缓存（`parseECS=true`，131072 条）。**本文件主体仍按 2026-10-15 / 10-25 的形态叙述**，两种形态的完整差异表与每项差异的原因见 [ARCHITECTURE.md 第 8 节](ARCHITECTURE.md)
 > 对应线上状态：首次编写时为发布 `20261015-audit-fixes-11`（guard 于 22:54:56 启动，PID 1765985）；当前发布号、PID 与条目数以实际部署为准
 > 依据：对一台已部署实例（`SERVER_IP`）的**只读**勘察结果（systemd/容器/端口/配置/名单/脚本清单），以及历次审计与修复记录。
 >
@@ -27,12 +29,12 @@
 一句话概括数据流（正常路径）：
 
 ```
-客户端 ──DoT:853 / DoH:444──▶ dnsdist（TLS 终结 + 真实客户端 IP + PacketCache + 限速）
-       ──▶ AdGuard Home（adgh，过滤 + 缓存）
+客户端 ──DoT:853 / DoH:444──▶ AdGuard Home（adgh：TLS 终结 + 按客户端 IP 注入 ECS /24 + 规则过滤）
+       ──▶ dnsdist（内网 172.18.0.1:5300：ECS 感知 PacketCache 131072 条 + 限速）
        ──▶ guard（唯一上游 172.18.0.1:5355，防投毒决策中枢）
-              ├─ 境外主源：unbound A ──▶ aghdq ──▶ NextDNS（DoQ）+ 本地 DNSSEC 验证
-              ├─ 国内分流：unbound B ──▶ 6 条国内加密 DoT（360 / 阿里 / dns.pub）
-              ├─ 认证备用：unbound-alt（境外 DoT）
+              ├─ 境外主源：unbound A ──▶ aghcf（Cloudflare + censurfridns DoT，主）/ aghdq2（Quad9 DoQ，备）+ 本地 DNSSEC 验证
+              ├─ 国内分流：unbound B ──▶ 3 条国内加密 DoT（dot.360.cn / alidns ×2），按 ECS 分片缓存
+              ├─ 认证备用：guard 的 alt 通道 = aghdq2（Quad9 DoQ）
               └─ 独立核验：verifier 进程（Unix socket）
 ```
 
@@ -46,11 +48,11 @@
 
 | 层 | 位置 | 角色 | 说明 |
 |---|---|---|---|
-| ① 接入层 | `dnsdist` `0.0.0.0:853 / 444`（控制台 5199、统计 18083 只在回环）；nginx `0.0.0.0:443` | TLS 终结、限速、缓存、按 SNI 拒绝 | 公网唯一入口。**2026-10-22 起 853/444 由 dnsdist 直接终结**（此前是 nginx stream/http 反代，后端只能看到 127.0.0.1）；443 仍是 nginx，承载看板与站点 |
-| ② 过滤缓存层 | 容器 `adgh`（172.18.0.2:53，另映射 127.0.0.1:4443/8854/3000） | AdGuard Home v0.107.73：过滤规则、DNS 缓存、查询日志 | **唯一上游**只有 guard，`fallback_dns: []` |
+| ① 接入层 | 容器 `adgh` `0.0.0.0:853`(DoT) / `0.0.0.0:444`(DoH) → 容器 853 / 443；nginx `0.0.0.0:443` | TLS 终结、规则过滤、**按客户端真实 IP 注入 ECS `/24`** | 公网唯一入口。**2026-10-28 起 853 / 444 由 AdGuard Home 终结**（2026-10-22 至 10-28 之间才是 dnsdist 直接终结）。只有 AGH 能按客户端 IP 生成 ECS，dnsdist 2.1.3 实测做不到（四种写法全部失效）。443 仍是 nginx，承载看板与站点 |
+| ② 缓存层 | 宿主进程 `dnsdist`（内网 `172.18.0.1:5300`；控制台 5199、统计 18083 只在回环） | ECS 感知 PacketCache（131072 条，`parseECS=true`）、单来源限速（1000 qps / 10s 窗口） | **唯一上游**只有 guard `172.18.0.1:5355`。2026-10-28 起不再终结公网 TLS、不再监听 853 / 444。**AGH 自己的 DNS 缓存必须保持关闭**：它是域名单键，不按 ECS 分片，多用户场景必然串味 |
 | ③ 决策层 | 宿主进程 `guard`（172.18.0.1:5355 udp+tcp；5356 探针通道） | 防投毒核心：分流、判定、缓存、见证 | systemd `dnsguard.service`，发布 13 |
 | ④ 核验层 | 宿主进程 `verifier`（Unix socket `/run/dnsguard/verifier.sock`） | 独立进程做二次核验，隔离资源池 | systemd `dnsguard-verifier.service` |
-| ⑤ 上游层 | 容器 `unbound`(A, 172.18.0.4:5353)、`unbound-b`(B, 172.18.0.5:5354)、`unbound-alt`(alt, 172.18.0.8:5357)、`aghdq`(172.18.0.6:53)、`aghdq2`(172.18.0.9:53)、`aghcf`(172.18.0.10:53)、`alt-replica-unb`(15353) | 三个 Unbound 实例 + 三个上游 AGH 出口（NextDNS / Quad9 / Cloudflare）+ 一个副本 | 全部 mvance/unbound:latest 或 adguard/adguardhome:v0.107.73 |
+| ⑤ 上游层 | 容器 `unbound`(A, 172.18.0.4:5353)、`unbound-b`(B, 172.18.0.3:5354)、`aghdq`(172.18.0.6:53，已摘除)、`aghdq2`(172.18.0.9:53)、`aghcf`(172.18.0.5:53) | 两个 Unbound 实例（A 境外 / B 国内）+ 两个在用的上游 AGH 出口（Quad9 DoQ / Cloudflare + censurfridns DoT） | 全部 mvance/unbound:latest 或 adguard/adguardhome:v0.107.73。`unbound-alt` 与 `alt-replica-unb` 已随 alt 改造停用（alt 现走 `aghdq2`） |
 | ⑥ 独立解析器 | 宿主进程 `dnscrypt-proxy`（127.0.0.2:5353、127.0.0.1:5399） | DNSCrypt/DoH 匿名中继出口 + 国内名单文件搬运 | systemd `dnscrypt-proxy-local.service` |
 | ⑦ 数据层 | `/opt/dnsguard/*.txt`、`/opt/dnscrypt-proxy/*.txt` | 六份名单 + 三份快照 | 见第 5 章 |
 | ⑧ 运维层 | systemd timers + cron + 脚本 | 部署门禁、IP 对账、防火墙对账、探针、看门狗、快照 | 见第 6 章 |
@@ -59,9 +61,9 @@
 
 | 端口 | 监听方 | 用途 |
 |---|---|---|
-| `0.0.0.0:853` (tcp) | dnsdist | DoT 公网入口（`addTLSLocal`，直接终结 TLS，拿得到真实 `remoteaddr`） |
+| `0.0.0.0:853` (tcp) | AGH（容器 `adgh`） | DoT 公网入口：容器内 853，终结 TLS 并拿得到真实 `remoteaddr` |
 | `0.0.0.0:443` (tcp) | nginx | HTTPS：各看板、宝塔等（legacy 的 DoH `/dns-query` 也在这里） |
-| `0.0.0.0:444` (tcp) | dnsdist | DoH 专用端口（`addDOHLocal`，**仅**放行 `/dns-query`） |
+| `0.0.0.0:444` (tcp) | AGH（容器 `adgh`） | DoH 公网入口：容器内 443 → 宿主 444。**必须映射到 444**，devfp 按端口号判定（444→`doh444`、443→普通网页），映射到 443 会让设备指纹看板漏掉 DoH |
 | `127.0.0.1:5199` (tcp) | dnsdist | 控制台（`dnsdist -c` 连接；`setKey` 保护） |
 | `127.0.0.1:18083` (tcp) | dnsdist | 只读 HTTP 统计端点（chainmon 读 `cache-hits` / `cache-misses`） |
 | `172.18.0.1:5355` (udp+tcp) | python3 = guard | AGH 的唯一上游（`dnsnet` 网关地址，默认 172.18.0.1） |
@@ -88,16 +90,16 @@
 | 容器 | 镜像 | 网络位置 | 角色 | 状态 |
 |---|---|---|---|---|
 | `adgh` | adguard/adguardhome:v0.107.73 | 172.18.0.2 | 主入口：过滤 + 缓存 + 查询日志 | Up 2 days |
-| `aghdq` | adguard/adguardhome:v0.107.73 | 172.18.0.6 | 上游 AGH：转发到 `quic://dns.nextdns.io` | Up 4 days |
-| `aghdq2` | adguard/adguardhome:v0.107.73 | 172.18.0.9 | 第二条 DoQ 出口：`quic://dns10.quad9.net`（guard 的 slow 列表 / DoQ2） | Up 4 days |
-| `aghcf` | adguard/adguardhome:v0.107.73 | 172.18.0.10 | Cloudflare 1.1.1.1 DoT：CN 存在性见证 + SERVFAIL 快速透传 | Up 4 days |
+| `aghdq` | adguard/adguardhome:v0.107.73 | 172.18.0.6 | 上游 AGH：`quic://dns.nextdns.io`。**2026-10-28 起上游握手持续失败**（每条查询阻塞十几分钟），已从 unbound A 的 `forward-addr` 摘除；容器仍在跑但不在链路上 |
+| `aghdq2` | adguard/adguardhome:v0.107.73 | 172.18.0.9 | Quad9 DoQ（`quic://dns10.quad9.net`）：unbound A 的**备用** `forward-addr` + guard 的 alt 认证备用（`GUARD_ALT_ADDR`）+ DoQ 核对通道（`GUARD_DOQ_PORT`） |
+| `aghcf` | adguard/adguardhome:v0.107.73 | **172.18.0.5**（曾为 `.10`，容器重启会漂移） | `parallel` 双上游：`tls://1.1.1.1`（裸 IP DoT，不带域名 SNI）+ `tls://unicast.censurfridns.dk`；unbound A 的**主** `forward-addr` 兼 CN 存在性见证源 |
 | `unbound` | mvance/unbound:latest | 172.18.0.4 | 境外主源 A（本地 DNSSEC 验证） | Up 5 days (healthy) |
-| `unbound-b` | mvance/unbound:latest | 172.18.0.5 | 国内分流 B（6 条国内加密 DoT） | Up 5 days (healthy) |
-| `unbound-alt` | mvance/unbound:latest | 172.18.0.8 | 认证备用（境外 DoT，独立 TCB） | Up 5 days (healthy) |
+| `unbound-b` | mvance/unbound:latest | **172.18.0.3**（曾为 `.5`） | 国内分流 B（3 条国内加密 DoT），`subnetcache` + `client-subnet-always-forward`，`num-threads: 16` |
+| `unbound-alt` | mvance/unbound:latest | 172.18.0.8 | 认证备用（境外 DoT，独立 TCB）。**已停用**：alt 现指向 `aghdq2`（Quad9 DoQ），跨洋 DoT 800–1233ms 常超时 |
 | `alt-replica-unb` | mvance/unbound:latest | 10.99.0.2（altreplica0） | alt 的副本，用于演练/灰度 | Up 5 days (healthy) |
 | `openlist` | openlistteam/openlist | 172.19.0.2（baota_net） | 与本 DNS 链路**无关**（文件列表服务） | Up 9 days |
 
-> **IP 口径说明**：本文所有 IP 都是**生产实盘**取值（aghdq2=172.18.0.9、aghcf=172.18.0.10）。
+> **IP 口径说明**：本文的 IP 是**生产实盘**取值，且**会随容器重启漂移**（Docker 默认 bridge，无固定 IP）。2026-10-28 实测：`adgh=172.18.0.2`、`unbound=172.18.0.4`、`unbound-b=172.18.0.3`、`aghdq=172.18.0.6`、`aghdq2=172.18.0.9`、`aghcf=172.18.0.5`。任何时刻以 `docker inspect` 与 `dnsguard-ip-reconcile.sh --check` 的即时输出为准。
 > 仓库 `docker-compose.yml` 的一键部署把 dnscrypt 容器放在 `.9`，所以新栈默认是
 > **aghdq2=172.18.0.11、aghcf=172.18.0.12**（见 `.env.example` 的 `AGHDQ2_IP`/`AGHCF_IP`）。
 > 两套值不通用：拿本表的 .9/.10 去套仓库默认栈会和 dnscrypt 撞车。
@@ -227,18 +229,17 @@
 配置模板 `deploy/dnsdist/dnsdist.conf.tpl` → 安装后落在 `/etc/dnsdist/dnsdist.conf`，要点：
 
 ```lua
-setACL({"0.0.0.0/0", "::/0"})                       -- 默认 ACL 只含内网，不放开会拒绝所有公网客户端
-newServer({address="172.18.0.2:53", name="agh", checkInterval=10})
-pc = newPacketCache(32768, {maxTTL=86400, minTTL=0, temporaryFailureTTL=60, staleTTL=60, dontAge=false})
+setACL({"127.0.0.0/8", "172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"})   -- 缓存层只对内网开放（公网入口是 AGH）
+setLocal("172.18.0.1:5300")                        -- 2026-10-28 起只监听内网；不再有 addTLSLocal / addDOHLocal
+newServer({address="172.18.0.1:5355", name="guard", checkInterval=10})
+pc = newPacketCache(131072, {maxTTL=86400, minTTL=0, temporaryFailureTTL=60, staleTTL=60, dontAge=false, parseECS=true})
 getPool(""):setCache(pc)
-addTLSLocal("0.0.0.0:853", .../fullchain.pem, .../privkey.pem, {provider="openssl"})
-addDOHLocal("0.0.0.0:444", .../fullchain.pem, .../privkey.pem, {"/dns-query"}, {provider="openssl"})
-dbr:setQueryRate(200, 10, "Exceeded query rate", 10, DNSAction.Refused)
+dbr:setQueryRate(1000, 10, "Exceeded query rate", 5, DNSAction.Refused)
 ```
 
 - 缓存**在这一层**（不是 AGH）⇒ chainmon 的命中率必须读 `127.0.0.1:18083` 的统计接口，否则永远显示 0%；
 - 查询日志 `/var/log/dnsdist-query.log` 由 `markQuery` 以 append 方式写（`pcall` 包住，写日志失败绝不影响解析），chainmon 的 qlog 窗口读它；
-- 853/444 与 nginx 片段**端口互斥**：切换时先禁用 nginx 的 `tcp/dnsguard-dot-853.conf` 与 `9.dnsguard-doh444.conf`。
+- 853 / 444 与 nginx 片段**端口互斥**；2026-10-28 起这两个端口归 AdGuard Home，dnsdist 只剩内网 5300。
 
 **legacy：nginx 的 DoT :853**（2026-10-22 之前的入口，现只作退路；配置 `/www/server/panel/vhost/nginx/tcp/dns-example-dot-853.conf`，1470 B，stream 块）：
 
@@ -585,8 +586,9 @@ guard 收到的是 AGH 转来的 DNS 查询（UDP/TCP 到 `172.18.0.1:5355`）�
 3. 打上 EDE：`ede: yes`、`ede-serve-expired: yes`——当它给出"过期缓存"时，会在响应里标注，让 guard 知道"这是陈旧的"；
 4. `prefetch-key: yes`：预取 DNSKEY，减少验证等待；
 5. `private-address` 过滤内网地址；
-6. `num-threads: 2`、`outgoing-num-tcp: 100`（国内源并发需求比境外高，因为是"就近"查询）；
-7. 它的**明文 53 出站被 iptables DROP**（`UNBOUNDB_53` 链），只能走 DoT——防止"加密进、明文出"的降级。
+6. `num-threads: 16`、`outgoing-num-tcp: 100`（2026-10-28 从 2 提到 16：转发吞吐随线程近线性上升 —— 2 线程 108 QPS / p99 1514ms，16 线程 717 QPS / p99 339ms；国内源并发需求比境外高，因为是「就近」查询）；
+7. `module-config: "subnetcache validator iterator"` + `client-subnet-always-forward: yes`：把客户端 ECS 转发给上游，并**按 ECS 分片缓存**（只转发不分片会让各省答案互相覆盖；这两项要一起开，只验证过同时开启的组合）；
+8. 它的**明文 53 出站被 iptables DROP**（`UNBOUNDB_53` 链），只能走 DoT —— 防止「加密进、明文出」的降级。
 
 **为什么它危险**：国内递归源本身是"快速、可被影响"的：
 - 它可能给出**错误 IP 但格式正常**（`NOERROR + an=1`）；

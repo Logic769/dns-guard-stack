@@ -48,3 +48,9 @@ Thumbs.db
 *.htpasswd
 .env.*
 !.env.example
+
+# archify 生成收据（每次重新生成都会变，不入库）
+docs/assets/*.finalize.json
+docs/assets/*.finalize-summary.json
+docs/assets/*.delivery.json
+docs/assets/*.browser-check.json

@@ -440,7 +440,8 @@ def _policy_cn_answer(name, qtype, a_wire, b_wire, deadline=None, query_id=None,
 
 
 def _adm_key(name, qtype):
-    return (str(name).lower().rstrip("."), int(qtype or 1))
+    # 2026-10-28 ECS：第三维 = 客户端 ECS（无 ECS 时为 None）⇒ 不同 /24 的答案互不串用
+    return (str(name).lower().rstrip("."), int(qtype or 1), _cur_ecs_key())
 
 
 def _adm_drop(k):
@@ -506,7 +507,7 @@ def _adm_cache_get(name, qtype, now=None):
         if (str(rec.get("view") or "default") != "default"
                 or bool(rec.get("do")) is not True
                 or bool(rec.get("cd")) is not False
-                or rec.get("ecs") is not None
+                or rec.get("ecs") != _cur_ecs_key()
                 or int(rec.get("qclass") or 1) != 1):
             _stats["adm_cache_view_mismatch"] = _stats.get("adm_cache_view_mismatch", 0) + 1
             return None
@@ -854,7 +855,7 @@ def _adm_cache_put(name, qtype, wire, verdict, source, ttl, now=None, refresh=Fa
         # `qclass`/`do`/`cd`/`ecs`/`view` = 视图维度 ✓（命中时比对，见 `_adm_cache_get()`）：
         # 无法证明同一视图时**不共用缓存** ✗。
         "stored": now, "stored_mono": time.monotonic(), "rr_ttls": _adm_rr_ttls(wire),
-        "qclass": 1, "do": True, "cd": False, "ecs": None, "view": "default",
+        "qclass": 1, "do": True, "cd": False, "ecs": _cur_ecs_key(), "view": "default",
         # ★ 方案 §2 第 48 行："**绝对证据失效时间**" ✓ —— 它回答的是另一个问题 ✗→✓：
         # `until`/`valid_until` = "我方允许多久复用" ✓（含策略上限，SECURE≤900 / ACCEPTED≤300）；
         # `evidence_until` = "**证据本身**到什么时候失效" ✓（签名失效时刻 / RRset 原始到期），
@@ -1554,6 +1555,88 @@ def _src_count():
         return 0
 
 
+def _ecs_opt_from_msg(msg):
+    """从客户端查询报文里提取 ECS option 的原始 RDATA（family+src+scope+addr），无则 None。
+
+    2026-10-28 ECS 改造：per-user CDN 优选要求把客户端真实 /24 透传到国内腿。
+    这里只读不写，异常一律退化为 None（= 按无 ECS 处理，行为与改造前一致）。
+    """
+    try:
+        if not msg or len(msg) < 12:
+            return None
+        qd = struct.unpack("!H", msg[4:6])[0]
+        ar = struct.unpack("!H", msg[10:12])[0]
+        if ar < 1:
+            return None
+        i = 12
+        for _ in range(qd):
+            while i < len(msg) and msg[i]:
+                i += 1 + msg[i]
+            i += 1 + 4
+        if i > len(msg):
+            return None
+        for _ in range(ar):
+            while i < len(msg) and msg[i]:
+                if (msg[i] & 0xC0) == 0xC0:
+                    i += 2
+                    break
+                i += 1 + msg[i]
+            else:
+                if i < len(msg) and msg[i] == 0:
+                    i += 1
+            if i + 10 > len(msg):
+                return None
+            rtype, rclass, ttl, rdlen = struct.unpack("!HHIH", msg[i:i + 10])
+            i += 10
+            if i + rdlen > len(msg):
+                return None
+            if rtype == 41:
+                rd = msg[i:i + rdlen]
+                j = 0
+                while j + 4 <= len(rd):
+                    ocode, olen = struct.unpack("!HH", rd[j:j + 4])
+                    j += 4
+                    if j + olen > len(rd):
+                        break
+                    if ocode == 8 and olen >= 4:
+                        return rd[j:j + olen]
+                    j += olen
+                return None
+            i += rdlen
+    except Exception:
+        return None
+    return None
+
+
+def _ecs_key(rd):
+    """把 ECS RDATA 归一成可哈希的缓存维度；无则 None。"""
+    if not rd or len(rd) < 4:
+        return None
+    try:
+        return (struct.unpack("!H", rd[0:2])[0], int(rd[2] & 0xFF), bytes(rd[4:]))
+    except Exception:
+        return None
+
+
+def _cur_ecs_rd():
+    """当前请求的 ECS RDATA（由 _tr_begin() 在 worker 线程入口写入 _TR）。"""
+    try:
+        return _tr().get("ecs_rd")
+    except Exception:
+        return None
+
+
+def _cur_ecs_key():
+    return _ecs_key(_cur_ecs_rd())
+
+
+def _ecs_clause(rd):
+    """ECS option 在 OPT rdata 里的完整编码（code=8 + len + rdata）。"""
+    if not rd:
+        return b""
+    return struct.pack("!HH", 8, len(rd)) + bytes(rd)
+
+
 def _tr_begin(msg, entry="udp", src_cls=None):
     """在**处理入口**建立请求上下文：追踪 ID + 单调/墙钟起点 ✓。
 
@@ -1568,6 +1651,7 @@ def _tr_begin(msg, entry="udp", src_cls=None):
     with _QRID_LOCK:
         _QRID[0] = (_QRID[0] + 1) & 0xFFFFFFFF
         t["id"] = _QRID[0]
+    t["ecs_rd"] = _ecs_opt_from_msg(msg)   # 2026-10-28 ECS：每请求复位
     t["mono0"] = time.monotonic()
     t["t0"] = time.time()
     t["entry"] = entry
@@ -2610,7 +2694,7 @@ _ADM_CACHE = {}
 # 为什么用 list 而不是 global：与现场既有 `_WEAK_EXPIRE_LAST[0]` / `_QRID[0]` 同风格 ✓
 # —— 避免在每个写入点写 `global` ✗（漏一处就会静默变成局部变量 ✗ 难查 ✗）。
 _ADM_BYTES = [0]
-_ADM_CACHE_MAX = int(os.environ.get("GUARD_ADM_CACHE_MAX", "4000"))
+_ADM_CACHE_MAX = int(os.environ.get("GUARD_ADM_CACHE_MAX", "12000"))
 # 方案 §2 第 48/55 行：缓存记录**带 schema 号** ✓ —— 记录结构一变就升号，
 # `_adm_cache_get()` 命中时比对；号不一致 ⇒ 当作未命中（**旧 schema 拒绝加载** ✓）。
 # 为什么必需：缓存记录是"证据 + 策略"的复合体 ✗，字段语义一旦变化（例如
@@ -3308,7 +3392,7 @@ CNIP_MODE = (os.environ.get("GUARD_CNIP_MODE", "off") or "off").strip().lower()
 if CNIP_MODE not in ("off", "observe", "enforce"):
     CNIP_MODE = "off"
 CORROB_TTL = float(os.environ.get("GUARD_CORROB_TTL", "300"))
-CORROB_TIMEOUT = float(os.environ.get("GUARD_CORROB_TIMEOUT", "0.5"))
+CORROB_ONESHOT_TIMEOUT = float(os.environ.get("GUARD_CORROB_TIMEOUT", "0.5"))
 # 2026-10-05 加固（G-7）：核对权威必须来自带证书校验的 DoT 通道。
 #   "dot"=只用境外 DoT（认证）；"any"=旧行为（本机明文 UDP DoQ 中继也可作准，仅排障用）
 CORROB_AUTH = os.environ.get("GUARD_CORROB_AUTH", "dot")
@@ -3336,6 +3420,40 @@ CORROB_V6 = _flag("GUARD_CORROB_V6")
 CORROB_STRICT_NODATA = _flag("GUARD_CORROB_STRICT_NODATA")
 # 严格 R8：核对通道不可用或同步预算耗尽时，不接受未核对的境外 A/AAAA 明文。
 CORROB_STRICT_FAIL_CLOSED = _flag("GUARD_CORROB_STRICT_FAIL_CLOSED")
+# 2026-10-28 R-2（fail-open 收敛）：核对未成功但**保留明文**时，把该答案各 RR 的 TTL
+# 截断到本上限 —— 只压"无证据答案"在下游缓存里的滞留窗口（策略上限 <=900s -> 分钟级），
+# **不改变是否返回答案**（仍是 fail-open）、不降低 DNSSEC 与多源核对强度。
+# 置 0 则完全退回旧行为（不截断）。
+FAILOPEN_TTL_CAP = float(os.environ.get("GUARD_FAILOPEN_TTL_CAP", "60"))
+
+
+def _failopen_cap_ttl(wire):
+    """R-2（2026-10-28）：**核对无证据却仍下发明文**时的答案 TTL 收口。
+
+    语义边界（务必保持）：
+      · **不改变"是否下发"** —— fail-open 依然生效（可用性优先，见 R8M / R8K 两个出口）；
+      · **只压缩寿命** —— 把这份未核对的明文在下游缓存里的滞留窗口，从策略上限
+        （ACCEPT_MAX_TTL<=900s / ACCEPTED_MAX_TTL<=300s）压到 FAILOPEN_TTL_CAP（默认 60s）
+        ⇒ 万一它是投毒答案，污染自愈时间从十几分钟降到一分钟级；
+      · **不改 DNSSEC / 多源核对强度** —— 没有任何判定分支被这条收口影响。
+
+    实现复用 alt_adapter.age_wire(elapsed=0, max_ttl=cap)：逐 RR 原地改写 4 字节、
+    报文长度不变 ⇒ 所有压缩指针仍逐字节有效；OPT(41) 不参与（其字段不是寿命）；
+    解析失败原样返回 ⇒ 不可能产出畸形报文。任何异常都退回原报文（绝不让收口变成故障）。
+    """
+    if FAILOPEN_TTL_CAP <= 0:
+        return wire
+    try:
+        import alt_adapter as _ALT_C
+        out = bytes(_ALT_C.age_wire(wire, 0, max_ttl=FAILOPEN_TTL_CAP))
+    except Exception:
+        return wire
+    try:
+        with _lock:
+            _stats["failopen_ttl_capped"] = _stats.get("failopen_ttl_capped", 0) + 1
+    except Exception:
+        pass
+    return out
 CERT_TIMEOUT = 2.5
 CHURN_GAP = 60         # 全局抖动检测最小间隔（秒），避免频繁清缓存
 # 2026-10-09 P4：R5 改候选队列。需两个独立窗口（间隔 R5_WINDOW_MIN~MAX），只进人工队列。
@@ -3484,6 +3602,7 @@ _stats = {"q": 0, "redirect": 0, "r1": 0, "r2": 0, "r3": 0, "r4": 0, "r5": 0, "c
           "strict_ad_adopt": 0, "strict_elapsed_ms": 0,
           # 2026-10-10 Patch13（Codex 口径修正）
           "boot_ts": 0, "r8_backoff_skip": 0, "r8_backoff_active": 0, "r8_backoff_cleared": 0,
+          "r8_neg_fastfail": 0, "r8_neg_store": 0,
           # 2026-10-10 Patch14（CN-IP 面）
           "cnip_candidate": 0, "cnip_in_cnlist": 0, "cnip_outside_cnlist": 0,
           "cnip_r8_entered": 0, "cnip_r8_agree": 0, "cnip_r8_conflict": 0,
@@ -3524,6 +3643,8 @@ _stats = {"q": 0, "redirect": 0, "r1": 0, "r2": 0, "r3": 0, "r4": 0, "r5": 0, "c
           "r7": 0, "r7_soft": 0,
           # R8：核对次数/一致/改道/窗口内改发钉住答案/核对通道不可用
           "r8_checked": 0, "r8_agree": 0, "r8_adopt": 0, "r8_pinned": 0, "r8_miss": 0,
+          # R-2（2026-10-28）：fail-open 答案被 TTL 截断的次数
+          "failopen_ttl_capped": 0,
           # 批次 4：提前并发发起核对的开销度量（started - used = 因早退路径浪费）
           "r8_parallel_started": 0, "r8_parallel_used": 0,
           "r8_parallel_busy": 0, "r8_parallel_late": 0,
@@ -3748,6 +3869,7 @@ _step5_keys = (
     "hot_pause_mem", "hot_pause_io", "hot_frac_sum", "hot_frac_n", "hot_below_lo",
     # ★ C（2026-10-22）：负缓存扩展后的新计数器 —— 必须登记，否则看板读不到 ✓
     "sf_put_inadmissible", "sf_put_bogus", "sf_cleared", "sf_extended",
+    "failopen_ttl_capped",
     "sf_streak_max_ttl", "sf_cache_store", "sf_cache_hit",
     "res_mem_low", "res_io_high", "res_mem_available_mb", "res_io_pages_s",
     "adm_cache_bytes", "adm_cache_evicted_bytes", "adm_bytes_high",
@@ -3914,6 +4036,24 @@ def _r8_backoff_record(name, qtype):
     with _lock:
         _stats["r8_backoff_active"] = len(_r8_backoff)
     return wait
+
+
+# ---- 2026-10-27 P99 调优：R8 负结论短缓存 ----
+# 语义保证：只改变"多快失败"，不改变"是否失败"。
+# 建立条件与下面 STRICT_NODATA 的 SERVFAIL 出口完全一致 ⇒ 客户端可见 rcode 分布不变。
+_r8_neg = {}
+R8_NEG_TTL = float(os.environ.get("GUARD_R8_NEG_TTL", "60"))
+
+
+def _r8_neg_get(name, qtype):
+    k = (name, qtype)
+    exp = _r8_neg.get(k)
+    if not exp:
+        return False
+    if exp > time.time():
+        return True
+    _r8_neg.pop(k, None)
+    return False
 
 
 # ---------------- R8 运营商级门控（Patch27，默认关闭）----------------
@@ -4526,6 +4666,21 @@ if CORROB_TYPES_MODE not in ("observe", "enforce"):
     CORROB_TYPES_MODE = ""
 
 
+def _c_key(name, qtype):
+    """2026-10-28 N-2：缓存键加 ECS 维度 —— 不同 /24 的 geo/CDN 答案不得互穿。
+
+    审计依据：此前 _cache / _neg_cache / _r8t_cache / _SF_CACHE / _corrob / _strict_neg
+    都按 (name,qtype) 建键，实测三个不同 ECS 查同一域名返回同一地址 ⇒ 600s 内
+    首个填充者的网段决定了所有人的答案。无 ECS 时 key 尾巴是 None，与改造前等价
+    （旧条目随重启自然失效，属预期的一次冷启动）。
+    """
+    try:
+        e = _cur_ecs_key()
+    except Exception:
+        e = None
+    return (name, qtype, e)
+
+
 _r8t_cache = {}
 R8T_CACHE_MAX = 20000
 
@@ -4534,7 +4689,7 @@ def _r8t_get(name, qtype):
     """类型化核对结果的短窗缓存。目的：把对 CLEAN_DOT/CN_DOT 的额外查询
     限死成"每 (name,qtype) 每窗口一次" —— 否则 HTTPS/SVCB 这类高频类型会把
     公共解析器打成限流（铁律：公共解析器不能猛打）。"""
-    e = _r8t_cache.get((name, qtype))
+    e = _r8t_cache.get(_c_key(name, qtype))
     if e is not None and e[0] > time.time():
         return e[1]
     return None
@@ -4544,7 +4699,7 @@ def _r8t_put(name, qtype, vals, ttl):
     t = max(30, min(ttl if ttl else 60, 300))
     if len(_r8t_cache) > R8T_CACHE_MAX:
         _r8t_cache.clear()
-    _r8t_cache[(name, qtype)] = (time.time() + t, vals)
+    _r8t_cache[_c_key(name, qtype)] = (time.time() + t, vals)
 
 
 def parse_q(msg):
@@ -4817,10 +4972,15 @@ def mk_query(name, qtype=1, qid=None):
     if qid is None:
         qid = random.randint(0, 65535)
     qn = b"".join(bytes([len(p)]) + p.encode("latin1") for p in name.split(".")) + b"\x00"
-    return struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 0) + qn + struct.pack("!HH", qtype, 1)
+    _e = _ecs_clause(_cur_ecs_rd())
+    if not _e:
+        return struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 0) + qn + struct.pack("!HH", qtype, 1)
+    # 2026-10-28：有客户端 ECS 时必须带 OPT(41)，否则 ECS 无处安放
+    return (struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 1) + qn + struct.pack("!HH", qtype, 1)
+            + b"\x00" + struct.pack("!HHIH", 41, 1232, 0x0000, len(_e)) + _e)
 
 
-def mk_query_do(name, qtype=1, qid=None):
+def mk_query_do(name, qtype=1, qid=None, no_ecs=False):
     """带 EDNS0 DO=1 的查询：本地向 unbound A 复问一次，用于取 DNSSEC 否定证明判据。
 
     unbound 只在查询带 DO（或 AD）时才回 NSEC/NSEC3/RRSIG 与 AD 位；上游没带 DO 时
@@ -4828,8 +4988,9 @@ def mk_query_do(name, qtype=1, qid=None):
     if qid is None:
         qid = random.randint(0, 65535)
     qn = b"".join(bytes([len(p)]) + p.encode("latin1") for p in name.split(".")) + b"\x00"
+    _e = b"" if no_ecs else _ecs_clause(_cur_ecs_rd())
     return (struct.pack("!HHHHHH", qid, 0x0100, 1, 0, 0, 1) + qn + struct.pack("!HH", qtype, 1)
-            + b"\x00" + struct.pack("!HHIH", 41, 1232, 0x8000, 0))
+            + b"\x00" + struct.pack("!HHIH", 41, 1232, 0x8000, len(_e)) + _e)
 
 
 def udp_query(server, msg, timeout=TIMEOUT):
@@ -4986,7 +5147,10 @@ def _sf_key(name, qtype):
       view 恒为 `"default"`、do=True、cd=False、ecs=None、qclass=1（见 `_adm_cache_put` 现场依据）
       ⇒ 本键由此**自动**落在同一档 ✓；将来打开 ECS/CD 时键会自动分化 ✓，无需再改。
     """
-    return ("sf", str(name).lower(), int(qtype or 0), "default", "do1/cd0", bool(POLICY_MODE))
+    # 2026-10-28 N-1: ECS is enabled chain-wide since 13:22, so the old note claiming
+    # "ecs=None always holds and the key will split automatically" is no longer valid.
+    # Put the ECS view into the single-flight key explicitly.
+    return ("sf", str(name).lower(), int(qtype or 0), _cur_ecs_key(), "default", "do1/cd0", bool(POLICY_MODE))
 
 
 # ★ 方案 §3 第 73 行：**同 question/view/flags/policy 的并发请求必须合并** ✓。
@@ -5613,7 +5777,7 @@ def _dot_query_once(msg, name=None, qtype=None, timeout=TIMEOUT, prefer_addr=Fal
     5 条都是无过滤干净解析器：Mullvad / censurfridns / digitale + NextDNS(无 profile) / Quad9 dns10）。
     prefer_addr=True（只用于 R3 已知投毒域名）：空答案先记着，再多等 ADDR_GRACE_MS
     看有没有带地址的答案，避免某条通道的过滤/空回答抢在真实地址前面。"""
-    key = (name, qtype)
+    key = _c_key(name, qtype)
     now = time.time()
     if name is not None:
         # 2026-10-10 Patch9 缺口1：严格清单名字**不得**命中答案缓存（否则共识被静默绕过）。
@@ -5678,7 +5842,15 @@ def _dot_query_once(msg, name=None, qtype=None, timeout=TIMEOUT, prefer_addr=Fal
     if DNSCRYPT_ADOPT and _channel_usable(DNSCRYPT_ADOPT[0], DNSCRYPT_ADOPT[1], None):
         fast.append((DNSCRYPT_ADOPT[0], DNSCRYPT_ADOPT[1], None, "dnscrypt"))
     # 首轮慢源只保留最快的认证 DoT；其余认证 DoT 留给 R8 冲突核对，避免未命中洪峰时重复建立慢连接。
-    slow = [(CLEAN_DOT[0][0], CLEAN_DOT[0][1], CLEAN_DOT[0][2], "dot")] if CLEAN_DOT else []
+    # 2026-10-28 slow 慢路收敛：原实现无条件把 CLEAN_DOT[0] 塞进 slow，
+    # 而 censurfridns / digitale-gesellschaft 实测 ok=False(无应答)，_channel_usable
+    # 已把它们熔断 60s —— 但 slow 腿没走这个过滤，每次 hedge 都要白等死通道的整个 timeout。
+    # 改为按 _channel_usable 过滤，取第一条仍可用的认证 DoT。
+    slow = []
+    for _cd in CLEAN_DOT:
+        if _channel_usable(_cd[0], _cd[1], _cd[2]):
+            slow.append((_cd[0], _cd[1], _cd[2], "dot"))
+            break
     if len(LOCAL_DOQ_LIST) > 1:
         ip, port = LOCAL_DOQ_LIST[1]
         # DoQ2 是延后备用；连续失败时由 keepalive 熔断，避免每个查询反复等待坏通道。
@@ -5752,7 +5924,14 @@ def _dot_query_once(msg, name=None, qtype=None, timeout=TIMEOUT, prefer_addr=Fal
             if ttl > 0:
                 _cache[key] = (time.time() + ttl, buf, _cache_stamp())
             if len(_cache) > 20000:
-                _cache.clear()
+                # 2026-10-28 N-3：满时淘汰最旧一半，不再整表 clear
+                # （整表清空会让所有在途查询同时失去缓冲 ⇒ 集体击穿）
+                try:
+                    _ks = sorted(_cache, key=lambda _x: _cache[_x][0])[:10000]
+                    for _k in _ks:
+                        _cache.pop(_k, None)
+                except Exception:
+                    _cache.clear()
     if not buf:
         with _lock:
             _stats["clean_fail"] += 1
@@ -6090,7 +6269,7 @@ def _sf_get(name, qtype):
     """
     if not name:
         return False
-    k = (name, qtype)
+    k = _c_key(name, qtype)
     e = _SF_CACHE.get(k)
     if not e:
         return False
@@ -6112,7 +6291,7 @@ def _sf_put(name, qtype):
     """
     if not name:
         return
-    _k = (name, qtype)
+    _k = _c_key(name, qtype)
     _n = int(_SF_STREAK.get(_k, 0)) + 1
     _SF_STREAK[_k] = _n
     if _SF_BACKOFF_ON:
@@ -6155,7 +6334,7 @@ def _sf_clear(name, qtype, why=""):
     """
     if not name:
         return False
-    _k = (name, qtype)
+    _k = _c_key(name, qtype)
     _had = (_k in _SF_CACHE) or (_k in _SF_STREAK)
     _SF_STREAK.pop(_k, None)
     _SF_CACHE.pop(_k, None)
@@ -6169,19 +6348,25 @@ def _sf_clear(name, qtype, why=""):
 
 
 def _strict_neg_get(name, qtype):
-    e = _strict_neg.get((name, qtype))
+    e = _strict_neg.get(_c_key(name, qtype))
     if e and e[0] > time.time():
         with _lock:
             _stats["strict_neg_hit"] = _stats.get("strict_neg_hit", 0) + 1
         return e[1]
     if e:
-        _strict_neg.pop((name, qtype), None)
+        _strict_neg.pop(_c_key(name, qtype), None)
     return None
 
 
 def _strict_neg_put(name, qtype, kind, resp, rcode):
     ttl = STRICT_SERVFAIL_TTL if kind == "SERVFAIL" else STRICT_NEG_TTL
-    _strict_neg[(name, qtype)] = (time.time() + ttl, (kind, resp, rcode))
+    _strict_neg[_c_key(name, qtype)] = (time.time() + ttl, (kind, resp, rcode))
+
+
+# 2026-10-28 N-2: real operator per local DoQ port (5533=aghdq->NextDNS removed,
+# 5534=aghdq2->Quad9, 5535=aghcf->Cloudflare DoT). Must map by PORT, not by list index:
+# GUARD_DOQ_PORT makes _DOQ1 also point at 5534, so index-based labeling fakes two operators.
+_DOQ_LOCAL_OP = {5533: "nextdns", 5534: "quad9", 5535: "cloudflare"}
 
 
 def _strict_pick_channels():
@@ -6201,19 +6386,25 @@ def _strict_pick_channels():
         cand.append((rtt if isinstance(rtt, (int, float)) and rtt > 0 else 9999.0, t, op))
     # DoQ：本机 aghdq → NextDNS（fdaa:... 或本地端口），QUIC/TLS 认证，运营方记作 nextdns。
     if _flag("GUARD_STRICT_USE_DOQ", True):
+        # 2026-10-28 N-2: operator must be resolved by PORT, not by list index.
+        #   GUARD_DOQ_PORT=5534 makes _DOQ1 and _DOQ2 the same endpoint; index-based
+        #   labeling reported two independent operators for one Quad9 endpoint (fake dual source).
+        #   Dedupe endpoints too: the seen set below only dedupes by operator.
+        _seen_ep = set()
         for ix, (ip, port) in enumerate(LOCAL_DOQ_LIST or []):
+            _ep = (str(ip), int(port))
+            if _ep in _seen_ep:
+                with _lock:
+                    _stats["strict_endpoint_dedup"] = _stats.get("strict_endpoint_dedup", 0) + 1
+                continue
+            _seen_ep.add(_ep)
             lab = ("doq", "doq2", "doq3")[ix] if ix < 3 else "doq%d" % ix
             with _lock:
                 st = dict(_ch_stat.get(lab) or {})
             rtt = st.get("rtt_ms")
             if not (isinstance(rtt, (int, float)) and rtt > 0):
-                continue          # 未测过 RTT 的 DoQ 不参与（避免把未验证通道当共识源）
-            # 2026-10-19：运营方必须按该通道的真实后端标注，不能一律写 nextdns。
-            #   LOCAL_DOQ_LIST[0]=aghdq->NextDNS，LOCAL_DOQ_LIST[1]=aghdq2->Quad9(dns10)。
-            #   旧写法两条都标 nextdns 的后果：
-            #     1) 两者同时可用时 doq2 被当同运营方重复去重掉 => 第二家独立源形同虚设；
-            #     2) aghdq 故障时只剩 doq2（实为 Quad9）却仍记作 nextdns => 等同于单家自证。
-            _op = ("nextdns", "quad9", "cloudflare")[ix] if ix < 3 else "doq%d" % ix
+                continue
+            _op = _DOQ_LOCAL_OP.get(int(port), "doq:%d" % int(port))
             cand.append((rtt, (ip, port, None), _op))
     cand.sort(key=lambda x: x[0])
     out, seen = [], set()
@@ -6422,11 +6613,24 @@ def _strict_consensus(msg, name, qtype, budget):
     return None
 
 
+CORROB_STRIP_ECS = _flag("GUARD_CORROB_STRIP_ECS", True)
+
+
 def _corrob_query_once(msg, name, qtype, targets_override=None, budget=None, pool="corrob"):
     """同步核对一次。**返回 (status, resp)**：status ∈ {OK, TIMEOUT, ...}，只有 OK 时 resp 非空。
     区分状态是必须的 —— "权威侧 NODATA" 与 "我们自己排队超时" 是两种完全不同的证据。
     budget：本次核对的等待上限（默认 CORROB_DOT_TIMEOUT）；R8 会按整查询剩余额度收紧它。"""
     _bud = float(budget) if budget else CORROB_DOT_TIMEOUT
+    # 2026-10-28 N-6：核对通道**剥离 ECS**。原实现把客户端原报文（含真实 /24 ECS）直接
+    #   发给核对通道，与明文通道携带同一 ECS ⇒ 上游按 ECS 差异化应答时两侧"一致通过"，
+    #   定向投毒可绕过双侧核对。剥离后核对侧拿到上游通用视角的答案，差异只进 DIFF
+    #   待确认清单（不 SERVFAIL、不改道）。开关 GUARD_CORROB_STRIP_ECS 默认开。
+    if CORROB_STRIP_ECS:
+        try:
+            _cq_qid = struct.unpack("!H", msg[0:2])[0] if msg and len(msg) >= 2 else None
+            msg = mk_query_do(name, qtype, qid=_cq_qid, no_ecs=True)
+        except Exception:
+            pass
     if os.environ.get("GUARD_VERIFIER_SOCKET"):
         return _verifier_dot(msg, name, qtype, _bud, False, "corrob",
                              targets_override, pool)
@@ -6442,7 +6646,7 @@ def _corrob_query_once(msg, name, qtype, targets_override=None, budget=None, poo
             with _lock:
                 _stats["r8_circuit_skip"] += 1
             return
-        b = _upstream_call(ip, port, sni, msg, _bud if sni else CORROB_TIMEOUT)
+        b = _upstream_call(ip, port, sni, msg, _bud)
         if not b:
             return
         rc, cips, _cn, _t = parse_a(b)
@@ -6459,7 +6663,7 @@ def _corrob_query_once(msg, name, qtype, targets_override=None, budget=None, poo
         budget = _bud
     elif CORROB_AUTH == "any":
         targets = [(ip, port, None) for ip, port in LOCAL_DOQ_LIST]
-        budget = CORROB_TIMEOUT
+        budget = CORROB_ONESHOT_TIMEOUT
     else:
         targets = [(ip, port, sni) for (ip, port, sni) in CLEAN_DOT]
         budget = _bud
@@ -6704,11 +6908,11 @@ def _r8p_fetch(handle, msg, name, qtype, budget):
 def corrob_get(name, qtype):
     """窗口内返回 (已核对应答, 已核对IP元组)，否则 None"""
     with _lock:
-        e = _corrob.get((name, qtype))
+        e = _corrob.get(_c_key(name, qtype))
         if not e:
             return None
         if e[0] <= time.time():
-            _corrob.pop((name, qtype), None)
+            _corrob.pop(_c_key(name, qtype), None)
             return None
         wire = _cache_replay(e)
         return (wire, e[2]) if wire else None
@@ -6759,7 +6963,7 @@ def corrob_put(name, qtype, resp, ips, ttl):
             now = time.time()
             for k in [k for k, v in list(_corrob.items()) if v[0] < now]:
                 _corrob.pop(k, None)
-        _corrob[(name, qtype)] = (time.time() + win, resp, tuple(ips), _cache_stamp())
+        _corrob[_c_key(name, qtype)] = (time.time() + win, resp, tuple(ips), _cache_stamp())
         _r8_stable[(name, qtype)] = time.time()
         global _r8_stable_dirty
         _r8_stable_dirty = True
@@ -7988,10 +8192,30 @@ def _veto_w2_targets():
             continue
         if "nextdns" in low:
             continue
-        # RTT 可能尚未由保活线程测出（rtt_ms 缺失）⇒ **不应因此排除通道** ✗，
-        # 只要不是 DoQ/NextDNS 就可用，给一个较大默认值用于排序 ✓。
+        # 2026-10-26：`_clean_channels()` 返回的 dict **没有 rtt_ms 字段** ✗ ——
+        # 上面 `rtt = it.get("rtt_ms")` 恒为 None ⇒ 全部兜底 9999.0 ⇒ 候选**全部打平**，
+        # `best` 永远等于列表第一个（实测恒为 "doq"）⇒ "按 rtt 取最小"形同虚设 ✗。
+        # 真值在 `_ch_stat[label]`（keepalive() 每 KEEPALIVE_S 实测写入：
+        # {"rtt_ms": rtt if ok else None, "ok": ok, "ts", "err"}）⇒ 按同一把 _lock 读取。
+        # 排序口径（优 → 劣）：
+        #   ① 保活实测通过的通道 —— 用真实 rtt_ms；
+        #   ② 从未测过的通道 —— 9999.0（**不排除**：首用时它可能反而是通的 ✓）；
+        #   ③ 保活**明确失败**的通道 —— 1e6。此刻它多半已被 _channel_usable 熔断短路，
+        #      但熔断 60s 后会半开 ⇒ 仍**不排除**，只是排在最后 ✓。
         if not isinstance(rtt, (int, float)):
-            rtt = 9999.0
+            _cs = {}
+            try:
+                with _lock:
+                    _cs = dict(_ch_stat.get(lab) or {})
+            except Exception:
+                _cs = {}
+            _r = _cs.get("rtt_ms")
+            if isinstance(_r, (int, float)) and _r > 0:
+                rtt = float(_r)
+            elif _cs.get("ok") is False:
+                rtt = 1e6
+            else:
+                rtt = 9999.0
         if best is None or rtt < best[0]:
             best = (rtt, (ip, port, sni), lab or "dot")
     if not best:
@@ -8187,9 +8411,12 @@ def cn_exist_veto(name, qtype, bresp, bips, deadline, w1_hint=None, deny_probe=F
             _tw.start()
         _tw.join(max(0.05, (t0 + CN_VETO_W2_BUDGET) - time.time()))
         if _tw.is_alive():
+            # 2026-10-26：**此处不再计数** —— 紧接着 `if r2: ... else:` 的 else 分支必然看到
+            # r2=None 且 st2=CORROB_TIMEOUT，会对**同一次**未完成再计一次（实测累计
+            # cn_veto_timeout=2186 vs 结算 cn_veto_w2_used=1440 ⇒ 151.8%，超时率被虚报近一倍）。
+            # 超时/过载的**唯一**计数点保留在下面的 else 分支（它同时区分 OVERLOAD，
+            # 语义更完整 ✓）。判定值 st2 不变，只删重复计数。
             st2, r2 = CORROB_TIMEOUT, None
-            with _lock:
-                _stats["cn_veto_timeout"] = _stats.get("cn_veto_timeout", 0) + 1
         else:
             st2, r2 = _r2box["st"], _r2box["r"]
         op2 = wt[1]
@@ -8389,7 +8616,7 @@ def state_reloader():
 # 说明：这 5 个定义曾在"移除影子代码"时被误删（当时以 def _fc_classify 为删除边界，
 # 把它之前的变量一并划走），导致 stats_writer 里 dict(_fc_by_reason) 抛 NameError
 # 被静默吞掉 ⇒ stats.json 停止写入、fail_closed_by_reason 恒为空。此处补回。
-FC_REASONS = ("dnssec_bogus", "strict_nodata", "r8_miss", "r8_timeout", "r8_overload",
+FC_REASONS = ("dnssec_bogus", "r8_neg_cache", "strict_nodata", "r8_miss", "r8_timeout", "r8_overload",
               "budget_exhausted", "unbound_servfail", "known_poison", "admission_overload",
               # 2026-10-10 Patch34-B：CN 路径否定存在否决（P13 对账 sum(by_reason)==fail_closed 依赖此项）
               "cn_exist_veto")
@@ -8429,7 +8656,7 @@ for _pair in (os.environ.get("GUARD_SRC_MAP_EXTRA") or "").split(","):
 def _host_ipv4_set():
     """枚举**本机**全部 IPv4 地址 ✓ —— 用于把主机侧自检归入 `host`（不污染用户侧基线）✗。
 
-    为什么必须动态算：`eth0` 是 DHCP 的（本机实测 `198.51.100.11/18`），硬编码会随租约失效；
+    为什么必须动态算：`eth0` 是 DHCP 的（本机实测 `172.17.36.43/18`），硬编码会随租约失效；
     而主机自检经 `eth0` 打 `docker0` 的 `172.18.0.1:5355` 时，**内核选的源地址是 eth0 的 IP**
     （`ip route get 172.18.0.1` → `local dev lo src 172.18.0.1`，但 UDP 实测源是 eth0）⇒ 必须
     按"是否本机地址"判定，而不是只查 `_SRC_MAP` ✓。
@@ -8547,7 +8774,7 @@ def handle(msg):
             _stats["fail_closed"] += 1; _fc_classify("no_consensus")
         return mk_servfail(msg, qid)
     with _lock:
-        neg = _neg_cache.get((name, qtype))
+        neg = _neg_cache.get(_c_key(name, qtype))
     if neg and neg[0] > time.time():
         with _lock:
             _stats["neg_cache_hit"] += 1
@@ -8556,7 +8783,7 @@ def handle(msg):
             return _finalize_return(rewrite_id(_neg_wire, qid), "negative-cache", name, qtype, qid, msg)
     if neg:
         with _lock:
-            _neg_cache.pop((name, qtype), None)
+            _neg_cache.pop(_c_key(name, qtype), None)
     # ★ A3（2026-10-20）：双源明确 SERVFAIL 的 15s 记忆 ⇒ 死链域名不再每次重走全链路 ✓。
     #   只回 SERVFAIL（不含任何答案字节）⇒ 既不扩大可信源、也不延长任何**答案**寿命 ✓。
     #   位置在 _neg_cache 之后 ⇒ 仍是"拒绝"语义，不放行任何候选 ✓。
@@ -8813,7 +9040,7 @@ def handle(msg):
                 for k in [k for k, v in list(_neg_cache.items()) if v[0] <= now]:
                     _neg_cache.pop(k, None)
             if expiry > 0:
-                _neg_cache[(name, qtype)] = (expiry, uresp, _cache_stamp())
+                _neg_cache[_c_key(name, qtype)] = (expiry, uresp, _cache_stamp())
                 _stats["neg_cache_store"] += 1
         return _out
     # R1：可疑答案 → 换干净上游
@@ -9121,6 +9348,7 @@ def handle(msg):
                             log("CIP  %-38s 非名单 CN-IP 与加密源不一致（明 %s / 密 %s）→ 观察档不改道"
                                 % (name, ",".join(sorted(x for x in uset8 if isinstance(x, str)))[:26],
                                    ",".join(sorted(x for x in _oset if isinstance(x, str)))[:26]))
+                    uresp = _failopen_cap_ttl(uresp)   # 2026-10-28 R-2+: CIP observe-only branch capped too
                     # P34-AV + Task3 P1-1：出口同门 ✓ —— src 由 `_LABEL_MAP` 折算 ✓（POL⇒local-alt ✓；CNV/POL-SF⇒终局结论，不过闸 ✓）
                     return _finalize_return(uresp, _src_kind(src), name, qtype, qid, msg)
                 with _lock:
@@ -9141,13 +9369,23 @@ def handle(msg):
                     log("BGT  %-38s 同步预算已用尽(%.2fs, 余 %.2fs) → 无证据，保留明文 %s（留痕+异步取证）"
                         % (name, _elapsed8, _left8, ",".join(uips)[:40]))
                     # P34-AV + Task3 P1-1：出口同门 ✓ —— src 由 `_LABEL_MAP` 折算 ✓（POL⇒local-alt ✓；CNV/POL-SF⇒终局结论，不过闸 ✓）
+                    uresp = _failopen_cap_ttl(uresp)   # 2026-10-28 R-2: unify TTL cap before _finalize_return writes adm cache
                     return _finalize_return(uresp, _src_kind(src), name, qtype, qid, msg)
                 # Patch13（Codex Q7）：命中退避 ⇒ 跳过本次同步核对（省下 900ms 慢通道，把
                 # 槽位让给“从未核对过”的名字）；**答案语义不变**（仍按下面的原逻辑保留明文）。
+                if CORROB_STRICT_NODATA and _r8_neg_get(name, qtype):
+                    with _lock:
+                        _stats["r8_neg_fastfail"] = _stats.get("r8_neg_fastfail", 0) + 1
+                        _stats["fail_closed"] += 1
+                        _fc_classify("r8_neg_cache")
+                    log("R8N+ %-38s 负结论缓存命中 → SERVFAIL(免核对，不改结论)" % name)
+                    return mk_servfail(msg, qid)
                 if _r8_backoff_active(name, qtype):
                     with _lock:
                         _stats["r8_backoff_skip"] += 1
                     log("R8K  %-38s 核对退避中 → 跳过同步核对（不改答案）" % name)
+                    # 2026-10-28 R-2：退避命中同样是"无证据保留明文" ⇒ 一样做 TTL 收口
+                    uresp = _failopen_cap_ttl(uresp)
                     # P34-AV + Task3 P1-1：出口同门 ✓ —— src 由 `_LABEL_MAP` 折算 ✓（POL⇒local-alt ✓；CNV/POL-SF⇒终局结论，不过闸 ✓）
                     return _finalize_return(uresp, _src_kind(src), name, qtype, qid, msg)
                 _cstat, cresp = _r8p_fetch(_fut8, msg, name, qtype,
@@ -9189,6 +9427,8 @@ def handle(msg):
                         return mk_servfail(msg, qid)
                     log("R8M  %-38s 核对未成功(%s) → 无证据，保留明文 %s（留痕+异步取证）"
                         % (name, _cstat, ",".join(uips)[:40]))
+                    # 2026-10-28 R-2：无证据答案的 TTL 收口（只压滞留窗口，不改判定）
+                    uresp = _failopen_cap_ttl(uresp)
                 else:
                     _rc8, cips8, _ccn8, ctt8 = parse_a(cresp)
                     cset8 = set(_norm_ip(x) for x in cips8)
@@ -9261,6 +9501,7 @@ def handle(msg):
                                 log("R8K  %-38s 同运营商或归属未知（明文 ASN=%s / 加密 ASN=%s）→ 保留明文（退避 %.0fs）"
                                     % (name, _au, _ac, _bw25))
                                 # P34-AV + Task3 P1-1：出口同门 ✓ —— src 由 `_LABEL_MAP` 折算 ✓（POL⇒local-alt ✓；CNV/POL-SF⇒终局结论，不过闸 ✓）
+                                uresp = _failopen_cap_ttl(uresp)   # 2026-10-28 R-2: unify TTL cap before _finalize_return writes adm cache
                                 return _finalize_return(uresp, _src_kind(src), name, qtype, qid, msg)
                             with _lock:
                                 _stats["r8_asn_gate_d"] = _stats.get("r8_asn_gate_d", 0) + 1
@@ -9289,7 +9530,9 @@ def handle(msg):
                         if CORROB_STRICT_NODATA:
                             with _lock:
                                 _stats["fail_closed"] += 1; _fc_classify("strict_nodata")
-                            log("FC   %-38s R8 明文有地址但干净侧无地址 → SERVFAIL(fail-closed)" % name)
+                                _r8_neg[(name, qtype)] = time.time() + R8_NEG_TTL
+                                _stats["r8_neg_store"] = _stats.get("r8_neg_store", 0) + 1
+                            log("FC   %-38s R8 明文有地址但干净侧无地址 → SERVFAIL(fail-closed，负缓存 %.0fs)" % (name, R8_NEG_TTL))
                             return mk_servfail(msg, qid)
                         log("R8N  %-38s 明文有地址但干净侧无地址（仅告警，未 fail-closed）" % name)
     # P34-AU（方案任务2）：普通出口**同门** ✓ —— 这里 src 可能是 "B" ✗，
@@ -9301,6 +9544,73 @@ if SHADOW_TARGET and not os.environ.get("VERIFIER_SLOTS"):
     # 只在主服务启动：verifier 也 import 本模块，但它从不调用 shadow_note，
     # 且有自己的 STATE_DIR，起 writer 只会产出恒为 0 的噪声文件。
     threading.Thread(target=shadow_writer, daemon=True).start()
+
+
+def _client_udp_limit(msg):
+    """客户端查询声明的 UDP 响应上限（RFC 1035 4.2.1 / RFC 6891）。
+
+    无 EDNS0 ⇒ 512 字节；带 OPT(41) ⇒ 取其 CLASS 字段（payload size），clamp 到 [512, 65535]。
+    解析不出 ⇒ 保守 512。2026-10-28 为修 AGH 'dns: overflowing header size' 而加：
+    AGH 转发上游时剥掉 OPT，按 512 缓冲区读响应，而本进程透传了 748 字节 DNSSEC 大响应。
+    """
+    try:
+        if len(msg) < 12:
+            return 512
+        qd = struct.unpack('!H', msg[4:6])[0]
+        an = struct.unpack('!H', msg[6:8])[0]
+        ns = struct.unpack('!H', msg[8:10])[0]
+        ar = struct.unpack('!H', msg[10:12])[0]
+        if ar <= 0 or an or ns:
+            return 512
+        o = 12
+        for _ in range(qd):
+            while o < len(msg) and msg[o] != 0:
+                if (msg[o] & 0xC0) == 0xC0:
+                    o += 1
+                    break
+                o += 1 + msg[o]
+            o += 1 + 4
+        if o >= len(msg) or msg[o] != 0 or o + 5 > len(msg):
+            return 512
+        t, cls = struct.unpack('!HH', msg[o + 1:o + 5])
+        if t == 41:
+            return max(512, min(65535, int(cls)))
+        return 512
+    except Exception:
+        return 512
+
+
+def _udp_fit(msg, resp):
+    """UDP 响应必须适配客户端声明的缓冲；超限则截断为 header+question 并置 TC=1，
+    让客户端改走 TCP（本进程在 LISTEN_PORT 上同时监听 TCP，完整答案在那里给）。"""
+    try:
+        if not resp:
+            return resp
+        lim = _client_udp_limit(msg)
+        if len(resp) <= lim:
+            return resp
+        qd = struct.unpack('!H', resp[4:6])[0]
+        o = 12
+        for _ in range(qd):
+            while o < len(resp) and resp[o] != 0:
+                if (resp[o] & 0xC0) == 0xC0:
+                    o += 1
+                    break
+                o += 1 + resp[o]
+            o += 1 + 4
+        if o < 12 or o > len(resp):
+            return resp
+        head = bytearray(resp[:o])
+        flags = struct.unpack('!H', head[2:4])[0] | 0x0200
+        struct.pack_into('!H', head, 2, flags)
+        struct.pack_into('!H', head, 6, 0)
+        struct.pack_into('!H', head, 8, 0)
+        struct.pack_into('!H', head, 10, 0)
+        with _lock:
+            _stats['udp_tc_truncated'] = _stats.get('udp_tc_truncated', 0) + 1
+        return bytes(head)
+    except Exception:
+        return resp
 
 
 def udp_server():
@@ -9379,6 +9689,7 @@ def _reply_udp(s, msg, addr, t_arr=None):
                     _stats["resp_servfail_built"] = _stats.get("resp_servfail_built", 0) + 1
         # `once=True`：本路径每请求恰好收口一次 ⇒ `q_*` 与 `base_q` 同口径、可直接互校 ✓
         _tr_finish(msg, resp, once=True, ignore_cls=("probe",))
+        resp = _udp_fit(msg, resp)
         if resp:
             s.sendto(resp, addr)
     except Exception as e:

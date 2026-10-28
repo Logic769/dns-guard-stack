@@ -2,11 +2,11 @@
 
 **面向自建场景的 DNS 解析与防护系统：加密上游、本机 DNSSEC 验证、国内外分流、答案准入和运行监控**。
 
-本项目把 AdGuard Home、Unbound、DNSCrypt 与自研的 guard / verifier 组合在一台 Linux 服务器上。AdGuard Home 负责入口过滤和缓存，Unbound 负责解析及验证，guard 决定哪些候选答案可以交给客户端，verifier 提供独立进程核验。
+本项目把 AdGuard Home、Unbound、DNSCrypt 与自研的 guard / verifier 组合在一台 Linux 服务器上。AdGuard Home 负责公网 TLS 入口、规则过滤和按客户端真实 IP 注入 EDNS Client Subnet（ECS），dnsdist 承担 ECS 感知的 PacketCache，Unbound 负责解析及验证，guard 决定哪些候选答案可以交给客户端，verifier 提供独立进程核验。
 
 它适合希望理解并控制整条解析链路的个人和运维人员，也可用于研究 DNS 投毒防护、缓存语义和多上游核对。部署需要 Docker、systemd、dnsdist（或 legacy 的 Nginx）和证书管理经验；安装脚本用于搭建基础环境，公网入口和安全验收仍需逐项完成。
 
-> 本文按 2026-10-25 的仓库代码、配置模板及现有说明整理（含 dnsdist 入口与 aghdq2 / aghcf 两个出口）。端口和路径均指仓库默认布局，不代表任意部署的实时状态。历史运行数据和一次探针通过，不等于长期可靠性保证。
+> 本文按 2026-10-28 的生产实例、仓库代码与配置模板整理。**入口形态自 2026-10-28 起变更**：主 AdGuard Home 终结公网 TLS 并按客户端来源注入 ECS → dnsdist 内网 ECS 感知缓存层 → guard。`deploy/` 模板仍是 2026-10-22 的 dnsdist 入口形态，差异清单见 [ARCHITECTURE.md 第 8 节](docs/ARCHITECTURE.md)。端口和路径均指仓库默认布局，不代表任意部署的实时状态。历史运行数据和一次探针通过，不等于长期可靠性保证。
 
 ## 阅读导航
 
@@ -23,7 +23,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/architecture-dark.png">
-  <img alt="DNS 解析架构：客户端经 dnsdist 与主 AdGuard Home 进入 guard，由 A、B、aghdq、aghdq2、aghcf、alt 与 dnscrypt 提供候选并统一出网到上游；verifier 在旁路交叉验证，探针、看板、名单刷新和防火墙属管理面。" src="docs/assets/architecture-light.png">
+  <img alt="DNS 解析架构：客户端经主 AdGuard Home（终结 TLS 并按来源 IP 注入 ECS）与 dnsdist 缓存层进入 guard，由 A、B、aghdq2、aghcf、alt 与 dnscrypt 提供候选并统一出网到上游；verifier 在旁路交叉验证，探针、看板、名单刷新和防火墙属管理面。" src="docs/assets/architecture-light.png">
 </picture>
 
 **[打开交互架构 HTML](docs/assets/architecture.html)** · [浅色大图](docs/assets/architecture-light.png) · [深色大图](docs/assets/architecture-dark.png)
@@ -42,18 +42,19 @@ node <archify 包>/bin/archify.mjs finalize architecture \
 
 ```text
 客户端
-  │ DoT :853 / DoH :444（:443 需另接现有 HTTPS 站点）
+  │ DoT :853 / DoH :444（:443 也可经现有 HTTPS 站点反代到容器 443）
   ▼
-dnsdist：TLS 终结、真实客户端 IP、PacketCache 与限流
-  ▼
-主 AdGuard Home（adgh）：过滤、缓存；DNS 上游只指向 guard
-  ▼
-guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
-  ├─ A：Unbound A（本机 DNSSEC）→ aghdq → NextDNS（DoQ，主通道）
-  ├─ B：Unbound B → 国内 DoT 上游（只用于国内路由域名）
-  ├─ alt：独立第三方 DoT → 本机 Unbound alt（核对 / 备用）
-  ├─ aghdq2：Quad9 dns10（DoQ，只在 hedge 之后并发，slow 列表）
-  ├─ aghcf：Cloudflare DoT（存在性见证 + SERVFAIL 快速透传）
+主 AdGuard Home（adgh）：公网 TLS 终结、规则过滤、按客户端真实 IP 注入 ECS /24
+  │  AGH 自身 DNS 缓存必须关闭：它的缓存是域名单键，会把 A 省答案返回给 B 省
+  ▼ UDP 172.18.0.1:5300
+dnsdist：内网 ECS 感知缓存层（PacketCache 131072 条，parseECS=true）+ 单来源限速
+  ▼ UDP 172.18.0.1:5355
+guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入（准入缓存键含 ECS）
+  ├─ A：Unbound A（本机 DNSSEC 验签）→ aghcf（Cloudflare DoT + censurfridns DoT，parallel）
+  │      与 aghdq2（Quad9 DoQ）构成双 forward-addr，forward-first: no（fail-closed）
+  ├─ B：Unbound B（subnetcache + client-subnet-always-forward）→ 三家国内 DoT；只用于国内路由域名
+  ├─ alt：aghdq2（Quad9 DoQ），主源不可采纳时的认证备用 / 救援
+  ├─ aghdq：NextDNS DoQ，2026-10-28 起上游握手故障，已从 A 的 forward-addr 摘除
   └─ verifier：通过本机 Unix socket 协作的独立核验进程
 
 旁路：DNSCrypt 候选与影子对比、名单刷新、防火墙对账、探针、监控看板
@@ -61,15 +62,15 @@ guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
 
 | 组件 | 具体作用 | 运行方式 / 代码 |
 | --- | --- | --- |
-| dnsdist | 提供 DoT / DoH 入口；终结 TLS、保留真实客户端 IP、内置 PacketCache 与限流 | systemd · [dnsdist 配置](deploy/dnsdist/dnsdist.conf.tpl) |
+| dnsdist | 内网 ECS 感知缓存层（`172.18.0.1:5300`）：PacketCache 131072 条、`parseECS=true`、单来源限速。2026-10-28 起不再终结公网 TLS（模板仍是 853/444 入口形态） | systemd · [dnsdist 配置](deploy/dnsdist/dnsdist.conf.tpl) |
 | Nginx（legacy） | 2026-10-22 之前承接 853/444；现在只在跑不了 dnsdist 的机器上作退路 | [Nginx 配置](deploy/nginx/) |
-| 主 AdGuard Home：`adgh` | 客户端入口、过滤和缓存；没有配置绕过 guard 的备用 DNS | Docker · [配置模板](deploy/containers/adgh.AdGuardHome.yaml.tpl) |
+| 主 AdGuard Home：`adgh` | 公网 TLS 入口（DoT 853 / DoH 公网 444 → 容器 443）：规则过滤 + 按客户端真实 IP 注入 ECS；DNS 缓存关闭，上游只指向 dnsdist:5300（再由 dnsdist 转 guard）；没有配置绕过 guard 的备用 DNS | Docker · [配置模板](deploy/containers/adgh.AdGuardHome.yaml.tpl) |
 | guard | 分流、候选检查、见证、缓存和最终答案选择 | systemd · [guard](core/guard.py) / [策略](core/answer_policy.py) |
 | verifier | 独立进程核验，握手检查代码版本；并非另一台独立服务器 | systemd · [verifier](core/verifier.py) |
-| Unbound A：容器名 `unbound` | 本机验证 DNSSEC；经 aghdq 转发到加密上游 | Docker · [A 配置](deploy/containers/unbound-a.conf.tpl) |
-| `aghdq` | 第二个 AdGuard Home，专门充当 A 侧 DoQ 出口 | Docker · [出口配置](deploy/containers/aghdq.AdGuardHome.yaml.tpl) |
-| `aghdq2` | 第二条独立 DoQ 出口（Quad9 dns10），guard 的 slow 列表候选，只在 hedge 之后并发 | Docker · [出口配置](deploy/containers/aghdq2.AdGuardHome.yaml.tpl) |
-| `aghcf` | Cloudflare 1.1.1.1（DoT）：国内域名存在性见证源 + SERVFAIL 快速透传源 | Docker · [出口配置](deploy/containers/aghcf.AdGuardHome.yaml.tpl) |
+| Unbound A：容器名 `unbound` | 本机验证 DNSSEC；forward-zone 双上游：`aghcf`（主）与 `aghdq2`（备），`forward-first: no`（fail-closed） | Docker · [A 配置](deploy/containers/unbound-a.conf.tpl) |
+| `aghdq` | 第二个 AdGuard Home（NextDNS DoQ）。2026-10-28 起其上游握手持续失败（每条查询阻塞十几分钟），已从 A 的 forward-addr 摘除，容器保留待修 | Docker · [出口配置](deploy/containers/aghdq.AdGuardHome.yaml.tpl) |
+| `aghdq2` | Quad9 DoQ 出口：既是 A 的备用 forward-addr，也是 guard 的认证备用 / 救援通道（`GUARD_ALT_ADDR=127.0.0.1:5534`）与 DoQ 核对通道（`GUARD_DOQ_PORT=5534`） | Docker · [出口配置](deploy/containers/aghdq2.AdGuardHome.yaml.tpl) |
+| `aghcf` | `parallel` 双上游：`tls://1.1.1.1`（裸 IP DoT，不带域名 SNI，抗按域名封锁）+ `tls://unicast.censurfridns.dk`。A 的主 forward-addr，也是国内域名存在性见证源 | Docker · [出口配置](deploy/containers/aghcf.AdGuardHome.yaml.tpl) |
 | Unbound B | 国内 DoT 解析候选；其答案仍受 guard 策略约束 | Docker · [B 配置](deploy/containers/unbound-b.conf.tpl) |
 | Unbound alt | 独立第三方 DoT 路径，参与核对和受门禁约束的备用解析 | Docker · [alt 适配](core/alt_adapter.py) · [就绪检查](core/unbound-alt-readiness.py) |
 | alt 副本：`alt-replica-unb` | 独立网络（`10.99.0.0/24`）里的 alt 副本，用于对照与灰度演练，不参与主链路 | Docker · [副本配置](deploy/containers/unbound-alt-replica.conf.tpl) |
@@ -79,9 +80,11 @@ guard：国内路由判定 → 候选解析 → 安全检查 → 答案准入
 
 A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或见证源，不是新的独立验证器。图中的旁路采集与统计也不意味着每次查询都要等待所有组件。
 
+ECS（EDNS Client Subnet）只影响**国内 CDN 的就近选址**：它让国内腿在解析时携带客户端所在 /24，从而拿到客户端所在省份的节点，而不是服务器所在地（杭州）的节点。国外腿的上游（Cloudflare）不支持 ECS，因此外层查询一律不带 ECS。
+
 ## 一次查询如何完成
 
-1. **接入**。 客户端经 DoT 或 DoH 到达 dnsdist（legacy 部署为 Nginx），再进入主 AdGuard Home。过滤规则或有效缓存可以直接给出结果，其余查询进入 guard。
+1. **接入**。 客户端经 DoT（853）或 DoH（444）到达主 AdGuard Home，由它终结 TLS、执行规则过滤，并按客户端真实 IP 注入 ECS /24。随后交给 dnsdist 的 ECS 感知 PacketCache：命中直接返回，未命中进入 guard。
 
 2. **决定路由**。 guard 根据类型化域名名单、例外规则等判断是否属于国内路径。命中国内路由只说明“可以向 B 查询”，不代表 B 的答案自动可信。
 
@@ -101,7 +104,7 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 | 本机 DNSSEC 验证 | 对签名域名验证数据完整性 | 未签名域名无法获得同等保证；不能只看第三方返回 `AD=1` 就认定本机验签通过 |
 | 路由与信任分离 | 防止社区名单误分类直接扩大信任范围 | `is_cn_domain()` 管路由；`is_cn_trusted()` 管免见证资格 |
 | 国内答案见证 / 否决 | 限制伪造地址和把不存在域名伪造成存在的答案 | 默认 `known` 档允许指定后缀及人工白名单免见证，这是显式信任取舍 |
-| TTL 与准入缓存 | 防止旧证据无限延长、名单撤销后继续复用 | 名单代次变化使相关准入失效；AdGuard Home 自身还有一层缓存 |
+| TTL 与准入缓存 | 防止旧证据无限延长、名单撤销后继续复用 | 名单代次变化使相关准入失效；ECS 来源前缀是缓存键的一部分（两层缓存都按 ECS 分片） |
 | 零 TTL 单次应答 | 处理特定可信国内 B 路径的零 TTL NXDOMAIN | 这是限定条件下的单次返回例外，不是把所有国内答案都改成零 TTL |
 | 发布一致性检查 | 避免 guard 与 verifier 加载不同版本 | 独立进程仍共享宿主和权限边界，不等于抵御宿主 root 被攻陷 |
 | 防火墙与地址对账 | 收紧容器 DNS 访问，封堵不允许的明文出口 | 必须检查规则实际生效；仅看到容器运行不能证明出口已收口 |
@@ -118,7 +121,7 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 
 ### 项目能力的边界
 
-- **单机系统**。 多个解析组件不能消除宿主、网络、dnsdist（或 legacy 的 Nginx）和证书的单点故障。
+- **单机系统**。 多个解析组件不能消除宿主、网络、主 AdGuard Home 入口、dnsdist 缓存层和证书的单点故障。
 
 - **默认没有用户级 DNS 鉴权**。 对外提供入口前，应决定服务范围、访问控制与容量限制。
 
@@ -136,7 +139,7 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 | 容器运行时 | Docker 与 Compose 插件，支持脚本使用的 `up --wait` |
 | Python | 安装脚本最低检查为 Python 3.6；目标环境仍应运行回归验证 |
 | 基础工具 | Bash、OpenSSL、curl、常用 GNU 工具；防火墙部分使用 iptables / iptables-restore |
-| dnsdist | 公网入口。机器上需有 dnsdist 可执行文件（发行版包或自建）；缺失时安装脚本只告警并退化到 legacy 的 Nginx 入口。渲染结果可用 `dnsdist --check-config` 校验 |
+| dnsdist | 缓存层。机器上需有 dnsdist 可执行文件（发行版包或自建）；缺失时安装脚本只告警并退化到 legacy 的 Nginx 入口。渲染结果可用 `dnsdist --check-config` 校验 |
 | Nginx（legacy） | 仅在跑不了 dnsdist 的机器上使用：需支持 HTTP TLS 和 stream TLS；模板含 HTTP/2、限流及自定义日志配置依赖。与 dnsdist 的 853 / 444 端口互斥，二者只能选一 |
 | 域名与证书 | 自有域名及匹配的 TLS 证书；自签证书仅适合已配置客户端信任的验证环境 |
 | 网络 | 能访问镜像仓库、名单源及选定的 DoT / DoQ / DNSCrypt 上游 |
@@ -147,8 +150,9 @@ A、B、alt 是不同解析路径；`aghdq` / `aghdq2` / `aghcf` 都是出口或
 
 | 端口 / 地址 | 用途 | 暴露范围 |
 | --- | --- | --- |
-| TCP `853` | dnsdist DoT 入口（legacy：Nginx stream） | 按需对客户端开放 |
-| TCP `444` | dnsdist DoH，路径 `/dns-query`（legacy：Nginx http） | 按需对客户端开放 |
+| TCP `853` | 主 AdGuard Home 的 DoT 入口（`adgh` 容器 853；模板版本由 dnsdist 承接） | 按需对客户端开放 |
+| TCP `444` | 主 AdGuard Home 的 DoH（公网 444 → 容器内 443），路径 `/dns-query` | 按需对客户端开放 |
+| `172.18.0.1:5300` | dnsdist 内网 ECS 感知缓存层（主 AdGuard Home 的唯一上游） | Docker 桥接网关，仅内网 |
 | `127.0.0.1:18083` | dnsdist 只读统计端点（Chainmon 读缓存命中率） | 本机 |
 | TCP `443` | 可在现有 HTTPS 站点接 DoH | 需额外配置；不是 Compose 自动提供 |
 | `172.18.0.1:5355` | guard DNS | Docker 桥接网关上的内部接口 |
@@ -204,6 +208,8 @@ sudo bash install.sh --fetch-lists
 
 安装主要完成代码复制、容器配置生成、容器启动、名单初始化、guard / verifier 单元安装、dnsdist 配置渲染与启动、alt 就绪门禁 timer 的启用、cgroup 内存策略单元的安装（以及 legacy 场景下的 Nginx 片段生成）。**脚本运行结束不代表服务已经可对外使用**。
 
+> 注意：当前 `install.sh` 渲染的仍是 dnsdist 入口形态。生产实例的「AGH 入口 + ECS → dnsdist 缓存层」形态是 2026-10-28 的手工改造，尚未回灌到模板，差异清单见 [ARCHITECTURE.md 第 8 节](docs/ARCHITECTURE.md)。
+
 ### 3. 核对当前安装脚本的限制
 
 以下是按当前实现整理的接入检查项；旧说明或配置注释与代码冲突时，以实现和生成文件为准：
@@ -214,7 +220,7 @@ sudo bash install.sh --fetch-lists
 
 - **部分上游变量没有接入渲染**。 `install.sh` 只对 `UPSTREAM_B` 做替换；`UPSTREAM_A_QUIC`、`UPSTREAM_A_BOOTSTRAP`、`UPSTREAM_ALT` 完全不读，改 `.env` 不产生任何效果，必须改对应模板再核对生成文件。
 
-- **853 / 444 默认由 dnsdist 承接**。 安装会渲染 `/opt/dns-guard-stack/runtime/dnsdist/dnsdist.conf` 并装成 `/etc/dnsdist/dnsdist.conf`，口令由安装脚本生成。机器上没有 dnsdist 时才退回 Nginx 入口（`INSTALL_NGINX=1`），两者不能同时监听同一端口。
+- **853 / 444 当前模板由 dnsdist 承接**。 安装会渲染 `/opt/dns-guard-stack/runtime/dnsdist/dnsdist.conf` 并装成 `/etc/dnsdist/dnsdist.conf`，口令由安装脚本生成。机器上没有 dnsdist 时才退回 Nginx 入口（`INSTALL_NGINX=1`），两者不能同时监听同一端口。**生产实例已改为由主 AdGuard Home 承接**（dnsdist 退到内网 `172.18.0.1:5300`），见 [ARCHITECTURE.md 第 8 节](docs/ARCHITECTURE.md)。
 
 - **看板需要单独启用**。 安装会复制看板文件，但不会自动启动 Chainmon / devfp；鉴权和日志来源也需自行配置。不要仅凭 `.env` 中有 `DASH_PASSWORD` 就认为鉴权已启用。
 
@@ -222,7 +228,7 @@ sudo bash install.sh --fetch-lists
 
 ### 4. 检查 dnsdist（或接入 legacy Nginx）
 
-默认路径不需要 Nginx：`install.sh` 渲染 dnsdist 配置、安装 systemd 单元并启动，853/444 由 dnsdist 直接终结 TLS。校验命令如下：
+默认路径不需要 Nginx：`install.sh` 渲染 dnsdist 配置、安装 systemd 单元并启动，853/444 由 dnsdist 直接终结 TLS（**这是模板行为**）；生产实例自 2026-10-28 起改由主 AdGuard Home 终结，dnsdist 退到内网 `172.18.0.1:5300` 做 ECS 感知缓存。校验命令如下：
 
 ```bash
 sudo dnsdist --check-config -C /etc/dnsdist/dnsdist.conf
@@ -238,7 +244,7 @@ sudo nginx -t
 
 确认校验成功且变更影响可接受后，重载 Nginx。若要使用标准 `443` 端口，在已有 HTTPS 站点中接入 `/dns-query`，同时保留管理接口的访问隔离。
 
-完整部署资料见 [DEPLOY.md](docs/DEPLOY.md)（已按 dnsdist 入口与四个 AGH 实例更新）；`.env` 变量、端口与故障排查都在那里。
+完整部署资料见 [DEPLOY.md](docs/DEPLOY.md)（已按四个 AGH 实例更新；入口形态以 [ARCHITECTURE.md 第 8 节](docs/ARCHITECTURE.md) 的生产实例描述为准）；`.env` 变量、端口与故障排查都在那里。
 
 ## 验收与客户端配置
 
@@ -314,7 +320,7 @@ sudo bash /opt/dnsguard/tools/refresh-all-cn-lists.sh
 python3 /opt/dnsguard/tools/verify-cn-lists.py
 ```
 
-刷新包括下载、检查、原子替换及变更归档。更新后检查加载统计和实际解析；涉及信任撤销时，还应评估 AGH 缓存是否需要清除，参见 [运维文档](docs/OPERATIONS.md)。
+刷新包括下载、检查、原子替换及变更归档。更新后检查加载统计和实际解析；涉及信任撤销时，还应评估两级缓存（dnsdist PacketCache 与 guard 准入缓存）是否需要清除，参见 [运维文档](docs/OPERATIONS.md)。
 
 ### 发布与回滚
 
@@ -336,8 +342,8 @@ sudo $CODE_DIR/deploy_release.sh --rollback <id>       # 回滚（门禁不过�
 | --- | --- |
 | 安装结束但 guard 反复重启 | `/var/log/dnsguard.log`、真实否决名单、状态目录和权限 |
 | 容器 running，但查询超时 | 容器内部解析是否可用、dnsnet 网关、AGH 上游、防火墙与上游连通性 |
-| DoT 连接失败 | 公网 853、`systemctl status dnsdist`（或 legacy 的 stream include）、TLS 证书与监听 |
-| DoH 返回 502 / 证书错误 | dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径；legacy 场景再看 Nginx 上游与 AGH `4443` |
+| DoT 连接失败 | 公网 853、`systemctl status dnsdist`（生产实例看 `adgh` 容器的 853 映射与证书）、TLS 证书与监听 |
+| DoH 返回 502 / 证书错误 | 生产实例看 `adgh` 的证书配置与 444→容器 443 映射；模板场景看 dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径 |
 | Chainmon 缓存命中率恒为 0% | `/etc/systemd/system/chainmon.service.d/30-dnsdist-stats.conf` 的 `CHAINMON_DNSDIST_API_KEY` 是否与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 一致、`127.0.0.1:18083` 是否可达（该文件由安装脚本按当时口令生成，改口令需重跑安装或手改） |
 | 全部返回 SERVFAIL | A / alt 连通性、验证器状态、名单和日志；不要先关闭准入策略 |
 | 国内结果异常或慢 | B 的可用性、路由名单、信任档位、见证 / 否决统计 |

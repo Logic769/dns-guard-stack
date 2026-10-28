@@ -111,6 +111,13 @@ def run(c):
    _vs('v_badframe')
    return
   meta=json.loads(readn(a).decode());msg=readn(b)
+  # 2026-10-28 N-1: establish per-request ECS context. Worker threads are reused;
+  # without this _cur_ecs_key() is always None here, so rebuilt queries lose ECS and
+  # the verification view diverges from the main process cache sharding.
+  try:
+   guard._tr_begin(msg, entry='verifier')
+  except Exception:
+   pass
   op=meta.get('op')
   # Step-1 §1：同一请求追踪 ID（guard 侧生成，verifier 侧按它分开统计 ✓）
   _vs('v_recv')

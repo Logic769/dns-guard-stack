@@ -4980,7 +4980,7 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <div class="pulse-dot"></div>
         <h1>dns-guard-stack 解析链架构</h1>
       </div>
-      <p class="subtitle">公网客户端 → dnsdist 入口层 → 主 AdGuard Home → guard 决策层 → 候选源 → 上游互联网</p>
+      <p class="subtitle">公网客户端 → AdGuard Home 入口（TLS + 按客户端 IP 注入 ECS /24）→ dnsdist 缓存层（内网 5300，ECS 感知）→ guard 决策层 → 候选源 → 上游互联网</p>
     </div>
 
 
@@ -4988,9 +4988,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
     <!-- Main Diagram -->
     <div class="diagram-container" data-detail-level="read"
          data-preset-badge-editorial-plate="ARCHIFY / 图版 04">
-      <svg viewBox="0 0 1552 976" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="signal-flow" data-quality-profile="showcase" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14">
+      <svg viewBox="0 0 1622 976" role="img" lang="zh-CN" aria-labelledby="archify-diagram-title archify-diagram-description" data-preset="signal-flow" data-quality-profile="showcase" data-reader-fit="intrinsic-height" data-reader-min-text="7.5" data-reader-primary-text="14">
         <title id="archify-diagram-title">dns-guard-stack 解析链架构</title>
-        <desc id="archify-diagram-description">公网客户端 → dnsdist 入口层 → 主 AdGuard Home → guard 决策层 → 候选源 → 上游互联网</desc>
+        <desc id="archify-diagram-description">公网客户端 → AdGuard Home 入口（TLS + 按客户端 IP 注入 ECS /24）→ dnsdist 缓存层（内网 5300，ECS 感知）→ guard 决策层 → 候选源 → 上游互联网</desc>
         <!-- Definitions -->
         <defs>
           <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
@@ -5014,98 +5014,90 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <rect width="100%" height="100%" fill="url(#grid)" />
 
         <!-- Boundaries (behind everything) -->
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="容器网络 dnsnet 172.18.0.0/16 · 固定 IP" x="971.8490205580645" y="58" width="252.30195888387095" height="492" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="0" data-composition-frame-label="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" x="1016.3354673709678" y="58" width="363.3290652580645" height="492" rx="12" class="c-region" stroke-width="1"/>
 
-        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="altreplica0 10.99.0.0/24" x="1256" y="534" width="256" height="106" rx="12" class="c-region" stroke-width="1"/>
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="region" data-composition-frame-id="1" data-composition-frame-label="altreplica0 10.99.0.0/24" x="1326" y="534" width="256" height="106" rx="12" class="c-region" stroke-width="1"/>
 
         <!-- Connection paths (before components for correct z-order) -->
         <g data-graph-role="automatic-crossover" style="--step:0">
-          <path data-graph-role="automatic-crossover-underlay" d="M 166 424 L 274 424" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="client" data-edge-to="dnsdist" data-edge-label="853 DoT · 444 DoH" data-edge-key="0" data-composition-points="166,424;274,424" data-composition-crossover="halo" data-composition-independent="true" d="M 166 424 L 274 424" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 166 424 L 280 424" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="client" data-edge-to="adgh" data-edge-label="853 DoT · 444 DoH" data-edge-key="0" data-composition-points="166,424;280,424" data-composition-crossover="halo" data-composition-independent="true" d="M 166 424 L 280 424" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:1">
-          <path data-graph-role="automatic-crossover-underlay" d="M 438 424 L 517 424" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="dnsdist" data-edge-to="adgh" data-edge-label="内腿 53" data-edge-key="1" data-composition-points="438,424;517,424" data-composition-crossover="halo" data-composition-independent="true" d="M 438 424 L 517 424" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 452 422 L 560 422" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="adgh" data-edge-to="dnsdist" data-edge-label="ECS · 内网 5300" data-edge-key="1" data-composition-points="452,422;560,422" data-composition-crossover="halo" data-composition-independent="true" d="M 452 422 L 560 422" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:2">
-          <path data-graph-role="automatic-crossover-underlay" d="M 675 424 L 740 424" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="adgh" data-edge-to="guard" data-edge-label="唯一上游" data-edge-key="2" data-composition-points="675,424;740,424" data-composition-crossover="halo" data-composition-independent="true" d="M 675 424 L 740 424" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 732 415.95 L 850 415.95" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="dnsdist" data-edge-to="guard" data-edge-label="缓存未命中 → 5355" data-edge-key="2" data-composition-points="732,415.95;850,415.95" data-composition-crossover="halo" data-composition-independent="true" d="M 732 415.95 L 850 415.95" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:3">
-          <path data-graph-role="automatic-crossover-underlay" d="M 828 356 L 828 117 Q 828 109 836 109 L 1000 109" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="unbound" data-edge-key="3" data-composition-points="828,356;828,109;1000,109" data-composition-crossover="halo" data-composition-independent="true" d="M 828 356 L 828 117 Q 828 109 836 109 L 1000 109" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 938 356 L 938 117 Q 938 109 946 109 L 1100 109" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="unbound" data-edge-key="3" data-composition-points="938,356;938,109;1100,109" data-composition-crossover="halo" data-composition-independent="true" d="M 938 356 L 938 117 Q 938 109 946 109 L 1100 109" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:4">
-          <path data-graph-role="automatic-crossover-underlay" d="M 844.1 356 L 844.1 183 Q 844.1 175 852.1 175 L 1000 175" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="unbound-b" data-edge-key="4" data-composition-points="844.1,356;844.1,175;1000,175" data-composition-crossover="halo" data-composition-independent="true" d="M 844.1 356 L 844.1 183 Q 844.1 175 852.1 175 L 1000 175" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 954.1 356 L 954.1 183 Q 954.1 175 962.1 175 L 1100 175" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="unbound-b" data-edge-key="4" data-composition-points="954.1,356;954.1,175;1100,175" data-composition-crossover="halo" data-composition-independent="true" d="M 954.1 356 L 954.1 183 Q 954.1 175 962.1 175 L 1100 175" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:5">
-          <path data-graph-role="automatic-crossover-underlay" d="M 811.9 356 L 811.9 249 Q 811.9 241 819.9 241 L 1000 241" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="aghdq" data-edge-key="5" data-composition-points="811.9,356;811.9,241;1000,241" data-composition-crossover="halo" data-composition-independent="true" d="M 811.9 356 L 811.9 249 Q 811.9 241 819.9 241 L 1000 241" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1026 401.95 L 1055 401.95 Q 1063 401.95 1063 393.95 L 1063 381 Q 1063 373 1071 373 L 1100 373" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="aghcf" data-edge-key="5" data-composition-points="1026,401.95;1063,401.95;1063,373;1100,373" data-composition-crossover="halo" data-composition-independent="true" d="M 1026 401.95 L 1055 401.95 Q 1063 401.95 1063 393.95 L 1063 381 Q 1063 373 1071 373 L 1100 373" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:6">
-          <path data-graph-role="automatic-crossover-underlay" d="M 859.15 356 L 859.15 340 Q 859.15 332 867.15 332 L 968 332 Q 976 332 976 324 L 976 315 Q 976 307 984 307 L 1000 307" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="aghdq2" data-edge-label="hedge" data-edge-key="6" data-composition-points="859.15,356;859.15,332;976,332;976,307;1000,307" data-composition-crossover="halo" data-composition-independent="true" d="M 859.15 356 L 859.15 340 Q 859.15 332 867.15 332 L 968 332 Q 976 332 976 324 L 976 315 Q 976 307 984 307 L 1000 307" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1026 418.05 L 1042 418.05 Q 1050 418.05 1050 410.05 L 1050 315 Q 1050 307 1058 307 L 1100 307" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="aghdq2" data-edge-label="alt / 备上游" data-edge-key="6" data-composition-points="1026,418.05;1050,418.05;1050,307;1100,307" data-composition-crossover="halo" data-composition-independent="true" d="M 1026 418.05 L 1042 418.05 Q 1050 418.05 1050 410.05 L 1050 315 Q 1050 307 1058 307 L 1100 307" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:7">
-          <path data-graph-role="automatic-crossover-underlay" d="M 916 431 L 950 431 Q 958 431 958 423 L 958 381 Q 958 373 966 373 L 1000 373" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="aghcf" data-edge-label="见证" data-edge-key="7" data-composition-points="916,431;958,431;958,373;1000,373" data-composition-crossover="halo" data-composition-independent="true" d="M 916 431 L 950 431 Q 958 431 958 423 L 958 381 Q 958 373 966 373 L 1000 373" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1026 373.95 L 1055 373.95 Q 1063 373.95 1063 365.95 L 1063 249 Q 1063 241 1071 241 L 1100 241" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="aghdq" data-edge-label="已摘除" data-edge-key="7" data-composition-points="1026,373.95;1063,373.95;1063,241;1100,241" data-composition-crossover="halo" data-composition-independent="true" d="M 1026 373.95 L 1055 373.95 Q 1063 373.95 1063 365.95 L 1063 249 Q 1063 241 1071 241 L 1100 241" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:8">
-          <path data-graph-role="automatic-crossover-underlay" d="M 916 474.05 L 950 474.05 Q 958 474.05 958 466.05 L 958 447 Q 958 439 966 439 L 1000 439" fill="none" stroke="var(--mask)" stroke-width="5.8" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="unbound-alt" data-edge-key="8" data-composition-points="916,474.05;958,474.05;958,439;1000,439" data-composition-crossover="halo" data-composition-independent="true" d="M 916 474.05 L 950 474.05 Q 958 474.05 958 466.05 L 958 447 Q 958 439 966 439 L 1000 439" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1026 459 L 1068 459 Q 1076 459 1076 467 L 1076 497 Q 1076 505 1084 505 L 1100 505" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="dnscrypt" data-edge-label="影子" data-edge-key="8" data-composition-points="1026,459;1076,459;1076,505;1100,505" data-composition-crossover="halo" data-composition-independent="true" d="M 1026 459 L 1068 459 Q 1076 459 1076 467 L 1076 497 Q 1076 505 1084 505 L 1100 505" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:9">
-          <path data-graph-role="automatic-crossover-underlay" d="M 916 459 L 968 459 Q 976 459 976 467 L 976 497 Q 976 505 984 505 L 1000 505" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="dnscrypt" data-edge-label="影子" data-edge-key="9" data-composition-points="916,459;976,459;976,505;1000,505" data-composition-crossover="halo" data-composition-independent="true" d="M 916 459 L 968 459 Q 976 459 976 467 L 976 497 Q 976 505 984 505 L 1000 505" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1026 445 L 1100 445" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="unbound-alt" data-edge-label="已停用" data-edge-key="9" data-composition-points="1026,445;1100,445" data-composition-crossover="halo" data-composition-independent="true" d="M 1026 445 L 1100 445" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:10">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 109 L 1376 109 Q 1384 109 1384 117 L 1384 180" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="unbound" data-edge-to="upstream" data-edge-key="10" data-composition-points="1196,109;1384,109;1384,180" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 109 L 1376 109 Q 1384 109 1384 117 L 1384 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1296 109 L 1432 109 Q 1440 109 1440 117 L 1440 180" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound" data-edge-to="upstream" data-edge-key="10" data-composition-points="1296,109;1440,109;1440,180" data-composition-crossover="halo" data-composition-independent="true" d="M 1296 109 L 1432 109 Q 1440 109 1440 117 L 1440 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:11">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 175 L 1212 175 Q 1220 175 1220 183 L 1220 301 Q 1220 309 1228 309 L 1270 309" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="unbound-b" data-edge-to="upstream" data-edge-key="11" data-composition-points="1196,175;1220,175;1220,309;1270,309" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 175 L 1212 175 Q 1220 175 1220 183 L 1220 301 Q 1220 309 1228 309 L 1270 309" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1296 175 L 1312 175 Q 1320 175 1320 167 L 1320 164 Q 1320 156 1328 156 L 1446 156 Q 1454 156 1454 164 L 1454 180" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-b" data-edge-to="upstream" data-edge-key="11" data-composition-points="1296,175;1320,175;1320,156;1454,156;1454,180" data-composition-crossover="halo" data-composition-independent="true" d="M 1296 175 L 1312 175 Q 1320 175 1320 167 L 1320 164 Q 1320 156 1328 156 L 1446 156 Q 1454 156 1454 164 L 1454 180" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:12">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 241 L 1238 241 Q 1246 241 1246 249 L 1246 315 Q 1246 323 1254 323 L 1270 323" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="aghdq" data-edge-to="upstream" data-edge-key="12" data-composition-points="1196,241;1246,241;1246,323;1270,323" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 241 L 1238 241 Q 1246 241 1246 249 L 1246 315 Q 1246 323 1254 323 L 1270 323" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1296 373 L 1310 373 Q 1318 373 1318 365 L 1318 359 Q 1318 351 1326 351 L 1340 351" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="aghcf" data-edge-to="upstream" data-edge-key="12" data-composition-points="1296,373;1318,373;1318,351;1340,351" data-composition-crossover="halo" data-composition-independent="true" d="M 1296 373 L 1310 373 Q 1318 373 1318 365 L 1318 359 Q 1318 351 1326 351 L 1340 351" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:13">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 307 L 1212 307 Q 1220 307 1220 315 L 1220 329 Q 1220 337 1228 337 L 1270 337" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="aghdq2" data-edge-to="upstream" data-edge-key="13" data-composition-points="1196,307;1220,307;1220,337;1270,337" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 307 L 1212 307 Q 1220 307 1220 315 L 1220 329 Q 1220 337 1228 337 L 1270 337" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1296 307 L 1310 307 Q 1318 307 1318 315 L 1318 329 Q 1318 337 1326 337 L 1340 337" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="aghdq2" data-edge-to="upstream" data-edge-key="13" data-composition-points="1296,307;1318,307;1318,337;1340,337" data-composition-crossover="halo" data-composition-independent="true" d="M 1296 307 L 1310 307 Q 1318 307 1318 315 L 1318 329 Q 1318 337 1326 337 L 1340 337" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:14">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 373 L 1225 373 Q 1233 373 1233 365 L 1233 359 Q 1233 351 1241 351 L 1270 351" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="aghcf" data-edge-to="upstream" data-edge-key="14" data-composition-points="1196,373;1233,373;1233,351;1270,351" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 373 L 1225 373 Q 1233 373 1233 365 L 1233 359 Q 1233 351 1241 351 L 1270 351" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 1296 439 L 1310 439 Q 1318 439 1318 447 L 1318 582 Q 1318 590 1326 590 L 1340 590" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="unbound-alt" data-edge-to="alt-replica" data-edge-label="副本对照" data-edge-key="14" data-composition-points="1296,439;1318,439;1318,590;1340,590" data-composition-crossover="halo" data-composition-independent="true" d="M 1296 439 L 1310 439 Q 1318 439 1318 447 L 1318 582 Q 1318 590 1326 590 L 1340 590" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:15">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 432 L 1238 432 Q 1246 432 1246 424 L 1246 373 Q 1246 365 1254 365 L 1270 365" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="unbound-alt" data-edge-to="upstream" data-edge-key="15" data-composition-points="1196,432;1246,432;1246,365;1270,365" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 432 L 1238 432 Q 1246 432 1246 424 L 1246 373 Q 1246 365 1254 365 L 1270 365" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 850 431 L 801 431 Q 793 431 793 439 L 793 580 Q 793 588 785 588 L 736 588" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="guard" data-edge-to="verifier" data-edge-label="AF_UNIX" data-edge-key="15" data-composition-points="850,431;793,431;793,588;736,588" data-composition-crossover="halo" data-composition-independent="true" d="M 850 431 L 801 431 Q 793 431 793 439 L 793 580 Q 793 588 785 588 L 736 588" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:16">
-          <path data-graph-role="automatic-crossover-underlay" d="M 1196 446 L 1225 446 Q 1233 446 1233 454 L 1233 582 Q 1233 590 1241 590 L 1270 590" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="unbound-alt" data-edge-to="alt-replica" data-edge-label="副本对照" data-edge-key="16" data-composition-points="1196,446;1233,446;1233,590;1270,590" data-composition-crossover="halo" data-composition-independent="true" d="M 1196 446 L 1225 446 Q 1233 446 1233 454 L 1233 582 Q 1233 590 1241 590 L 1270 590" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 152 800 L 152 644 Q 152 636 160 636 L 358 636 Q 366 636 366 628 L 366 472" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="probes" data-edge-to="adgh" data-edge-label="探活" data-edge-key="16" data-composition-points="152,800;152,636;366,636;366,472" data-composition-crossover="halo" data-composition-independent="true" d="M 152 800 L 152 644 Q 152 636 160 636 L 358 636 Q 366 636 366 628 L 366 472" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:17">
-          <path data-graph-role="automatic-crossover-underlay" d="M 828 492 L 828 560" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="guard" data-edge-to="verifier" data-edge-label="AF_UNIX" data-edge-key="17" data-composition-points="828,492;828,560" data-composition-crossover="halo" data-composition-independent="true" d="M 828 492 L 828 560" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 422 800 L 422 504 Q 422 496 430 496 L 638 496 Q 646 496 646 488 L 646 472" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="ops" data-edge-to="dnsdist" data-edge-label="统计 18083" data-edge-key="17" data-composition-points="422,800;422,496;646,496;646,472" data-composition-crossover="halo" data-composition-independent="true" d="M 422 800 L 422 504 Q 422 496 430 496 L 638 496 Q 646 496 646 488 L 646 472" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:18">
-          <path data-graph-role="automatic-crossover-underlay" d="M 152 800 L 152 648 Q 152 640 160 640 L 341 640 Q 349 640 349 632 L 349 480" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="probes" data-edge-to="dnsdist" data-edge-label="探活" data-edge-key="18" data-composition-points="152,800;152,640;349,640;349,480" data-composition-crossover="halo" data-composition-independent="true" d="M 152 800 L 152 648 Q 152 640 160 640 L 341 640 Q 349 640 349 632 L 349 480" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 706 800 L 706 654 Q 706 646 714 646 L 923 646 Q 931 646 931 638 L 931 492" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="refresh" data-edge-to="guard" data-edge-label="名单热加载" data-edge-key="18" data-composition-points="706,800;706,646;931,646;931,492" data-composition-crossover="halo" data-composition-independent="true" d="M 706 800 L 706 654 Q 706 646 714 646 L 923 646 Q 931 646 931 638 L 931 492" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
         <g data-graph-role="automatic-crossover" style="--step:19">
-          <path data-graph-role="automatic-crossover-underlay" d="M 422 800 L 422 648 Q 422 640 414 640 L 371 640 Q 363 640 363 632 L 363 480" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="ops" data-edge-to="dnsdist" data-edge-label="统计 18083" data-edge-key="19" data-composition-points="422,800;422,640;363,640;363,480" data-composition-crossover="halo" data-composition-independent="true" d="M 422 800 L 422 648 Q 422 640 414 640 L 371 640 Q 363 640 363 632 L 363 480" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        </g>
-        <g data-graph-role="automatic-crossover" style="--step:20">
-          <path data-graph-role="automatic-crossover-underlay" d="M 692 800 L 692 538 Q 692 530 700 530 L 728.6999999999999 530 Q 736.6999999999999 530 736.6999999999999 522 L 736.6999999999999 340 Q 736.6999999999999 332 744.6999999999999 332 L 788.85 332 Q 796.85 332 796.85 340 L 796.85 356" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="refresh" data-edge-to="guard" data-edge-label="名单热加载" data-edge-key="20" data-composition-points="692,800;692,530;736.6999999999999,530;736.6999999999999,332;796.85,332;796.85,356" data-composition-crossover="halo" data-composition-independent="true" d="M 692 800 L 692 538 Q 692 530 700 530 L 728.6999999999999 530 Q 736.6999999999999 530 736.6999999999999 522 L 736.6999999999999 340 Q 736.6999999999999 332 744.6999999999999 332 L 788.85 332 Q 796.85 332 796.85 340 L 796.85 356" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        </g>
-        <g data-graph-role="automatic-crossover" style="--step:21">
-          <path data-graph-role="automatic-crossover-underlay" d="M 982 800 L 982 558 Q 982 550 974 550 L 850 550 Q 842 550 842 542 L 842 492" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
-          <path data-edge-from="firewall" data-edge-to="guard" data-edge-label="地址对账" data-edge-key="21" data-composition-points="982,800;982,550;842,550;842,492" data-composition-crossover="halo" data-composition-independent="true" d="M 982 800 L 982 558 Q 982 550 974 550 L 850 550 Q 842 550 842 542 L 842 492" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+          <path data-graph-role="automatic-crossover-underlay" d="M 970 800 L 970 654 Q 970 646 962 646 L 953 646 Q 945 646 945 638 L 945 492" fill="none" stroke="var(--mask)" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round" pointer-events="none"/>
+          <path data-edge-from="firewall" data-edge-to="guard" data-edge-label="地址对账" data-edge-key="19" data-composition-points="970,800;970,646;945,646;945,492" data-composition-crossover="halo" data-composition-independent="true" d="M 970 800 L 970 654 Q 970 646 962 646 L 953 646 Q 945 646 945 638 L 945 492" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
         </g>
 
         <!-- Components -->
@@ -5121,156 +5113,156 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
         <text data-detail="context" x="98" y="438" class="t-muted" font-size="8.8" text-anchor="middle">外部查询入口 · DoT / DoH</text>
         </g>
 
-        <g id="node-dnsdist" data-node-id="dnsdist" data-node-label="dnsdist 入口层" tabindex="0" role="button" aria-label="聚焦dnsdist 入口层，宿主服务 · 853 / 444 · TLS 终结, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="宿主服务 · 853 / 444 · TLS 终结" data-node-tag="PacketCache · 限流" data-node-context="架构组件">
-          <title>dnsdist 入口层 · 宿主服务 · 853 / 444 · TLS 终结 · 架构组件 · PacketCache · 限流</title>
-          <rect x="274" y="368" width="164" height="112" rx="6" class="c-mask"/>
-          <rect x="274" y="368" width="164" height="112" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(280 374) scale(0.6875)">
+        <g id="node-dnsdist" data-node-id="dnsdist" data-node-label="dnsdist 缓存层" tabindex="0" role="button" aria-label="聚焦dnsdist 缓存层，宿主 · 内网 172.18.0.1:5300, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="宿主 · 内网 172.18.0.1:5300" data-node-tag="PacketCache 131072 · parseECS · 限流" data-node-context="架构组件">
+          <title>dnsdist 缓存层 · 宿主 · 内网 172.18.0.1:5300 · 架构组件 · PacketCache 131072 · parseECS · 限流</title>
+          <rect x="560" y="372" width="172" height="100" rx="6" class="c-mask"/>
+          <rect x="560" y="372" width="172" height="100" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(566 378) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="356" y="422" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnsdist 入口层</text>
-        <text data-detail="context" x="356" y="438" class="t-muted" font-size="8.3" text-anchor="middle">宿主服务 · 853 / 444 · TLS 终结</text>
-        <text data-detail="fine" x="356" y="472" class="t-security" font-size="7" text-anchor="middle">PacketCache · 限流</text>
+          <text data-node-label="" data-detail-anchor="" x="646" y="420" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnsdist 缓存层</text>
+        <text data-detail="context" x="646" y="436" class="t-muted" font-size="9" text-anchor="middle">宿主 · 内网 172.18.0.1:5300</text>
+        <text data-detail="fine" x="646" y="464" class="t-security" font-size="7" text-anchor="middle">PacketCache 131072 · parseECS · 限流</text>
         </g>
 
-        <g id="node-adgh" data-node-id="adgh" data-node-label="adgh 主 AdGuard Home" tabindex="0" role="button" aria-label="聚焦adgh 主 AdGuard Home，容器 · 过滤 + 缓存, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="容器 · 过滤 + 缓存" data-node-tag="上游只指向 guard" data-node-context="架构组件">
-          <title>adgh 主 AdGuard Home · 容器 · 过滤 + 缓存 · 架构组件 · 上游只指向 guard</title>
-          <rect x="517" y="382" width="158" height="84" rx="6" class="c-mask"/>
-          <rect x="517" y="382" width="158" height="84" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(523 388) scale(0.6875)">
+        <g id="node-adgh" data-node-id="adgh" data-node-label="adgh · 公网入口" tabindex="0" role="button" aria-label="聚焦adgh · 公网入口，853 DoT / 444 DoH · TLS 终结, 架构组件" aria-pressed="false" data-node-kind="backend" data-node-sublabel="853 DoT / 444 DoH · TLS 终结" data-node-tag="ECS /24 · 规则过滤 · 缓存关闭" data-node-context="架构组件">
+          <title>adgh · 公网入口 · 853 DoT / 444 DoH · TLS 终结 · 架构组件 · ECS /24 · 规则过滤 · 缓存关闭</title>
+          <rect x="280" y="372" width="172" height="100" rx="6" class="c-mask"/>
+          <rect x="280" y="372" width="172" height="100" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(286 378) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="596" y="422" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">adgh 主 AdGuard Home</text>
-        <text data-detail="context" x="596" y="438" class="t-muted" font-size="9" text-anchor="middle">容器 · 过滤 + 缓存</text>
-        <text data-detail="fine" x="596" y="458" class="t-backend" font-size="7" text-anchor="middle">上游只指向 guard</text>
+          <text data-node-label="" data-detail-anchor="" x="366" y="420" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">adgh · 公网入口</text>
+        <text data-detail="context" x="366" y="436" class="t-muted" font-size="9" text-anchor="middle">853 DoT / 444 DoH · TLS 终结</text>
+        <text data-detail="fine" x="366" y="464" class="t-backend" font-size="7" text-anchor="middle">ECS /24 · 规则过滤 · 缓存关闭</text>
         </g>
 
-        <g id="node-guard" data-node-id="guard" data-node-label="guard 决策层" tabindex="0" role="button" aria-label="聚焦guard 决策层，宿主网关 · 5355 / 5356, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="宿主网关 · 5355 / 5356" data-node-tag="准入 · 共识 · 见证 · 否决" data-node-context="架构组件">
-          <title>guard 决策层 · 宿主网关 · 5355 / 5356 · 架构组件 · 准入 · 共识 · 见证 · 否决</title>
-          <rect x="740" y="356" width="176" height="136" rx="6" class="c-mask"/>
-          <rect x="740" y="356" width="176" height="136" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(746 362) scale(0.6875)">
+        <g id="node-guard" data-node-id="guard" data-node-label="guard 决策层" tabindex="0" role="button" aria-label="聚焦guard 决策层，宿主网关 · 5355 / 5356, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="宿主网关 · 5355 / 5356" data-node-tag="准入 · 共识 · 见证 · 否决 · TTL 收口" data-node-context="架构组件">
+          <title>guard 决策层 · 宿主网关 · 5355 / 5356 · 架构组件 · 准入 · 共识 · 见证 · 否决 · TTL 收口</title>
+          <rect x="850" y="356" width="176" height="136" rx="6" class="c-mask"/>
+          <rect x="850" y="356" width="176" height="136" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(856 362) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="828" y="422" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">guard 决策层</text>
-        <text data-detail="context" x="828" y="438" class="t-muted" font-size="9" text-anchor="middle">宿主网关 · 5355 / 5356</text>
-        <text data-detail="fine" x="828" y="484" class="t-security" font-size="7" text-anchor="middle">准入 · 共识 · 见证 · 否决</text>
+          <text data-node-label="" data-detail-anchor="" x="938" y="422" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">guard 决策层</text>
+        <text data-detail="context" x="938" y="438" class="t-muted" font-size="9" text-anchor="middle">宿主网关 · 5355 / 5356</text>
+        <text data-detail="fine" x="938" y="484" class="t-security" font-size="7" text-anchor="middle">准入 · 共识 · 见证 · 否决 · TTL 收口</text>
         </g>
 
-        <g id="node-unbound" data-node-id="unbound" data-node-label="unbound · A 侧" tabindex="0" role="button" aria-label="聚焦unbound · A 侧，本机 DNSSEC 验证, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="backend" data-node-sublabel="本机 DNSSEC 验证" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>unbound · A 侧 · 本机 DNSSEC 验证 · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="84" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="84" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1006 90) scale(0.6875)">
+        <g id="node-unbound" data-node-id="unbound" data-node-label="unbound · A 侧" tabindex="0" role="button" aria-label="聚焦unbound · A 侧，本机 DNSSEC 验签 · forward 双上游, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="本机 DNSSEC 验签 · forward 双上游" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>unbound · A 侧 · 本机 DNSSEC 验签 · forward 双上游 · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="84" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="84" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1106 90) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound · A 侧</text>
-        <text data-detail="context" x="1098" y="123" class="t-muted" font-size="9" text-anchor="middle">本机 DNSSEC 验证</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="107" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound · A 侧</text>
+        <text data-detail="context" x="1198" y="123" class="t-muted" font-size="9" text-anchor="middle">本机 DNSSEC 验签 · forward 双上游</text>
         </g>
 
-        <g id="node-unbound-b" data-node-id="unbound-b" data-node-label="unbound-b · B 侧" tabindex="0" role="button" aria-label="聚焦unbound-b · B 侧，国内 6 家加密 DoT, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="backend" data-node-sublabel="国内 6 家加密 DoT" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>unbound-b · B 侧 · 国内 6 家加密 DoT · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="150" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="150" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1006 156) scale(0.6875)">
+        <g id="node-unbound-b" data-node-id="unbound-b" data-node-label="unbound-b · B 侧" tabindex="0" role="button" aria-label="聚焦unbound-b · B 侧，国内 3 家加密 DoT · ECS 分片, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="国内 3 家加密 DoT · ECS 分片" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>unbound-b · B 侧 · 国内 3 家加密 DoT · ECS 分片 · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="150" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="150" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1106 156) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="173" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound-b · B 侧</text>
-        <text data-detail="context" x="1098" y="189" class="t-muted" font-size="9" text-anchor="middle">国内 6 家加密 DoT</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="173" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound-b · B 侧</text>
+        <text data-detail="context" x="1198" y="189" class="t-muted" font-size="9" text-anchor="middle">国内 3 家加密 DoT · ECS 分片</text>
         </g>
 
-        <g id="node-aghdq" data-node-id="aghdq" data-node-label="aghdq · DoQ 主" tabindex="0" role="button" aria-label="聚焦aghdq · DoQ 主，NextDNS DoQ, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="NextDNS DoQ" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>aghdq · DoQ 主 · NextDNS DoQ · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="216" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="216" width="196" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1006 222) scale(0.6875)">
+        <g id="node-aghdq" data-node-id="aghdq" data-node-label="aghdq · 已摘除" tabindex="0" role="button" aria-label="聚焦aghdq · 已摘除，NextDNS DoQ · 上游握手故障, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="NextDNS DoQ · 上游握手故障" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>aghdq · 已摘除 · NextDNS DoQ · 上游握手故障 · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="216" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="216" width="196" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1106 222) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghdq · DoQ 主</text>
-        <text data-detail="context" x="1098" y="255" class="t-muted" font-size="9" text-anchor="middle">NextDNS DoQ</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="239" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghdq · 已摘除</text>
+        <text data-detail="context" x="1198" y="255" class="t-muted" font-size="9" text-anchor="middle">NextDNS DoQ · 上游握手故障</text>
         </g>
 
-        <g id="node-aghdq2" data-node-id="aghdq2" data-node-label="aghdq2 · DoQ 次" tabindex="0" role="button" aria-label="聚焦aghdq2 · DoQ 次，Quad9 DoQ · slow 列表, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Quad9 DoQ · slow 列表" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>aghdq2 · DoQ 次 · Quad9 DoQ · slow 列表 · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="282" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="282" width="196" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1006 288) scale(0.6875)">
+        <g id="node-aghdq2" data-node-id="aghdq2" data-node-label="aghdq2 · DoQ 备 / alt" tabindex="0" role="button" aria-label="聚焦aghdq2 · DoQ 备 / alt，Quad9 DoQ · 备用上游 + 核对, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Quad9 DoQ · 备用上游 + 核对" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>aghdq2 · DoQ 备 / alt · Quad9 DoQ · 备用上游 + 核对 · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="282" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="282" width="196" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1106 288) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghdq2 · DoQ 次</text>
-        <text data-detail="context" x="1098" y="321" class="t-muted" font-size="9" text-anchor="middle">Quad9 DoQ · slow 列表</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="305" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghdq2 · DoQ 备 / alt</text>
+        <text data-detail="context" x="1198" y="321" class="t-muted" font-size="9" text-anchor="middle">Quad9 DoQ · 备用上游 + 核对</text>
         </g>
 
-        <g id="node-aghcf" data-node-id="aghcf" data-node-label="aghcf · 见证 / 透传" tabindex="0" role="button" aria-label="聚焦aghcf · 见证 / 透传，Cloudflare DoT, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Cloudflare DoT" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>aghcf · 见证 / 透传 · Cloudflare DoT · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="348" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="348" width="196" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1006 354) scale(0.6875)">
+        <g id="node-aghcf" data-node-id="aghcf" data-node-label="aghcf · DoT 主 + 见证" tabindex="0" role="button" aria-label="聚焦aghcf · DoT 主 + 见证，Cloudflare + censurfridns（parallel）, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="cloud" data-node-sublabel="Cloudflare + censurfridns（parallel）" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>aghcf · DoT 主 + 见证 · Cloudflare + censurfridns（parallel） · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="348" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="348" width="196" height="50" rx="6" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="cloud" class="semantic-sigil s-cloud" transform="translate(1106 354) scale(0.6875)">
             <path d="M4.3 12.5h7.3a2.4 2.4 0 0 0 .2-4.8 4 4 0 0 0-7.5-1.3A3.1 3.1 0 0 0 4.3 12.5Z"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="371" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghcf · 见证 / 透传</text>
-        <text data-detail="context" x="1098" y="387" class="t-muted" font-size="9" text-anchor="middle">Cloudflare DoT</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="371" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">aghcf · DoT 主 + 见证</text>
+        <text data-detail="context" x="1198" y="387" class="t-muted" font-size="8.4" text-anchor="middle">Cloudflare + censurfridns（parallel）</text>
         </g>
 
-        <g id="node-unbound-alt" data-node-id="unbound-alt" data-node-label="unbound-alt · 核对" tabindex="0" role="button" aria-label="聚焦unbound-alt · 核对，第三方 DoT · 独立 TCB, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="backend" data-node-sublabel="第三方 DoT · 独立 TCB" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>unbound-alt · 核对 · 第三方 DoT · 独立 TCB · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="414" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="414" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1006 420) scale(0.6875)">
+        <g id="node-unbound-alt" data-node-id="unbound-alt" data-node-label="unbound-alt · 已停用" tabindex="0" role="button" aria-label="聚焦unbound-alt · 已停用，alt 已改走 aghdq2（Quad9 DoQ）, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="alt 已改走 aghdq2（Quad9 DoQ）" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>unbound-alt · 已停用 · alt 已改走 aghdq2（Quad9 DoQ） · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="414" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="414" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1106 420) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="437" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound-alt · 核对</text>
-        <text data-detail="context" x="1098" y="453" class="t-muted" font-size="9" text-anchor="middle">第三方 DoT · 独立 TCB</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="437" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">unbound-alt · 已停用</text>
+        <text data-detail="context" x="1198" y="453" class="t-muted" font-size="9" text-anchor="middle">alt 已改走 aghdq2（Quad9 DoQ）</text>
         </g>
 
-        <g id="node-dnscrypt" data-node-id="dnscrypt" data-node-label="dnscrypt-proxy · 影子" tabindex="0" role="button" aria-label="聚焦dnscrypt-proxy · 影子，加密候选 + 采样, 容器网络 dnsnet 172.18.0.0/16 · 固定 IP" aria-pressed="false" data-node-kind="backend" data-node-sublabel="加密候选 + 采样" data-node-context="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <title>dnscrypt-proxy · 影子 · 加密候选 + 采样 · 容器网络 dnsnet 172.18.0.0/16 · 固定 IP</title>
-          <rect x="1000" y="480" width="196" height="50" rx="6" class="c-mask"/>
-          <rect x="1000" y="480" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1006 486) scale(0.6875)">
+        <g id="node-dnscrypt" data-node-id="dnscrypt" data-node-label="dnscrypt-proxy · 影子" tabindex="0" role="button" aria-label="聚焦dnscrypt-proxy · 影子，加密候选 + 采样, 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）" aria-pressed="false" data-node-kind="backend" data-node-sublabel="加密候选 + 采样" data-node-context="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <title>dnscrypt-proxy · 影子 · 加密候选 + 采样 · 容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</title>
+          <rect x="1100" y="480" width="196" height="50" rx="6" class="c-mask"/>
+          <rect x="1100" y="480" width="196" height="50" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1106 486) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1098" y="503" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnscrypt-proxy · 影子</text>
-        <text data-detail="context" x="1098" y="519" class="t-muted" font-size="9" text-anchor="middle">加密候选 + 采样</text>
+          <text data-node-label="" data-detail-anchor="" x="1198" y="503" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">dnscrypt-proxy · 影子</text>
+        <text data-detail="context" x="1198" y="519" class="t-muted" font-size="9" text-anchor="middle">加密候选 + 采样</text>
         </g>
 
         <g id="node-upstream" data-node-id="upstream" data-node-label="上游互联网" tabindex="0" role="button" aria-label="聚焦上游互联网，NextDNS · Quad9 · Cloudflare · 国内 DoT, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="NextDNS · Quad9 · Cloudflare · 国内 DoT" data-node-tag="只能经候选源出网" data-node-context="架构组件">
           <title>上游互联网 · NextDNS · Quad9 · Cloudflare · 国内 DoT · 架构组件 · 只能经候选源出网</title>
-          <rect x="1270" y="180" width="228" height="300" rx="6" class="c-mask"/>
-          <rect x="1270" y="180" width="228" height="300" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1276 186) scale(0.6875)">
+          <rect x="1340" y="180" width="228" height="300" rx="6" class="c-mask"/>
+          <rect x="1340" y="180" width="228" height="300" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(1346 186) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1384" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">上游互联网</text>
-        <text data-detail="context" x="1384" y="344" class="t-muted" font-size="9" text-anchor="middle">NextDNS · Quad9 · Cloudflare · 国内 DoT</text>
-        <text data-detail="fine" x="1384" y="472" class="t-external" font-size="7" text-anchor="middle">只能经候选源出网</text>
+          <text data-node-label="" data-detail-anchor="" x="1454" y="328" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">上游互联网</text>
+        <text data-detail="context" x="1454" y="344" class="t-muted" font-size="9" text-anchor="middle">NextDNS · Quad9 · Cloudflare · 国内 DoT</text>
+        <text data-detail="fine" x="1454" y="472" class="t-external" font-size="7" text-anchor="middle">只能经候选源出网</text>
         </g>
 
         <g id="node-alt-replica" data-node-id="alt-replica" data-node-label="alt-replica-unb" tabindex="0" role="button" aria-label="聚焦alt-replica-unb，alt 副本 · 演练 / 灰度, altreplica0 10.99.0.0/24" aria-pressed="false" data-node-kind="backend" data-node-sublabel="alt 副本 · 演练 / 灰度" data-node-tag="10.99.0.2 · 不参与主链路" data-node-context="altreplica0 10.99.0.0/24">
           <title>alt-replica-unb · alt 副本 · 演练 / 灰度 · altreplica0 10.99.0.0/24 · 10.99.0.2 · 不参与主链路</title>
-          <rect x="1270" y="560" width="228" height="60" rx="6" class="c-mask"/>
-          <rect x="1270" y="560" width="228" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1276 566) scale(0.6875)">
+          <rect x="1340" y="560" width="228" height="60" rx="6" class="c-mask"/>
+          <rect x="1340" y="560" width="228" height="60" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(1346 566) scale(0.6875)">
             <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="1384" y="588" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">alt-replica-unb</text>
-        <text data-detail="context" x="1384" y="604" class="t-muted" font-size="9" text-anchor="middle">alt 副本 · 演练 / 灰度</text>
-        <text data-detail="fine" x="1384" y="612" class="t-backend" font-size="7" text-anchor="middle">10.99.0.2 · 不参与主链路</text>
+          <text data-node-label="" data-detail-anchor="" x="1454" y="588" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">alt-replica-unb</text>
+        <text data-detail="context" x="1454" y="604" class="t-muted" font-size="9" text-anchor="middle">alt 副本 · 演练 / 灰度</text>
+        <text data-detail="fine" x="1454" y="612" class="t-backend" font-size="7" text-anchor="middle">10.99.0.2 · 不参与主链路</text>
         </g>
 
         <g id="node-verifier" data-node-id="verifier" data-node-label="verifier" tabindex="0" role="button" aria-label="聚焦verifier，AF_UNIX · 独立进程交叉验证, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="AF_UNIX · 独立进程交叉验证" data-node-context="架构组件">
           <title>verifier · AF_UNIX · 独立进程交叉验证 · 架构组件</title>
-          <rect x="740" y="560" width="176" height="56" rx="6" class="c-mask"/>
-          <rect x="740" y="560" width="176" height="56" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(746 566) scale(0.6875)">
+          <rect x="560" y="560" width="176" height="56" rx="6" class="c-mask"/>
+          <rect x="560" y="560" width="176" height="56" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(566 566) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="828" y="586" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">verifier</text>
-        <text data-detail="context" x="828" y="602" class="t-muted" font-size="9" text-anchor="middle">AF_UNIX · 独立进程交叉验证</text>
+          <text data-node-label="" data-detail-anchor="" x="648" y="586" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">verifier</text>
+        <text data-detail="context" x="648" y="602" class="t-muted" font-size="9" text-anchor="middle">AF_UNIX · 独立进程交叉验证</text>
         </g>
 
         <g id="node-probes" data-node-id="probes" data-node-label="探针" tabindex="0" role="button" aria-label="聚焦探针，入口 / 链路 / 外部三路, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="入口 / 链路 / 外部三路" data-node-context="架构组件">
@@ -5299,97 +5291,98 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
 
         <g id="node-refresh" data-node-id="refresh" data-node-label="名单刷新" tabindex="0" role="button" aria-label="聚焦名单刷新，cn 名单归档 + 验签, 架构组件" aria-pressed="false" data-node-kind="external" data-node-sublabel="cn 名单归档 + 验签" data-node-context="架构组件">
           <title>名单刷新 · cn 名单归档 + 验签 · 架构组件</title>
-          <rect x="576" y="800" width="232" height="108" rx="6" class="c-mask"/>
-          <rect x="576" y="800" width="232" height="108" rx="6" class="c-external" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(582 806) scale(0.6875)">
+          <rect x="590" y="800" width="232" height="108" rx="6" class="c-mask"/>
+          <rect x="590" y="800" width="232" height="108" rx="6" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(596 806) scale(0.6875)">
             <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
             <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="692" y="852" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">名单刷新</text>
-        <text data-detail="context" x="692" y="868" class="t-muted" font-size="9" text-anchor="middle">cn 名单归档 + 验签</text>
+          <text data-node-label="" data-detail-anchor="" x="706" y="852" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">名单刷新</text>
+        <text data-detail="context" x="706" y="868" class="t-muted" font-size="9" text-anchor="middle">cn 名单归档 + 验签</text>
         </g>
 
         <g id="node-firewall" data-node-id="firewall" data-node-label="防火墙与地址对账" tabindex="0" role="button" aria-label="聚焦防火墙与地址对账，iptables 收口 + 容器 IP 一致性, 架构组件" aria-pressed="false" data-node-kind="security" data-node-sublabel="iptables 收口 + 容器 IP 一致性" data-node-context="架构组件">
           <title>防火墙与地址对账 · iptables 收口 + 容器 IP 一致性 · 架构组件</title>
-          <rect x="832" y="800" width="300" height="108" rx="6" class="c-mask"/>
-          <rect x="832" y="800" width="300" height="108" rx="6" class="c-security" stroke-width="1.5"/>
-          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(838 806) scale(0.6875)">
+          <rect x="850" y="800" width="240" height="108" rx="6" class="c-mask"/>
+          <rect x="850" y="800" width="240" height="108" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(856 806) scale(0.6875)">
             <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
             <path d="m5.8 8 1.5 1.5 3-3"/>
           </g>
-          <text data-node-label="" data-detail-anchor="" x="982" y="852" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">防火墙与地址对账</text>
-        <text data-detail="context" x="982" y="868" class="t-muted" font-size="9" text-anchor="middle">iptables 收口 + 容器 IP 一致性</text>
+          <text data-node-label="" data-detail-anchor="" x="970" y="852" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">防火墙与地址对账</text>
+        <text data-detail="context" x="970" y="868" class="t-muted" font-size="9" text-anchor="middle">iptables 收口 + 容器 IP 一致性</text>
         </g>
 
         <!-- Connection labels -->
-        <g data-detail="context" data-edge-from="client" data-edge-to="dnsdist" data-edge-label="853 DoT · 444 DoH" data-edge-key="0">
-          <rect x="174.2" y="404" width="91.6" height="14" rx="3" class="c-mask"/>
-          <text x="220" y="414" class="t-edge-emphasis" font-size="8" text-anchor="middle">853 DoT · 444 DoH</text>
+        <g data-detail="context" data-edge-from="client" data-edge-to="adgh" data-edge-label="853 DoT · 444 DoH" data-edge-key="0">
+          <rect x="177.2" y="404" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="223" y="414" class="t-edge-emphasis" font-size="8" text-anchor="middle">853 DoT · 444 DoH</text>
         </g>
-        <g data-detail="context" data-edge-from="dnsdist" data-edge-to="adgh" data-edge-label="内腿 53" data-edge-key="1">
-          <rect x="455.7" y="404" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="477.5" y="414" class="t-edge-emphasis" font-size="8" text-anchor="middle">内腿 53</text>
+        <g data-detail="context" data-edge-from="adgh" data-edge-to="dnsdist" data-edge-label="ECS · 内网 5300" data-edge-key="1">
+          <rect x="465" y="402" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="506" y="412" class="t-edge-emphasis" font-size="8" text-anchor="middle">ECS · 内网 5300</text>
         </g>
-        <g data-detail="context" data-edge-from="adgh" data-edge-to="guard" data-edge-label="唯一上游" data-edge-key="2">
-          <rect x="683.3" y="404" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="707.5" y="414" class="t-edge-emphasis" font-size="8" text-anchor="middle">唯一上游</text>
-        </g>
-
-
-
-        <g data-detail="context" data-edge-from="guard" data-edge-to="aghdq2" data-edge-label="hedge" data-edge-key="6">
-          <rect x="900.575" y="312" width="34" height="14" rx="3" class="c-mask"/>
-          <text x="917.575" y="322" class="t-edge-dashed" font-size="8" text-anchor="middle">hedge</text>
-        </g>
-        <g data-detail="context" data-edge-from="guard" data-edge-to="aghcf" data-edge-label="见证" data-edge-key="7">
-          <rect x="943" y="382" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="958" y="392" class="t-edge-dashed" font-size="8" text-anchor="middle">见证</text>
-        </g>
-
-        <g data-detail="context" data-edge-from="guard" data-edge-to="dnscrypt" data-edge-label="影子" data-edge-key="9">
-          <rect x="940" y="486.5" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="955" y="496.5" class="t-edge-dashed" font-size="8" text-anchor="middle">影子</text>
+        <g data-detail="context" data-edge-from="dnsdist" data-edge-to="guard" data-edge-label="缓存未命中 → 5355" data-edge-key="2">
+          <rect x="745.2" y="395.95" width="91.6" height="14" rx="3" class="c-mask"/>
+          <text x="791" y="405.95" class="t-edge-emphasis" font-size="8" text-anchor="middle">缓存未命中 → 5355</text>
         </g>
 
 
 
+        <g data-detail="context" data-edge-from="guard" data-edge-to="aghdq2" data-edge-label="alt / 备上游" data-edge-key="6">
+          <rect x="976.4000000000001" y="327.7625" width="67.6" height="14" rx="3" class="c-mask"/>
+          <text x="1010.2" y="337.7625" class="t-edge-emphasis" font-size="8" text-anchor="middle">alt / 备上游</text>
+        </g>
+        <g data-detail="context" data-edge-from="guard" data-edge-to="aghdq" data-edge-label="已摘除" data-edge-key="7">
+          <rect x="1043.6" y="287.475" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="1063" y="297.475" class="t-edge-dashed" font-size="8" text-anchor="middle">已摘除</text>
+        </g>
+        <g data-detail="context" data-edge-from="guard" data-edge-to="dnscrypt" data-edge-label="影子" data-edge-key="8">
+          <rect x="1061" y="462" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="1076" y="472" class="t-edge-dashed" font-size="8" text-anchor="middle">影子</text>
+        </g>
+        <g data-detail="context" data-edge-from="guard" data-edge-to="unbound-alt" data-edge-label="已停用" data-edge-key="9">
+          <rect x="1043.6" y="425" width="38.8" height="14" rx="3" class="c-mask"/>
+          <text x="1063" y="435" class="t-edge-dashed" font-size="8" text-anchor="middle">已停用</text>
+        </g>
 
 
 
-        <g data-detail="context" data-edge-from="unbound-alt" data-edge-to="alt-replica" data-edge-label="副本对照" data-edge-key="16">
-          <rect x="1208.8" y="498" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="1233" y="508" class="t-edge-dashed" font-size="8" text-anchor="middle">副本对照</text>
+
+        <g data-detail="context" data-edge-from="unbound-alt" data-edge-to="alt-replica" data-edge-label="副本对照" data-edge-key="14">
+          <rect x="1324" y="507.5" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="1348.2" y="517.5" class="t-edge-dashed" font-size="8" text-anchor="middle">副本对照</text>
         </g>
-        <g data-detail="context" data-edge-from="guard" data-edge-to="verifier" data-edge-label="AF_UNIX" data-edge-key="17">
-          <rect x="778.4000000000001" y="519" width="43.6" height="14" rx="3" class="c-mask"/>
-          <text x="800.2" y="529" class="t-edge-dashed" font-size="8" text-anchor="middle">AF_UNIX</text>
+        <g data-detail="context" data-edge-from="guard" data-edge-to="verifier" data-edge-label="AF_UNIX" data-edge-key="15">
+          <rect x="771.2" y="489.5" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="793" y="499.5" class="t-edge-dashed" font-size="8" text-anchor="middle">AF_UNIX</text>
         </g>
-        <g data-detail="context" data-edge-from="probes" data-edge-to="dnsdist" data-edge-label="探活" data-edge-key="18">
-          <rect x="235.5" y="620" width="30" height="14" rx="3" class="c-mask"/>
-          <text x="250.5" y="630" class="t-edge-dashed" font-size="8" text-anchor="middle">探活</text>
+        <g data-detail="context" data-edge-from="probes" data-edge-to="adgh" data-edge-label="探活" data-edge-key="16">
+          <rect x="244" y="616" width="30" height="14" rx="3" class="c-mask"/>
+          <text x="259" y="626" class="t-edge-dashed" font-size="8" text-anchor="middle">探活</text>
         </g>
-        <g data-detail="context" data-edge-from="ops" data-edge-to="dnsdist" data-edge-label="统计 18083" data-edge-key="19">
-          <rect x="363.5" y="620" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="392.5" y="630" class="t-edge-dashed" font-size="8" text-anchor="middle">统计 18083</text>
+        <g data-detail="context" data-edge-from="ops" data-edge-to="dnsdist" data-edge-label="统计 18083" data-edge-key="17">
+          <rect x="505" y="476" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="534" y="486" class="t-edge-dashed" font-size="8" text-anchor="middle">统计 18083</text>
         </g>
-        <g data-detail="context" data-edge-from="refresh" data-edge-to="guard" data-edge-label="名单热加载" data-edge-key="20">
-          <rect x="685.3499999999999" y="510" width="58" height="14" rx="3" class="c-mask"/>
-          <text x="714.3499999999999" y="520" class="t-edge-dashed" font-size="8" text-anchor="middle">名单热加载</text>
+        <g data-detail="context" data-edge-from="refresh" data-edge-to="guard" data-edge-label="名单热加载" data-edge-key="18">
+          <rect x="789.5" y="626" width="58" height="14" rx="3" class="c-mask"/>
+          <text x="818.5" y="636" class="t-edge-dashed" font-size="8" text-anchor="middle">名单热加载</text>
         </g>
-        <g data-detail="context" data-edge-from="firewall" data-edge-to="guard" data-edge-label="地址对账" data-edge-key="21">
-          <rect x="887.8" y="530" width="48.4" height="14" rx="3" class="c-mask"/>
-          <text x="912" y="540" class="t-edge-dashed" font-size="8" text-anchor="middle">地址对账</text>
+        <g data-detail="context" data-edge-from="firewall" data-edge-to="guard" data-edge-label="地址对账" data-edge-key="19">
+          <rect x="915.5999999999999" y="716" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="939.8" y="726" class="t-edge-dashed" font-size="8" text-anchor="middle">地址对账</text>
         </g>
 
         <!-- Boundary labels (foreground masks keep routes out of titles) -->
-        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="容器网络 dnsnet 172.18.0.0/16 · 固定 IP">
-          <rect data-graph-role="structural-frame-label-mask" x="975.8490205580645" y="62" width="244.30195888387095" height="18" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="979.8490205580645" y="76.01290422580645" class="t-cloud" font-size="10.012904225806452" font-weight="600">容器网络 dnsnet 172.18.0.0/16 · 固定 IP</text>
+        <g data-graph-role="structural-frame-label" data-composition-frame-id="0" data-composition-frame-kind="region" data-composition-frame-label="容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）">
+          <rect data-graph-role="structural-frame-label-mask" x="1020.3354673709678" y="62" width="355.3290652580645" height="18" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="1024.3354673709678" y="76.46451712903226" class="t-cloud" font-size="10.464517129032258" font-weight="600">容器网络 dnsnet 172.18.0.0/16（生产为动态 IP · 会漂移）</text>
         </g>
 
         <g data-graph-role="structural-frame-label" data-composition-frame-id="1" data-composition-frame-kind="region" data-composition-frame-label="altreplica0 10.99.0.0/24">
-          <rect data-graph-role="structural-frame-label-mask" x="1260" y="538" width="154.1858208516129" height="18" rx="3" class="c-mask"/>
-          <text data-boundary-label="" x="1264" y="552.0129042258064" class="t-cloud" font-size="10.012904225806452" font-weight="600">altreplica0 10.99.0.0/24</text>
+          <rect data-graph-role="structural-frame-label-mask" x="1330" y="538" width="160.68904665806448" height="18" rx="3" class="c-mask"/>
+          <text data-boundary-label="" x="1334" y="552.4645171290323" class="t-cloud" font-size="10.464517129032258" font-weight="600">altreplica0 10.99.0.0/24</text>
         </g>
 
         <!-- Legend -->
@@ -5594,9 +5587,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>必经链（实线）</h3>
         </div>
         <ul>
-          <li>客户端 → dnsdist → 主 AdGuard Home → guard 单一入口</li>
-          <li>guard 是唯一策略实现，AdGuard 没有绕过它的 fallback</li>
-          <li>候选源出网前都要经 guard 的准入判定</li>
+          <li>客户端 → AdGuard Home（TLS 终结 + 注入 ECS /24）→ dnsdist（ECS 感知缓存）→ guard 单一入口</li>
+          <li>guard 是唯一策略实现，AdGuard 没有绕过它的 fallback（fallback_dns: []）</li>
+          <li>候选源出网前都要经 guard 的准入判定；无独立佐证的放行出口统一把 TTL 压到 60s</li>
         </ul>
       </div>
 
@@ -5606,9 +5599,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>条件通道（虚线）</h3>
         </div>
         <ul>
-          <li>aghdq2 仅在 hedge 之后并发，不和主通道抢首答</li>
-          <li>aghcf 提供国内域名存在性见证与 SERVFAIL 快速透传</li>
-          <li>dnscrypt 只做影子采样，应答不能当作 DNSSEC 证据</li>
+          <li>aghcf 是 unbound A 的主 forward-addr（Cloudflare + censurfridns 并行），兼国内域名存在性见证</li>
+          <li>aghdq2 是 unbound A 的备 forward-addr，兼 guard 的 alt 认证备用与 DoQ 核对通道</li>
+          <li>aghdq（NextDNS）上游握手持续失败，已从 forward-addr 摘除；dnscrypt 只做影子采样</li>
         </ul>
       </div>
 
@@ -5618,9 +5611,9 @@ OTHER DEALINGS IN THE FONT SOFTWARE.
           <h3>部署口径</h3>
         </div>
         <ul>
-          <li>容器全部在 Compose 网络 dnsnet 里用固定 IP，guard 位于宿主网关侧</li>
-          <li>alt-replica-unb 在 altreplica0（10.99.0.0/24），用于演练与灰度</li>
-          <li>dnsdist 是宿主 systemd 服务，不是容器；legacy 部署改由 Nginx 承接 853 / 444</li>
+          <li>生产实例用 Docker 默认 bridge（无固定 IP），容器重启会漂移，靠 5 分钟一次的地址对账收敛</li>
+          <li>AGH 自带缓存必须关：它是域名单键，不按 ECS 分片（实测把 A 省答案返回给 B 省）</li>
+          <li>配置模板仍是旧形态（dnsdist 公网入口），差异表见 ARCHITECTURE.md 第 8 节</li>
         </ul>
       </div>
     </div>

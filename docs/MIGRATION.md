@@ -1,4 +1,6 @@
 # 迁移与重建
+> **入口形态提示（2026-10-28）**：生产实例的公网 853 / 444 已交给 AdGuard Home（按客户端真实 IP 注入 ECS `/24`），dnsdist 退到内网 `172.18.0.1:5300` 做 ECS 感知缓存。本文件里与 `install.sh` / `dnsdist` 相关的步骤仍对应**模板形态**，用它们部署出来的是模板形态（功能可用，但不含 per-user ECS 与按省分片的缓存）。两种形态的完整差异表、每项差异的原因，以及生产侧额外的自动收敛单元，见 [ARCHITECTURE.md 第 8 节](ARCHITECTURE.md)。
+
 
 ## 1. 从旧部署迁移到新机器
 
@@ -47,7 +49,7 @@ sudo cp /root/migrate-extract/dnsguard/agh-api.env /etc/dnsguard/ && sudo chmod 
 
 ```bash
 vi .env            # DOMAIN、CERT_*（ACME 邮箱、证书路径）
-sudo ./install.sh  # 幂等：只重渲染 dnsdist/nginx/证书相关部分
+sudo ./install.sh  # 幂等：只重渲染 dnsdist / nginx / 证书相关部分（模板形态；生产实例的入口在 AGH，见顶部提示）
 sudo ./verify.sh
 ```
 
@@ -63,7 +65,7 @@ sudo /usr/local/sbin/dnsguard-ip-reconcile.sh --check   # 应报 4~6 项全部�
 
 `dnsguard-ip-reconcile.sh` 会把"写死容器 IP"的 6 个位置（nginx stream 的 `proxy_pass`、unbound A 的 `forward-addr`、dotfront drop-in、AGH 上游、guard 监听地址、探针源地址别名）按 `docker inspect` 的**实际分配**对齐，并带漂移巡检 timer。
 
-**注意**：这 6 处不包含 dnsdist。`/etc/dnsdist/dnsdist.conf` 里的 `newServer({address="<AGH_IP>:53"})` 是渲染时写死的，改网段后要重跑 `./install.sh`（或手改该文件）再 `systemctl restart dnsdist`。
+**注意**：这 6 处不包含 dnsdist。`/etc/dnsdist/dnsdist.conf` 里的 `newServer({address="<guard 地址>:5355"})` 是渲染时写死的 —— 模板形态下上游是 AGH（`<AGH_IP>:53`），生产实例已改成 guard（`172.18.0.1:5355`），改网段后要重跑 `./install.sh`（或手改该文件）再 `systemctl restart dnsdist`。
 
 ## 4. 换上游
 

@@ -1,4 +1,6 @@
 # 运维手册
+> **入口形态提示（2026-10-28）**：生产实例的公网 853 / 444 已交给 AdGuard Home（按客户端真实 IP 注入 ECS `/24`），dnsdist 退到内网 `172.18.0.1:5300` 做 ECS 感知缓存。本文件里与 `install.sh` / `dnsdist` 相关的步骤仍对应**模板形态**，用它们部署出来的是模板形态（功能可用，但不含 per-user ECS 与按省分片的缓存）。两种形态的完整差异表、每项差异的原因，以及生产侧额外的自动收敛单元，见 [ARCHITECTURE.md 第 8 节](ARCHITECTURE.md)。
+
 
 > 下面的路径以默认 `.env` 为准：`CODE_DIR=/opt/dnsguard`、`LISTS_DIR=/opt/dnscrypt-proxy`、`CHAINMON_DIR=/opt/chainmon`、`DEVFP_DIR=/opt/devfp`。
 
@@ -139,7 +141,7 @@ sudo $CODE_DIR/tools/make-snapshot.sh          # → /root/dns-snapshot-<日期>
 | 症状 | 先做 |
 |---|---|
 | 客户端全部解析失败 | `verify.sh`；再看 `journalctl -u dnsguard -n 80`、`stats.json` 的 `fc_*` |
-| 只有 DoT 失败 | `openssl s_client -connect <ip>:853 -servername $DOMAIN`；`systemctl status dnsdist` + 证书（legacy 场景再查 stream 片段） |
+| 只有 DoT 失败 | `openssl s_client -connect <ip>:853 -servername $DOMAIN`；**生产实例中 853 的监听者是 AGH 容器 —— 先看 `docker logs --tail 50 adgh`**；模板形态才看 `systemctl status dnsdist` + 证书（legacy 场景再查 stream 片段） |
 | 只有 DoH 失败 | `curl -sv https://$DOMAIN:444/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB` |
 | 国内域名被解析到境外 CDN | `probe-cand.py <域名>`；若 B 给的是污染答案而 guard 采纳了 → 加入 `cn-trust-exceptions.txt` |
 | 某个境外域名解析不到（NXDOMAIN） | 检查是否误入否决名单：`grep -i <域名> ${LISTS_DIR}/cn_veto.txt` |

@@ -1,5 +1,9 @@
 # 部署
 
+> **生产实例偏差（2026-10-28）**：本文件按 `install.sh` 的**模板形态**叙述 —— dnsdist 终结公网 853/444。生产实例 logic769.xyz 已改成「AdGuard Home 做公网入口并按客户端 IP 注入 ECS → dnsdist 退到内网 `172.18.0.1:5300` 做 ECS 感知缓存」。两种形态的完整差异表、每项差异的**原因**、以及生产侧额外的自动收敛单元，见 [ARCHITECTURE.md 第 8 节](ARCHITECTURE.md)。用一个 `./install.sh` 部署出来的是**模板形态**：功能可用、防投毒不变，但不含 per-user ECS 与按省分片的缓存。
+>
+> 要看生产实例怎么装，请对照第 8 节逐项调整；本文件的命令本身没有改，仍与 `install.sh` 逐条对应。
+
 ## 1. 前置条件
 
 | 项 | 要求 |
@@ -8,7 +12,7 @@
 | 权限 | root（要写 systemd 单元、容器、iptables、nginx） |
 | 依赖 | `docker`（含 compose 插件）、`dnsdist`（853/444 入口）、`python3` ≥ 3.6、`git`、`iptables`、`openssl`、`curl`；`nginx` 仅在跑不了 dnsdist 的 legacy 场景需要 |
 | 网络 | 能出 443/853 到公网（拉镜像、DoT 上游）；对公网服务还需放行 853/443/444 |
-| 端口 | 853（dnsdist DoT）、444（dnsdist DoH，路径 `/dns-query`）、443（nginx：看板/站点）、80（仅 ACME HTTP-01 用），以及各回环端口（`127.0.0.1:5199` dnsdist 控制台、`127.0.0.1:18083` 统计端点） |
+| 端口 | 853（dnsdist DoT）、444（dnsdist DoH，路径 `/dns-query`）、443（nginx：看板/站点）、80（仅 ACME HTTP-01 用），以及各回环端口（`127.0.0.1:5199` dnsdist 控制台、`127.0.0.1:18083` 统计端点）。**生产实例**：853 / 444 由 AGH 容器直接承接，dnsdist 只监听内网 `172.18.0.1:5300` |
 
 ```bash
 # Debian / Ubuntu
@@ -73,7 +77,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 
 ### 宿主端口
 
-`AGH_UI_PORT=3000`、`AGH_HTTPS_PORT=4443`（容器 443 → 回环；dnsdist 部署下它是备用路径，只有 legacy nginx 反代时才用到）、`AGH_DOT_PORT=8854`（容器 853 → 回环）、`AGHDQ_UI_PORT=13000`、`AGHDQ_DNS_PORT=5533`（guard 的 DoQ 主通道）、`AGHDQ2_UI_PORT=13001`、`AGHDQ2_DNS_PORT=5534`（DoQ2：Quad9）、`AGHCF_UI_PORT=13003`、`AGHCF_DNS_PORT=5535`（CN 见证 + fastpass）、`DOT_PORT=853`、`DOH_PORT=444`、`CHAINMON_PORT=8787`、`DEVFP_PORT=8789`。
+`AGH_UI_PORT=3000`、`AGH_HTTPS_PORT=4443`（容器 443 → 回环；dnsdist 部署下它是备用路径，只有 legacy nginx 反代时才用到）、`AGH_DOT_PORT=8854`（容器 853 → 回环）、`AGHDQ_UI_PORT=13000`、`AGHDQ_DNS_PORT=5533`（guard 的 DoQ 主通道）、`AGHDQ2_UI_PORT=13001`、`AGHDQ2_DNS_PORT=5534`（DoQ2：Quad9）、`AGHCF_UI_PORT=13003`、`AGHCF_DNS_PORT=5535`（CN 见证 + fastpass）、`DOT_PORT=853`、`DOH_PORT=444`、`CHAINMON_PORT=8787`、`DEVFP_PORT=8789`。**生产实例**还额外把 AGH 映射到公网（`0.0.0.0:853:853`、`0.0.0.0:444:443`），dnsdist 不再监听公网端口；DoH 必须映射到 `:444` 而不是 `:443`，否则 devfp 按端口判定会把 DoH 记成普通网页流量。
 
 端口冲突时只改这里，`install.sh` 会把 nginx 片段与 AGH 上游一起改掉。
 
@@ -120,7 +124,7 @@ sudo DNS_DOMAIN=dns.mydomain.net LISTS_PROFILE=fetch ./install.sh
 4. **名单**：默认 `LISTS_PROFILE=fetch` —— 立即拉真实名单（域名 → 否决/IP → 完整性校验）；条数不足（多半没外网）会自动退回骨架并告警，不阻断安装
 5. **容器**：`docker compose up -d`；按需等待 AdGuard Home 面板就绪并设置管理员密码、AGH 上游指向 guard
 6. **证书**：自签 / ACME / 复用你给的路径
-7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`（该文件由安装脚本按当时的 apiKey 生成，仓库里没有，改口令后需重跑安装或手改）。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）
+7. **dnsdist 入口**：渲染 `deploy/dnsdist/dnsdist.conf.tpl` → `/etc/dnsdist/dnsdist.conf`（口令自动生成、权限 0640），装单元并 `enable --now`；查询日志 `/var/log/dnsdist-query.log` + logrotate；把统计端点与 apiKey 写进 `chainmon.service.d/30-dnsdist-stats.conf`（该文件由安装脚本按当时的 apiKey 生成，仓库里没有，改口令后需重跑安装或手改）。缺 dnsdist 时告警并退化到 legacy 的 nginx 片段（`INSTALL_NGINX=1`）。**生产实例已不采用这一步的形态**：`/etc/dnsdist/dnsdist.conf` 改成 `setLocal("172.18.0.1:5300")` + `parseECS=true` 的 131072 条 PacketCache + `newServer(<guard>:5355)`，公网 TLS 由 AGH 终结（见第 8 节）
 8. **systemd**：安装单元与 timer（guard / verifier / chainmon / devfp 及其 drop-in、DoT 明文内腿采集器 `dotfront-spool`、alt 就绪门禁 `unbound-alt-readiness.service` + `.timer`、内存策略 `cgroup-memsw-limits.service`），`daemon-reload` + `enable --now`；就绪门禁脚本落 `/usr/local/sbin/unbound-alt-readiness.py`、内存策略脚本落 `/usr/local/bin/cgroup-memsw-limits.sh`。门禁每分钟探一次 alt 目标并产出 `/run/unbound-alt-ready.json`（`ALT_READY_PORT` 跟随 `AGHDQ_DNS_PORT`、身份绑定 `ALT_READY_CONTAINER=aghdq`、`ALT_READY_RELEASE_DIR`/`ALT_READY_CONFIG_DIRS` 跟随 `.env` 路径）；没有这个文件 guard 的 alt 通道是 fail-closed 关闭的，装完最长约 120 s 才会 ready。`cgroup-memsw-limits.service` 用的全是 cgroup v1 路径，在 cgroup v2 宿主上逐条跳过、等同 no-op，启用失败只告警不阻断安装
 9. **防火墙**：`firewall/dnsguard-fw.sh --apply`（先算目标表 → 自检 → 单次 `iptables-restore`，失败回滚）
 10. **验收**：`tools/release_consistency.py` + 回环探针；失败会打印诊断命令（不阻断安装）
@@ -172,7 +176,7 @@ tail -5 /var/log/cn-lists-refresh.log
 |---|---|
 | 容器起来又退出 | `docker logs <容器>`；多是 `.env` 的 IP 与 `DOCKER_SUBNET` 不匹配，或端口被占 |
 | guard 起来但 `5355` 连不上 | `journalctl -u dnsguard -n 50`；确认 `GW_IP` 等于 `docker network inspect dnsnet -f '{{(index .IPAM.Config 0).Gateway}}'` 的结果，且 AGH 上游是同一地址 |
-| DoT 连不上 | `openssl s_client -connect <ip>:853 -servername $DNS_DOMAIN`；`systemctl status dnsdist`、`journalctl -u dnsdist -n 50`（端口被 nginx 占 / 证书不可读最常见）；legacy 场景再查 stream include 与 `nginx -t` |
+| DoT 连不上 | `openssl s_client -connect <ip>:853 -servername $DNS_DOMAIN`；`systemctl status dnsdist`、`journalctl -u dnsdist -n 50`（端口被 nginx 占 / 证书不可读最常见）；**生产实例中 853 的监听者是 AGH 容器，要看 `docker logs --tail 50 adgh`**；legacy 场景再查 stream include 与 `nginx -t` |
 | DoH 返回 502 / 证书错误 | 先看 dnsdist 日志与 `/etc/dnsdist/dnsdist.conf` 的证书路径；legacy 场景看 `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:${AGH_HTTPS_PORT}/` 与 `limit_conn/limit_req` |
 | Chainmon 缓存命中率恒为 0% | `CHAINMON_DNSDIST_API_KEY` 与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 是否一致；`curl -H "X-API-Key: ..." http://127.0.0.1:18083/api/v1/servers/localhost/statistics` |
 | 国内域名变慢/失败 | `python3 $CODE_DIR/probes/probe-cand.py www.qq.com` 对比 A/B/guard 的答案 |
