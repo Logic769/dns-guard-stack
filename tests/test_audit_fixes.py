@@ -43,24 +43,24 @@ def ttl_of(w):
 
 class CacheReplay(unittest.TestCase):
     def test_clean_cache_ages_wire(self):
-        with mock.patch.object(guard,"_cache",{(NAME,1):(1300,reply())}), \
+        with mock.patch.object(guard,"_cache",{guard._c_key(NAME,1):(1300,reply())}), \
              mock.patch.object(guard.time,"time",return_value=1299), \
              mock.patch.object(guard,"_strict_any",return_value=False):
             self.assertLessEqual(ttl_of(guard._dot_query_once(question(),NAME,1)),1)
 
     def test_corrob_cache_ages_wire(self):
-        with mock.patch.object(guard,"_corrob",{(NAME,1):(1300,reply(),("192.0.2.1",))}), \
+        with mock.patch.object(guard,"_corrob",{guard._c_key(NAME,1):(1300,reply(),("192.0.2.1",))}), \
              mock.patch.object(guard.time,"time",return_value=1299):
             self.assertLessEqual(ttl_of(guard.corrob_get(NAME,1)[0]),1)
 
     def test_negative_cache_ages_wire_before_finalizer(self):
-        with mock.patch.object(guard,"_neg_cache",{(NAME,1):(1300,reply())}), \
+        with mock.patch.object(guard,"_neg_cache",{guard._c_key(NAME,1):(1300,reply())}), \
              mock.patch.object(guard.time,"time",return_value=1299), \
              mock.patch.object(guard,"_strict_entry",return_value=None):
             self.assertLessEqual(ttl_of(guard.handle(question())),1)
 
     def test_expired_cache_not_served(self):
-        with mock.patch.object(guard,"_corrob",{(NAME,1):(1300,reply(),())}), \
+        with mock.patch.object(guard,"_corrob",{guard._c_key(NAME,1):(1300,reply(),())}), \
              mock.patch.object(guard.time,"time",return_value=1301):
             self.assertIsNone(guard.corrob_get(NAME,1))
 

@@ -986,14 +986,14 @@ class BogusInvalidation(unittest.TestCase):
         guard._neg_cache.clear()
         for nm in ("three.example", "keep.example"):
             guard._adm_cache_put(nm, 1, w, "accepted", "local-a", 300.0, now=1_000_000.0)
-            guard._corrob[(nm, 1)] = (time.time() + 3600, w, ("1.2.3.4",))
-            guard._neg_cache[(nm, 1)] = (time.time() + 300, w)
+            guard._corrob[guard._c_key(nm, 1)] = (time.time() + 3600, w, ("1.2.3.4",))
+            guard._neg_cache[guard._c_key(nm, 1)] = (time.time() + 300, w)
         self.assertEqual(len(guard._ADM_CACHE), 2)
         self.assertEqual(len(guard._corrob), 2)
         self.assertEqual(len(guard._neg_cache), 2)
         guard._drop_caches_for("three.example", why="bogus")
-        self.assertNotIn(("three.example", 1), guard._corrob, "钉住窗口必须被清 ✗")
-        self.assertNotIn(("three.example", 1), guard._neg_cache, "否定结论必须被清 ✗")
+        self.assertNotIn(guard._c_key("three.example", 1), guard._corrob, "钉住窗口必须被清 ✗")
+        self.assertNotIn(guard._c_key("three.example", 1), guard._neg_cache, "否定结论必须被清 ✗")
         self.assertIsNone(guard._adm_cache_get("three.example", 1, now=1_000_001.0))
         # ★ 方案 §2 第 51 行"安全准入证据和答案缓存**分开**" ⇒ 三类必须**分开记账** ✗→✓
         # 从前 `_corrob` 与 `_neg_cache` 共用一个 `pin_invalidated_*` 计数 ✗，
@@ -1003,8 +1003,8 @@ class BogusInvalidation(unittest.TestCase):
         self.assertEqual(guard._stats.get("neg_invalidated_bogus"), 1,
                          "否定缓存的失效必须单独记账 ✓")
         # 无关名字不受影响 ✓
-        self.assertIn(("keep.example", 1), guard._corrob)
-        self.assertIn(("keep.example", 1), guard._neg_cache)
+        self.assertIn(guard._c_key("keep.example", 1), guard._corrob)
+        self.assertIn(guard._c_key("keep.example", 1), guard._neg_cache)
         self.assertIsNotNone(guard._adm_cache_get("keep.example", 1, now=1_000_001.0))
         guard._ADM_CACHE.clear()
         guard._corrob.clear()
@@ -1155,7 +1155,7 @@ class CorrobPinWindow(unittest.TestCase):
     @staticmethod
     def _win_left(name, qtype=1):
         """取钉住窗口的剩余秒数（相对 now=time.time()）✓。"""
-        rec = guard._corrob.get((name, qtype))
+        rec = guard._corrob.get(guard._c_key(name, qtype))
         if rec is None:
             return None
         return rec[0] - time.time()

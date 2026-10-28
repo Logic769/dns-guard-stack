@@ -610,7 +610,7 @@ def _adm_invalidate(name, qtype=None, why=""):
     try:
         _nm = str(name).lower().rstrip(".")
         for _k in list(_ADM_CACHE.keys()):
-            if not isinstance(_k, tuple) or len(_k) != 2:
+            if not isinstance(_k, tuple) or len(_k) < 2:
                 continue
             if _k[0] != _nm:
                 continue
@@ -650,7 +650,7 @@ def _drop_caches_for(name, qtype=None, why=""):
         _nm = str(name).lower().rstrip(".")
         with _lock:
             for _k in list(_corrob.keys()):
-                if not isinstance(_k, tuple) or len(_k) != 2:
+                if not isinstance(_k, tuple) or len(_k) < 2:
                     continue
                 if _k[0] != _nm:
                     continue
@@ -659,7 +659,7 @@ def _drop_caches_for(name, qtype=None, why=""):
                 _corrob.pop(_k, None)
                 _p += 1
             for _k in list(_neg_cache.keys()):
-                if not isinstance(_k, tuple) or len(_k) != 2:
+                if not isinstance(_k, tuple) or len(_k) < 2:
                     continue
                 if _k[0] != _nm:
                     continue
