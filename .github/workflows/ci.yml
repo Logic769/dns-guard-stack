@@ -10,7 +10,7 @@ jobs:
   syntax-py36:
     name: syntax (py3.6)
     runs-on: ubuntu-latest
-    container: python:3.6-slim
+    container: python:3.15-slim
     steps:
       - uses: actions/checkout@v4
       - name: compileall
