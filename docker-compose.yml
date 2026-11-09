@@ -87,7 +87,7 @@ services:
 
   # ------------------------------------------------- 主 AdGuard Home（入口）
   adgh:
-    image: adguard/adguardhome:v0.107.73
+    image: adguard/adguardhome:v0.107.80
     container_name: adgh
     restart: always
     volumes:
@@ -103,7 +103,7 @@ services:
 
   # ------------------------------------------- 境外 DoQ 出口 AdGuard Home
   aghdq:
-    image: adguard/adguardhome:v0.107.73
+    image: adguard/adguardhome:v0.107.80
     container_name: aghdq
     restart: always
     volumes:
@@ -121,7 +121,7 @@ services:
   # ⇒ 它属于 slow 列表，只在 HEDGE_MS 之后并发启动，不会拖慢首轮。
   # 不部署它 guard 也能解析，只是少一条与 NextDNS 完全独立的干净通道。
   aghdq2:
-    image: adguard/adguardhome:v0.107.73
+    image: adguard/adguardhome:v0.107.80
     container_name: aghdq2
     restart: always
     volumes:
@@ -140,7 +140,7 @@ services:
   #   GUARD_CN_VETO_WITNESS = 国内域名的存在性见证源
   #   GUARD_FASTPASS_ADDR   = local-a 判 transport 时的 SERVFAIL 快速透传源
   aghcf:
-    image: adguard/adguardhome:v0.107.73
+    image: adguard/adguardhome:v0.107.80
     container_name: aghcf
     restart: always
     volumes:
