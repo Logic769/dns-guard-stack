@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     container: python:3.6-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: compileall
         run: python -m compileall -q core tools probes firewall
 
@@ -24,7 +24,7 @@ jobs:
       matrix:
         python-version: ["3.9", "3.12"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -37,7 +37,7 @@ jobs:
     name: shell & secrets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: bash syntax
         run: |
           set -e
