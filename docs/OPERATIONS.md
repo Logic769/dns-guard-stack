@@ -1,176 +1,196 @@
 # 运维手册
-> **入口形态提示（2026-10-28）**：生产实例的公网 853 / 444 已交给 AdGuard Home（按客户端真实 IP 注入 ECS `/24`），dnsdist 退到内网 `172.18.0.1:5300` 做 ECS 感知缓存。本文件里与 `install.sh` / `dnsdist` 相关的步骤仍对应**模板形态**，用它们部署出来的是模板形态（功能可用，但不含 per-user ECS 与按省分片的缓存）。两种形态的完整差异表、每项差异的原因，以及生产侧额外的自动收敛单元，见 [ARCHITECTURE.md 第 8 节](ARCHITECTURE.md)。
 
+以下路径均以 `.env` 默认值为准：`CODE_DIR=/opt/dnsguard`、`LISTS_DIR=/opt/dnscrypt-proxy`、`CHAINMON_DIR=/opt/chainmon`、`DEVFP_DIR=/opt/devfp`。
 
-> 下面的路径以默认 `.env` 为准：`CODE_DIR=/opt/dnsguard`、`LISTS_DIR=/opt/dnscrypt-proxy`、`CHAINMON_DIR=/opt/chainmon`、`DEVFP_DIR=/opt/devfp`。
+---
 
-## 1. 一条命令看健康
+## 1. 一键健康检查
 
 ```bash
 sudo ./verify.sh
 ```
 
-它依次检查：容器、systemd 服务、guard 监听、发布一致性、名单完整性、三入口探针、链路探针、DNSSEC 正反样本、日志里的 Traceback、内存与 OOM，最后打印 `RESULT: OK` 或失败项。
+脚本依次检查：容器状态、systemd 服务、`guard` 监听、双进程发布一致性、名单完整性、DoT/DoH 三入口探针、五层链路探针、DNSSEC 正反样本、日志异常堆栈以及宿主内存，最终输出 `RESULT: OK` 或具体失败项。
 
-单项检查也可以直接跑：
+单项排查命令：
 
 ```bash
 docker ps --format '{{.Names}}\t{{.Status}}'
 systemctl status dnsguard dnsguard-verifier adgh 2>/dev/null | head -40
 python3 $CODE_DIR/tools/release_consistency.py --json | head -30
 python3 $CODE_DIR/tools/verify-cn-lists.py
-python3 $CODE_DIR/probes/dns-entry-probe.py        # DoT 853 / DoH 444 / DoH 443
-python3 $CODE_DIR/probes/dns-chain-probe.py        # 五层链路 + 4 类样本
+python3 $CODE_DIR/probes/dns-entry-probe.py
+python3 $CODE_DIR/probes/dns-chain-probe.py
 ```
 
-## 2. 服务与容器
+---
+
+## 2. 服务与容器操作
 
 ```bash
-systemctl restart dnsguard dnsguard-verifier     # 策略层（会清空内存缓存，几秒不可用）
-systemctl restart unbound-b                       # 仅重启国内上游
-docker restart adgh                               # AGH（会丢 AGH 自己的缓存）
-docker logs --tail 50 agghdq                      # 注意：容器名按 .env 生成
-systemctl list-timers | grep dnsguard             # 定时任务一览
+# 重启策略层（必须同时重启，单独重启会触发发布一致性门禁告警）
+sudo systemctl restart dnsguard dnsguard-verifier
+
+# 仅重启国内上游或主入口容器
+sudo systemctl restart unbound-b
+docker restart adgh
+
+# 查看日志与定时任务
+tail -n 80 /var/log/dnsguard.log
+journalctl -u dnsguard -u dnsguard-verifier -n 80 --no-pager
+systemctl list-timers | grep dnsguard
 ```
 
-> guard 与 verifier 必须**同时**重启（GUI 侧一次命令：`systemctl restart dnsguard dnsguard-verifier`）。只重启一个会让版本门禁报警。
+---
 
-## 3. 名单
+## 3. 名单维护与缓存撤回
+
+### 刷新上游名单
 
 ```bash
-# 刷新（域名名单 + 否决/IP 名单 + 校验，见日志汇总行）
+# 下载、校验、原子替换并归档（自动生成 SHA256 与 GPG 签名）
 sudo $CODE_DIR/tools/refresh-all-cn-lists.sh
-tail -5 /var/log/cn-lists-refresh.log
+tail -n 5 /var/log/cn-lists-refresh.log
 
-# 只看会做什么（不写盘）
+# 仅预览变更，不落盘
 sudo python3 $CODE_DIR/tools/refresh-cn-rules.py --dry-run
 sudo python3 $CODE_DIR/tools/refresh-cn-veto-ip.py --dry-run
 
-# 变更归档与验签
+# 校验归档完整性
 ls -lt $CODE_DIR/cn-list-history/ | head
-python3 $CODE_DIR/tools/verify-cn-lists.py        # 哈希 + GPG 签名 + 条目数
+python3 $CODE_DIR/tools/verify-cn-lists.py
 ```
 
-名单变成"更宽"的变更会被幅度门禁拦住（默认域名 ≥5% 变化或 IP 覆盖 ≥5% 变化即失败），需要用 `--force` 显式越过 —— 越过前先看 `cn-trust-review.txt` 待审清单。
+> **变更幅度门禁**：如果新名单导致信任范围扩大超过阈值（默认域名或 IP 覆盖变化 ≥ 5%），脚本会拦截更新。此时请先检查 `cn-trust-review.txt` 确认无误后，再显式使用 `--force` 执行。
 
-**例外（强制不走国内路径）**：`${LISTS_DIR}/cn-trust-exceptions.txt`
-**白名单（免见证信任）**：`${LISTS_DIR}/cn-trust-allow.txt`
+### 人工白名单与例外清单
 
-改完这两个文件后：
+* **强制不走国内路径**：编辑 `${LISTS_DIR}/cn-trust-exceptions.txt`
+* **国内免见证白名单**：编辑 `${LISTS_DIR}/cn-trust-allow.txt`
+
+### 缓存撤回（修改信任名单后必做）
+
+`guard` 准入缓存靠"名单代次"自动失效，但 `adgh`（若启用缓存）或 `dnsdist` 侧需显式清理：
 
 ```bash
-sudo $CODE_DIR/tools/cn-trust-revoke.sh      # 名单变化则清 guard 侧缓存
+sudo $CODE_DIR/tools/cn-trust-revoke.sh      # 名单变化时触发失效（幂等）
+sudo $CODE_DIR/tools/agh-cache-clear.sh       # 清理 AGH 缓存（依赖 /etc/dnsguard/agh-api.env）
 python3 $CODE_DIR/tools/release_consistency.py
 ```
 
-## 4. 升级与回滚
+> `/etc/dnsguard/agh-api.env` 包含管理面板凭据（权限 `0600`），勿将其纳入外部备份仓库。
+
+---
+
+## 4. 发布升级与回滚
 
 ```bash
-# 发布一个新版本
+# 查看当前发布状态
+sudo $CODE_DIR/tools/deploy_release.sh --status
+
+# 切换至指定版本（校验 SHA256 与发布数据 -> 备份软链 -> 切换 -> 同时重启双进程 -> 90s 门禁轮询 -> 失败自动回滚）
 sudo $CODE_DIR/tools/deploy_release.sh <release-id>
 
-# 回滚
+# 手动回滚至指定版本
 sudo $CODE_DIR/tools/deploy_release.sh --rollback <release-id>
-sudo $CODE_DIR/tools/deploy_release.sh --status
 ```
 
-`deploy_release.sh` 做的事：校验 `RELEASE.sha256` → 校验发布数据（清单/快照/例外）→ 备份当前软链指向 → 切软链 → **一条命令**同时重启两个服务 → 轮询门禁（最多 90s）→ 失败自动回滚并保留日志。
+回滚记录保存在 `${CODE_DIR}/backups/deploy-<时间戳>/prev_current.txt`。
 
-回滚点保存在 `${CODE_DIR}/backups/deploy-<时间戳>/prev_current.txt`。
+---
 
-## 5. 探针
+## 5. 探针工具
 
-| 探针 | 用途 | 期望 |
-|---|---|---|
-| `probes/dns-entry-probe.py` | 三个入口（853/444/443）× 两个域名 | `cloudflare.com` 有 `ad=1`；`www.qq.com` 正常 |
-| `probes/dns-chain-probe.py` | 五层链路（A/B/guard/DoT/DoH）× 4 类样本 | 含 `dnssec-failed.org` = SERVFAIL、`nxdomain-probe.invalid` = NXDOMAIN |
-| `probes/probe-cand.py <域名>` | 单域名在 A/B/guard/AGH 的答案对比 | 用于判断某域名是否被国内上游污染 |
-| `probes/external-probe.py` | 从**外部**网络访问公网入口 | 证明对外服务真的通（不是本机自测） |
+| 探针脚本 | 检查范围 | 正常预期 |
+| :--- | :--- | :--- |
+| `probes/dns-entry-probe.py` | 3 个入口（`853` / `444` / `443`）× 2 个测试域 | `cloudflare.com` 返回 `ad=1`；`www.qq.com` 正常解析 |
+| `probes/dns-chain-probe.py` | 五层链路（`A`/`B`/`guard`/DoT/DoH）× 4 类样本 | `dnssec-failed.org` = `SERVFAIL`；`nxdomain-probe.invalid` = `NXDOMAIN` |
+| `probes/probe-cand.py <域名>` | 单域名在 `A`/`B`/`guard`/`AGH` 的应答对比 | 用于定位某域名是否被国内上游污染 |
+| `probes/external-probe.py` | 从外部网络探测公网入口 | 验证公网链路与 TLS 证书真实可达 |
 
-## 6. 看板
+---
 
-- 链路看板：`https://<DOMAIN>/chain/`（Basic Auth，用户名默认 `chain`）
-- 设备指纹看板：`https://<DOMAIN>/devices/`（同上）
-- 设备登记页：`https://<DOMAIN>/join`（无鉴权；打开即采集，绑定由人在看板手动确认）
+## 6. 观测看板
 
-看板是**只读观测**：链路线参数（chainmon，60s 一轮）与 DoT/DoH 设备指纹（devfp，旁路抓包 + 日志 tail）。它们不参与解析决策，停掉不影响 DNS。
+看板均为只读组件，停掉不影响 DNS 解析：
 
-## 7. 内存与限额
+* **链路看板 (`chainmon`)**：`https://<DOMAIN>/chain/`（默认 Basic Auth，用户名 `chain`，每 60 秒采集一次链路统计）
+* **设备指纹看板 (`devfp`)**：`https://<DOMAIN>/devices/`（Basic Auth）
+* **设备登记页**：`https://<DOMAIN>/join`（无鉴权，打开即采集特征，需管理员在看板手动确认绑定）
 
-宿主很小时（≤2GiB）按这个预算分配：
+---
 
-| 单元 | MemoryHigh | MemoryMax |
-|---|---|---|
+## 7. 内存预算与 cgroup 限额
+
+适用于 ≤ 2 GiB 内存的小型宿主机：
+
+| 服务单元 | `MemoryHigh` | `MemoryMax` |
+| :--- | :--- | :--- |
 | `dnsguard` | 160 MiB | 192 MiB |
 | `dnsguard-verifier` | 100 MiB | 128 MiB |
-| 看板（各） | 128–192 MiB | 176–256 MiB |
-| `unbound-alt-readiness` | — | 64 MiB（oneshot，每分钟一次） |
-| `cgroup-memsw-limits` | 由脚本统一施加（docker 预算 896/1152/1408 MiB、`system.slice` 软限 1280 MiB） | — |
+| `chainmon` / `devfp`（各） | 128–192 MiB | 176–256 MiB |
+| `unbound-alt-readiness` | — | 64 MiB（oneshot，每分钟运行） |
+| `cgroup-memsw-limits` | 由脚本施加（Docker 896/1152/1408 MiB，`system.slice` 软限 1280 MiB） | — |
+
+检查内存与 OOM 记录：
 
 ```bash
 systemctl show dnsguard -p MemoryHigh -p MemoryMax -p MemoryCurrent
 journalctl -k --since -2h | grep -i 'oom\|killed process'
 ```
 
-出现 OOM 时优先：降低 `GUARD_MAX_INFLIGHT` / `MAX_PENDING`、减少看板采集频率、给宿主加 swap（本项目不依赖 swap，只做兜底）。
+> **cgroup v2 注意事项**：`cgroup-memsw-limits.service` 仅写入 cgroup v1 路径（`memory.memsw.limit_in_bytes` 等），在纯 cgroup v2 宿主上会跳过。请通过 `systemctl status cgroup-memsw-limits` 确认实际是否生效。出现 OOM 时优先调低 `GUARD_MAX_INFLIGHT` / `MAX_PENDING` 或降低看板采集频次。
 
-`cgroup-memsw-limits.service` 只写 cgroup **v1** 路径（`memory.limit_in_bytes` / `memory.memsw.limit_in_bytes` 等），在 cgroup v2 宿主上逐条跳过、等同 no-op：用 `systemctl status cgroup-memsw-limits` 与 `cat /sys/fs/cgroup/memory/memory.memsw.limit_in_bytes` 确认到底生效了没有，不要只看单元 active。
+---
 
-## 8. 缓存撤销（重要）
-
-guard 与 AGH 有**两套独立缓存**。名单变化时 guard 靠"代次"自动失效，AGH 需要显式清：
+## 8. 备份与全量快照
 
 ```bash
-sudo $CODE_DIR/tools/cn-trust-revoke.sh        # 名单变化才清（幂等）
-sudo $CODE_DIR/tools/agh-cache-clear.sh        # 只清 AGH 缓存
+sudo $CODE_DIR/tools/make-snapshot.sh
 ```
 
-`agh-cache-clear.sh` 需要 AGH 面板凭据（`/etc/dnsguard/agh-api.env`，0600）。不要把该文件放进任何备份仓库。
+会在 `/root/` 下生成 `dns-snapshot-<日期>/` 与 `.tar.gz`，包含 systemd 单元、iptables `filter` 表、Nginx 站点、容器配置、Unbound 配置、crontab、名单哈希、内存状态、各探针结果与门禁状态。
 
-## 9. 备份与快照
+---
 
-```bash
-# 一次性快照（配置 + 状态 + 名单哈希 + 探针结果 + 门禁结果）
-sudo $CODE_DIR/tools/make-snapshot.sh          # → /root/dns-snapshot-<日期>/ 与 .tar.gz
-```
+## 9. 故障处置速查
 
-快照含：systemd 单元与 drop-in、iptables filter 表、nginx 站点、容器配置、三个 unbound 配置、crontab、名单哈希、内存、三入口探针、链路探针、门禁、名单校验。
+| 故障现象 | 优先排查步骤 |
+| :--- | :--- |
+| 客户端全部解析失败 | 跑 `verify.sh`，查看 `journalctl -u dnsguard -n 80` 及 `stats.json` 中的 `fc_*` 计数。 |
+| 仅 DoT (`:853`) 失败 | 执行 `openssl s_client -connect <ip>:853 -servername $DOMAIN`。AGH 入口看 `docker logs --tail 50 adgh`；模板形态看 `systemctl status dnsdist` 及证书配置。 |
+| 仅 DoH (`:444`) 失败 | 执行 `curl -sv "https://$DOMAIN:444/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB"` 检查状态码与证书。 |
+| 国内域名被解析到境外 CDN | 用 `probe-cand.py <域名>` 对比 `A`/`B`/`guard`；若 `B` 返回异常且被误采纳，加入 `cn-trust-exceptions.txt`。 |
+| 境外域名误报 `NXDOMAIN` | 检查是否被误收入否决名单：`grep -i <域名> ${LISTS_DIR}/cn_veto.txt`。 |
+| 发布一致性门禁报错 | 运行 `release_consistency.py`；重启 `dnsguard` 与 `dnsguard-verifier`；排查是否有人手工修改了 `$CODE_DIR` 下的 `guard.py`。 |
+| 名单刷新失败 | 查看 `/var/log/cn-rules-refresh.log`，确认本机可访问 `codeload.github.com` 与 `ispip.clang.cn`。 |
+| 磁盘空间不足 | 检查 `${CODE_DIR}/cn-list-history` 与 Docker 容器日志体积（`cnlist_history.py` 默认保留 30 天归档）。 |
+| Chainmon 缓存命中率恒为 0% | 核对 `/etc/systemd/system/chainmon.service.d/30-dnsdist-stats.conf` 中的 `CHAINMON_DNSDIST_API_KEY` 是否与 `/etc/dnsdist/dnsdist.conf` 的 `apiKey` 一致，以及 `127.0.0.1:18083` 是否可达。 |
 
-## 10. 故障处置速查
+---
 
-| 症状 | 先做 |
-|---|---|
-| 客户端全部解析失败 | `verify.sh`；再看 `journalctl -u dnsguard -n 80`、`stats.json` 的 `fc_*` |
-| 只有 DoT 失败 | `openssl s_client -connect <ip>:853 -servername $DOMAIN`；**生产实例中 853 的监听者是 AGH 容器 —— 先看 `docker logs --tail 50 adgh`**；模板形态才看 `systemctl status dnsdist` + 证书（legacy 场景再查 stream 片段） |
-| 只有 DoH 失败 | `curl -sv https://$DOMAIN:444/dns-query?dns=AAABAAABAAAAAAAAA3d3dwdleGFtcGxlA2NvbQAAAQAB` |
-| 国内域名被解析到境外 CDN | `probe-cand.py <域名>`；若 B 给的是污染答案而 guard 采纳了 → 加入 `cn-trust-exceptions.txt` |
-| 某个境外域名解析不到（NXDOMAIN） | 检查是否误入否决名单：`grep -i <域名> ${LISTS_DIR}/cn_veto.txt` |
-| 门禁红灯 | `release_consistency.py`；两服务重启一次；仍红灯看是不是手工改了 `CODE_DIR` 下的 `guard.py` |
-| 名单刷新失败 | `tail -50 /var/log/cn-rules-refresh.log`；确认能出网到 `codeload.github.com`/`ispip.clang.cn` |
-| 磁盘满 | `du -sh ${CODE_DIR}/cn-list-history` 与容器日志；`cnlist_history.py` 默认保留 30 天 |
+## 10. `stats.json` 关键指标
 
-## 11. 关键指标（`${CODE_DIR}/stats.json`）
-
-| 键 | 含义 |
-|---|---|
-| `cn_typed_total` / `cn_typed_full` / `cn_typed_domain` | 类型化名单载入量与两类匹配数 |
-| `cn_typed_snapshot_used` / `cn_typed_fallback_denied` | 冷启动是否用快照 / 是否因名单不可用而拒绝国内判定 |
-| `cn_veto_entries` / `cn_veto_fail` | 否决名单条目数与失败次数 |
+| 指标键 | 含义 |
+| :--- | :--- |
+| `cn_typed_total` / `cn_typed_full` / `cn_typed_domain` | 类型化名单总条目与精确/后缀两类匹配数 |
+| `cn_typed_snapshot_used` / `cn_typed_fallback_denied` | 冷启动是否使用了快照 / 是否因名单缺失而拒绝国内判定 |
+| `cn_veto_entries` / `cn_veto_fail` | 否决名单条目数与拦截次数 |
 | `cn_ip_nets` | 国内 IP 段数量 |
-| `cn_trust_allow_entries` / `cn_trust_exc_entries` | 白名单 / 例外清单条目数 |
-| `cn_trust_bypass` / `cn_trust_witness` | 免见证采纳 / 走见证的次数 |
-| `cn_dom_witness_bypass` / `cn_dom_witness_ok` / `cn_dom_witness_nonev` | 国内路径免见证 / 见证通过 / 无证据 |
-| `ad_grade_local_ad` / `ad_grade_signed` / `ad_grade_ad_declared` / `ad_grade_sig_expired` | AD 位分档（本机验签 / 有签名 / 仅声明 / 签名过期） |
-| `adm_cache_gen_mismatch` | 因名单代次变化而失效的缓存数 |
-| `stale_out` | 出口下发 stale（EDE 3/19）的次数（**不**写缓存） |
-| `udp_qid_mismatch` | 应答绑定校验失败次数（应长期为 0 或极低） |
-| `fc_unbound_servfail` / `fc_*` | fail-closed 各分支计数 |
+| `cn_trust_allow_entries` / `cn_trust_exc_entries` | 白名单与例外清单条目数 |
+| `cn_trust_bypass` / `cn_trust_witness` | 免见证直接放行 / 触发交叉见证次数 |
+| `cn_dom_witness_bypass` / `cn_dom_witness_ok` / `cn_dom_witness_nonev` | 国内路径免见证 / 见证通过 / 无证据回退次数 |
+| `ad_grade_local_ad` / `signed` / `ad_declared` / `sig_expired` | AD 位分级统计（本机验签 / 有签名 / 仅上游声明 / 签名过期） |
+| `adm_cache_gen_mismatch` | 因名单代次变更触发的准入缓存失效次数 |
+| `stale_out` | 出口下发 stale 应答（EDE 3/19）次数（不写缓存） |
+| `udp_qid_mismatch` | 应答绑定校验失败次数（正常应长期为 0 或极低） |
+| `fc_unbound_servfail` / `fc_*` | fail-closed 各分支拦截计数 |
 
-## 12. 定期维护建议
+---
 
-| 周期 | 动作 |
-|---|---|
-| 每天 | 看 `verify.sh` 结果与 `cn-lists-refresh.log` 汇总行 |
-| 每周 | 看 `stats.json` 异常计数（`*_fail`、`udp_qid_mismatch`、`adm_cache_gen_mismatch`）与宿主内存 |
-| 每月 | 复核 `cn-trust-allow.txt`（是否还需要那么多免见证）/ `cn-trust-exceptions.txt`（是否可移除）/ 证书到期 |
-| 每季 | 演练一次整机重建（见 MIGRATION.md）与一次回滚 |
+## 11. 定期维护建议
+
+* **每天**：查看 `verify.sh` 结果与 `/var/log/cn-lists-refresh.log` 汇总行。
+* **每周**：检查 `stats.json` 异常计数（`*_fail`、`udp_qid_mismatch`、`adm_cache_gen_mismatch`）与宿主机内存余量。
+* **每月**：复核 `cn-trust-allow.txt` 与 `cn-trust-exceptions.txt` 是否需要精简，确认 TLS 证书到期时间。
+* **每季**：参考 [`MIGRATION.md`](MIGRATION.md) 演练一次整机重建与版本回滚。
